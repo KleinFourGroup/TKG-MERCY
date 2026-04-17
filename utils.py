@@ -46,11 +46,17 @@ def checkInput(raw, type, range, errors, name = "input"):
         errors.append(f"Bug: {name} is unknown range '{range}'")
     return res
 
+def stringToB64(data: str):
+    return base64.urlsafe_b64encode(data.encode("utf-8")).decode("utf-8")
+
+def stringFromB64(enc: str):
+    return base64.urlsafe_b64decode(enc.encode("utf-8")).decode("utf-8")
+
 def listToString(data, kind):
     encodings = []
     for val in data:
         assert(isinstance(val, kind))
-        enc = base64.urlsafe_b64encode(str(val).encode("utf-8")).decode("utf-8")
+        enc = stringToB64(str(val))
         encodings.append(enc)
     return "#".join(encodings)
 
@@ -60,7 +66,7 @@ def stringToList(string: str, kind):
         return list()
     encodings = string.split("#")
     for enc in encodings:
-        val = kind(base64.urlsafe_b64decode(enc.encode("utf-8")).decode("utf-8"))
+        val = kind(stringFromB64(enc))
         data.append(val)
     return data
 
