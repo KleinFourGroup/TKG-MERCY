@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a of 13 complete as of 2026-04-17. Step 7 is being run as three sub-steps (7a correctness → 7b signature → 7c hygiene); see §12 for current state, deviations, and deferred items before picking up **Step 7b**.
+**Status:** Implementation in progress — Steps 1–6 + 7a + 7b of 13 complete as of 2026-04-17. Step 7 is being run as three sub-steps (7a correctness → 7b signature → 7c hygiene); see §12 for current state, deviations, and deferred items before picking up **Step 7c**.
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a complete; **Step 7b is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a + 7b complete; **Step 7c is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 has been split into three sub-steps to keep each review surface small:
 
@@ -525,8 +525,8 @@ Step 7 has been split into three sub-steps to keep each review surface small:
 | 5  | ✅ Done | Merge plan Step 5: BECKY tabs + new tab layout |
 | 6  | ✅ Done | Merge plan Step 6: merged report.py |
 | 7a | ✅ Done | Merge plan Step 7a: correctness fixes |
-| 7b | ⏳ Next | Promote BECKY kwargs on `Database.__init__` to required args; update call sites. |
-| 7c | ⏳ Pending | Hygiene sweep (see §12.2 Step 7 notes for full list). |
+| 7b | ✅ Done | Merge plan Step 7b: tighten Database signature |
+| 7c | ⏳ Next | Hygiene sweep (see §12.2 Step 7 notes for full list). |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -559,9 +559,10 @@ Step 7 has been split into three sub-steps to keep each review surface small:
 
 Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates child ids, and subsequent `getTuples()` passes the id-consistency asserts; save/reload roundtrip preserves the renamed tree; poisoning a second employee's `getTuple` mid-save raised as expected and left the on-disk `employees` table showing only the pre-failure state (atomicity confirmed).
 
+**Step 7b — `Database.__init__` signature tightened.** All 7 BECKY-origin params (`employees`, `reviews`, `training`, `attendance`, `PTO`, `notes`, `holidays`) are now required positional args matching ANIKA's style; the `| None = None` typing and the `X if X is not None else {}` / `ObservancesDB()` scaffolding in the body were both removed in favor of straight `self.X = X` assignments. `emptyDB()` in `records.py` was already passing all 13 containers explicitly so it needed no change. Grep for `Database(` across the repo confirmed it's the only caller. Offscreen smoke test (`MainWindow()` + `emptyDB()`) passes.
+
 ### 12.3 Known deferred issues visible in the current build
 
-- `Database.__init__` still has the BECKY kwargs typed `| None = None` — Step 7b will promote them to required args and update `emptyDB()` in `records.py` (the only caller found so far — grep for `Database(` before editing, in case more have been added).
 - `assert` for internal validation (100+ occurrences), `print()` for logging, window-list leak, `not x == None` idiom, magic `2000` in `Part` costing, debug `print` in BECKY `records.py` points logic, no `requirements.txt` — all Step 7c.
 - Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
 - Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope unless we want to pick it up in 7c; see Step 5 note above.
@@ -572,16 +573,7 @@ Testing has been manual in the real PySide6 GUI on the user's machine. Headless 
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 7b
-
-Goal: make the BECKY collections required args on `Database.__init__` (matching ANIKA's positional style) and remove the `| None = None` / `if X is not None else {}` boilerplate.
-
-- Current signature lives at `records.py:1105` (as of the post-7a commit). Everything from `employees:` through `holidays:` is currently `| None = None`; inside the body, `self.X = X if X is not None else {}` (or `ObservancesDB()` for `holidays`) replaces each with an empty container.
-- The single known caller is `emptyDB()` at `records.py:1414-1419`, which already passes all 13 containers explicitly — so once the signature is tightened, `emptyDB()` needs no change. **Re-run `grep -n "Database(" **/*.py` first** to confirm no new call sites landed since.
-- While you're there: the `if X is not None else {}` scaffolding in `__init__` becomes dead after the signature change and should be simplified to plain `self.X = X` assignments.
-- Expected scope: ~15 lines in `records.py`, no other files touched. After the change, run the offscreen smoke test from §12.4 to confirm `MainWindow()` still builds. Then commit as `Merge plan Step 7b: tighten Database signature` and move to Step 7c.
-
-### 12.6 Pick-up notes for Step 7c
+### 12.5 Pick-up notes for Step 7c
 
 Hygiene sweep. Items (all from §3.7, §3.8, §12.2):
 

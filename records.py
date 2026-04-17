@@ -1109,26 +1109,26 @@ class Database:
                  packaging: dict[str, Package],
                  parts: dict[str, Part],
                  inventories: dict[datetime.date, Inventory],
-                 employees: dict[int, Employee] | None = None,
-                 reviews: dict[int, EmployeeReviewsDB] | None = None,
-                 training: dict[int, EmployeeTrainingDB] | None = None,
-                 attendance: dict[int, EmployeePointsDB] | None = None,
-                 PTO: dict[int, EmployeePTODB] | None = None,
-                 notes: dict[int, EmployeeNotesDB] | None = None,
-                 holidays: ObservancesDB | None = None) -> None:
+                 employees: dict[int, Employee],
+                 reviews: dict[int, EmployeeReviewsDB],
+                 training: dict[int, EmployeeTrainingDB],
+                 attendance: dict[int, EmployeePointsDB],
+                 PTO: dict[int, EmployeePTODB],
+                 notes: dict[int, EmployeeNotesDB],
+                 holidays: ObservancesDB) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
         self.packaging = packaging
         self.parts = parts
         self.inventories = inventories
-        self.employees = employees if employees is not None else {}
-        self.reviews = reviews if reviews is not None else {}
-        self.training = training if training is not None else {}
-        self.attendance = attendance if attendance is not None else {}
-        self.PTO = PTO if PTO is not None else {}
-        self.notes = notes if notes is not None else {}
-        self.holidays = holidays if holidays is not None else ObservancesDB()
+        self.employees = employees
+        self.reviews = reviews
+        self.training = training
+        self.attendance = attendance
+        self.PTO = PTO
+        self.notes = notes
+        self.holidays = holidays
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
