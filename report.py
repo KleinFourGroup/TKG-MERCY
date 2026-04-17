@@ -253,7 +253,8 @@ class PDFReport:
         totalLab = 0
         totalMatl = 0
         for part in parts:
-            assert(part.sales is not None)
+            if part.sales is None:
+                raise RuntimeError('part.sales is None')
             data.append([f"{part.name}", f"${part.getManufacturingCost():.4f}", f"{part.sales}", f"${part.sales * part.getGrossLaborCost():.2f}", f"${part.sales * part.getGrossMatlCost():.2f}", f"${part.sales * part.getManufacturingCost():.2f}"])
             sales += part.sales
             totalLab += part.sales * part.getGrossLaborCost()
@@ -276,7 +277,8 @@ class PDFReport:
         self.pdf.save()
 
     def inventoryReport(self, currDate: datetime.date):
-        assert(currDate in self.db.inventories)
+        if currDate not in self.db.inventories:
+            raise RuntimeError('currDate not in self.db.inventories')
         dates = [date for date in self.db.inventories.keys() if date <= currDate]
         dates.sort(reverse=True)
         prevDate = dates[1] if len(dates) > 1 else None
@@ -285,9 +287,12 @@ class PDFReport:
             origVal = 0
             materialRecs = [self.db.inventories[date].materials[name] for name in self.db.inventories[date].materials.keys()]
             for material in materialRecs:
-                assert(material.name is not None)
-                assert(material.cost is not None)
-                assert(material.amount is not None)
+                if material.name is None:
+                    raise RuntimeError('material.name is None')
+                if material.cost is None:
+                    raise RuntimeError('material.cost is None')
+                if material.amount is None:
+                    raise RuntimeError('material.amount is None')
                 currCost = self.db.materials[material.name].getCostPerLb() if material.name in self.db.materials else None
                 if data is not None and material.amount > 0:
                     data.append([f"{material.name}", "N/A" if currCost is None else f"${currCost:.4f}", f"${material.cost:.4f}", f"{material.amount}", f"${material.cost * material.amount:.4f}"])
@@ -301,12 +306,18 @@ class PDFReport:
             origVal = 0
             partRecs = [self.db.inventories[date].parts[name] for name in self.db.inventories[date].parts.keys()]
             for part in partRecs:
-                assert(part.name is not None)
-                assert(part.cost is not None)
-                assert(part.amount40 is not None)
-                assert(part.amount60 is not None)
-                assert(part.amount80 is not None)
-                assert(part.amount100 is not None)
+                if part.name is None:
+                    raise RuntimeError('part.name is None')
+                if part.cost is None:
+                    raise RuntimeError('part.cost is None')
+                if part.amount40 is None:
+                    raise RuntimeError('part.amount40 is None')
+                if part.amount60 is None:
+                    raise RuntimeError('part.amount60 is None')
+                if part.amount80 is None:
+                    raise RuntimeError('part.amount80 is None')
+                if part.amount100 is None:
+                    raise RuntimeError('part.amount100 is None')
                 currCost = self.db.parts[part.name].getManufacturingCost() if part.name in self.db.parts else None
                 if data is not None and (part.amount40 + part.amount60 + part.amount80) > 0:
                     data.append([f"{part.name}", "N/A" if currCost is None else f"${currCost:.4f}", f"${part.cost:.4f}", f"{part.amount40}", f"{part.amount60}", f"{part.amount80}", f"${0.4 * part.cost * part.amount40 + 0.6 * part.cost * part.amount60 + 0.8 * part.cost * part.amount80:.4f}"])
@@ -320,12 +331,18 @@ class PDFReport:
             origVal = 0
             partRecs = [self.db.inventories[date].parts[name] for name in self.db.inventories[date].parts.keys()]
             for part in partRecs:
-                assert(part.name is not None)
-                assert(part.cost is not None)
-                assert(part.amount40 is not None)
-                assert(part.amount60 is not None)
-                assert(part.amount80 is not None)
-                assert(part.amount100 is not None)
+                if part.name is None:
+                    raise RuntimeError('part.name is None')
+                if part.cost is None:
+                    raise RuntimeError('part.cost is None')
+                if part.amount40 is None:
+                    raise RuntimeError('part.amount40 is None')
+                if part.amount60 is None:
+                    raise RuntimeError('part.amount60 is None')
+                if part.amount80 is None:
+                    raise RuntimeError('part.amount80 is None')
+                if part.amount100 is None:
+                    raise RuntimeError('part.amount100 is None')
                 currCost = self.db.parts[part.name].getManufacturingCost() if part.name in self.db.parts else None
                 if data is not None and part.amount100 > 0:
                     data.append([f"{part.name}", "N/A" if currCost is None else f"${currCost:.4f}", f"${part.cost:.4f}", f"{part.amount100}", f"${part.cost * part.amount100:.4f}"])
@@ -422,7 +439,8 @@ class PDFReport:
         if id in self.db.employees:
             employee = self.db.employees[id]
             points = self.db.attendance[id]
-            assert(not employee.lastName == None)
+            if employee.lastName is None:
+                raise RuntimeError('employee.lastName is None')
 
             headers = ["Date", "Points", "Reason"]
             data = [[
@@ -462,8 +480,10 @@ class PDFReport:
         if id in self.db.employees:
             employee = self.db.employees[id]
             PTO = self.db.PTO[id]
-            assert(not employee.lastName == None)
-            assert(not employee.anniversary == None)
+            if employee.lastName is None:
+                raise RuntimeError('employee.lastName is None')
+            if employee.anniversary is None:
+                raise RuntimeError('employee.anniversary is None')
 
             today = datetime.date.today()
 
@@ -528,7 +548,8 @@ class PDFReport:
         if id in self.db.employees:
             employee = self.db.employees[id]
             notesDB = self.db.notes[id]
-            assert(not employee.lastName == None)
+            if employee.lastName is None:
+                raise RuntimeError('employee.lastName is None')
 
             today = datetime.date.today()
             headers = ["Date", "Time", "Details"]
@@ -570,7 +591,8 @@ class PDFReport:
         if id in self.db.employees:
             employee = self.db.employees[id]
             note = self.db.notes[id].notes[(date, time)]
-            assert(not employee.lastName == None)
+            if employee.lastName is None:
+                raise RuntimeError('employee.lastName is None')
 
             self.setupPage()
             self.drawTitle(f"TKG Incident Report")

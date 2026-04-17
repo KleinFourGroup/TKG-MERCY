@@ -137,19 +137,23 @@ class ReviewsTab(QWidget):
 class ReviewsEditWindow(QWidget):
     def __init__(self, employeeID, review: EmployeeReview, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"Review: {employeeID}")
         self.employeeID = employeeID
 
         self.reviewDB = self.mainApp.db.reviews[employeeID]
-        assert(not self.reviewDB == None)
+        if self.reviewDB is None:
+            raise RuntimeError('self.reviewDB is None')
 
         self.review = review
         self.isNew = review == None
         if not self.isNew:
-            assert(review.date in self.reviewDB.reviews)
-            assert(review == self.reviewDB.reviews[review.date])
+            if review.date not in self.reviewDB.reviews:
+                raise RuntimeError('review.date not in self.reviewDB.reviews')
+            if not (review == self.reviewDB.reviews[review.date]):
+                raise RuntimeError('review == self.reviewDB.reviews[review.date]')
 
         self.calendar = QCalendarWidget()
         if not self.isNew:

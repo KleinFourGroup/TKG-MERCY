@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a + 7b of 13 complete as of 2026-04-17. Step 7 is being run as three sub-steps (7a correctness → 7b signature → 7c hygiene); see §12 for current state, deviations, and deferred items before picking up **Step 7c**.
+**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish); see §12 for current state, deviations, and deferred items before picking up **Step 7c-2**.
 
 ---
 
@@ -506,13 +506,15 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a + 7b complete; **Step 7c is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 complete; **Step 7c-2 is next**. Each step was committed separately on `main` with a message that names the step.*
 
-Step 7 has been split into three sub-steps to keep each review surface small:
+Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three:
 
 - **7a** — correctness / data-integrity fixes (done).
-- **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (next).
-- **7c** — hygiene sweep (`assert` → `raise`, `print` → `logging`, `not x == None` → `x is not None`, window-close leak, `LBS_PER_TON` constant, drop BECKY debug `print`, add `requirements.txt`).
+- **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (done).
+- **7c-1** — `assert` → `raise` (237 sites across the repo; judgment calls between `RuntimeError` for internal invariants vs `ValueError` for method-boundary input).
+- **7c-2** — `print()` → `logging` (136 sites; 120 of them in `file_manager.py` save chatter) + drop the BECKY debug `print` in points logic.
+- **7c-3** — mechanical + polish: `not x == None` → `x is not None` (194 sites; per-file regex replace), window-close leak (`Qt.WA_DeleteOnClose`), `LBS_PER_TON` constant, `requirements.txt`.
 
 ### 12.1 Step status
 
@@ -526,7 +528,9 @@ Step 7 has been split into three sub-steps to keep each review surface small:
 | 6  | ✅ Done | Merge plan Step 6: merged report.py |
 | 7a | ✅ Done | Merge plan Step 7a: correctness fixes |
 | 7b | ✅ Done | Merge plan Step 7b: tighten Database signature |
-| 7c | ⏳ Next | Hygiene sweep (see §12.2 Step 7 notes for full list). |
+| 7c-1 | ✅ Done | Merge plan Step 7c-1: assert → raise sweep |
+| 7c-2 | ⏳ Next | `print()` → `logging` (136 sites) + drop BECKY debug print. |
+| 7c-3 | ⏳ Pending | `not x == None` → `is not None`, window-close leak, `LBS_PER_TON`, `requirements.txt`. |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -560,6 +564,14 @@ Step 7 has been split into three sub-steps to keep each review surface small:
 Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates child ids, and subsequent `getTuples()` passes the id-consistency asserts; save/reload roundtrip preserves the renamed tree; poisoning a second employee's `getTuple` mid-save raised as expected and left the on-disk `employees` table showing only the pre-failure state (atomicity confirmed).
 
 **Step 7b — `Database.__init__` signature tightened.** All 7 BECKY-origin params (`employees`, `reviews`, `training`, `attendance`, `PTO`, `notes`, `holidays`) are now required positional args matching ANIKA's style; the `| None = None` typing and the `X if X is not None else {}` / `ObservancesDB()` scaffolding in the body were both removed in favor of straight `self.X = X` assignments. `emptyDB()` in `records.py` was already passing all 13 containers explicitly so it needed no change. Grep for `Database(` across the repo confirmed it's the only caller. Offscreen smoke test (`MainWindow()` + `emptyDB()`) passes.
+
+**Step 7c-1 — `assert` → explicit `raise` landed.** All 237 `assert(COND)` calls across 17 source files were converted to `if <flipped COND>: raise RuntimeError(<description>)`. Done via a single-pass throwaway script (not committed) that recognized seven common shapes — `X is not None`, `not X == None`, `X is None`, `X == None`, `not X in Y`, `X not in Y`, `X in Y` — and fell back to the generic `if not (COND): raise RuntimeError(COND)` for everything else. **Key subtlety:** the script initially mis-flipped compound `A and B` / `A or B` conditions (treating them as atomic and yielding `A and not B`, which is not equivalent to `not (A and B)`). Caught by spot-checking the diff; fixed by detecting top-level `and`/`or` and forcing the generic fallback for those. A few things to know:
+
+- **Default exception is `RuntimeError` everywhere** — no `ValueError` nuance was applied. The distinction between "internal invariant" and "method-boundary input validation" from §3.7 would require per-site judgment; a mechanical sweep picked one type. If a specific call site would benefit from `ValueError` (e.g. `setID` accepting negative input), that's a targeted follow-up, not a 7c-1 rewrite.
+- **Messages are the condition text itself.** `assert(self.db is not None)` became `raise RuntimeError('self.db is None')`. Short, generic, always present. Not "self.db must be set for <method>" — we'd need per-site work for that.
+- **The 7c-3 `not x == None` sweep now has fewer targets** because the `assert(not x == None)` variants got rewritten to `if x is None:` in this step. The 194-site count from the original survey is pre-7c-1; 7c-3 will see a reduced number.
+- **Line-count growth is real** — most asserts went from one line to two, so the diff is +482/-241 even though logic is unchanged. No functional change beyond the exception type flipping from `AssertionError` (disable-able via `-O`) to `RuntimeError`.
+- **Verification:** all 23 source files still compile; `grep -E '^\s*assert[\s(]'` returns zero hits in our source; offscreen `MainWindow()` build passes; smoke test confirmed converted `setID(-1)` / `setID(None)` now raise `RuntimeError` with the expected messages.
 
 ### 12.3 Known deferred issues visible in the current build
 

@@ -124,7 +124,8 @@ class Mixture:
         self.materials.append(mat)
         self.weights.append(wt)
     def getCost(self):
-        assert(self.db is not None and self.db.materials is not None)
+        if not (self.db is not None and self.db.materials is not None):
+            raise RuntimeError('self.db is not None and self.db.materials is not None')
         cost = 0
         weight = 0
         for wt in self.weights:
@@ -132,7 +133,8 @@ class Mixture:
         for i in range(len(self.materials)):
             pct = self.weights[i] / weight
             costPerLb = self.db.materials[self.materials[i]].getCostPerLb()
-            assert(costPerLb is not None)
+            if costPerLb is None:
+                raise RuntimeError('costPerLb is None')
             cost += pct * costPerLb
         return cost
     def getBatchWeight(self):
@@ -141,7 +143,8 @@ class Mixture:
             weight += wt
         return weight
     def getProp(self, prop, LOI = True):
-        assert(self.db is not None and self.db.materials is not None)
+        if not (self.db is not None and self.db.materials is not None):
+            raise RuntimeError('self.db is not None and self.db.materials is not None')
         ret = 0
         for i in range(len(self.materials)):
             matVal = getattr(self.db.materials[self.materials[i]], prop)
@@ -150,7 +153,8 @@ class Mixture:
                 break
             pct = self.weights[i] / self.getBatchWeight()
             matLOI = self.db.materials[self.materials[i]].LOI
-            assert(matLOI is not None)
+            if matLOI is None:
+                raise RuntimeError('matLOI is None')
             ret += (pct * matVal / (1 - matLOI / 100)) if LOI else pct * matVal
         return ret
     
@@ -255,42 +259,54 @@ class Part:
         self.misc.extend(misc)
 
     def getMixCost(self):
-        assert(self.db is not None)
-        assert(self.weight is not None)
-        assert(self.mix is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.weight is None:
+            raise RuntimeError('self.weight is None')
+        if self.mix is None:
+            raise RuntimeError('self.mix is None')
         return self.weight * self.db.mixtures[self.mix].getCost()
     
     def getGasCost(self):
-        assert(self.db is not None)
-        assert(self.weight is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.weight is None:
+            raise RuntimeError('self.weight is None')
         return self.weight * self.db.globals.gasCost
     
     def getMatlCost(self):
         return self.getMixCost() + self.getGasCost()
     
     def getBatchingTime(self):
-        assert(self.db is not None)
-        assert(self.weight is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.weight is None:
+            raise RuntimeError('self.weight is None')
         return self.weight * self.db.globals.batchingFactor
     
     def getPressingTime(self):
-        assert(self.pressing is not None)
+        if self.pressing is None:
+            raise RuntimeError('self.pressing is None')
         return 1 / self.pressing
     
     def getTurningTime(self):
-        assert(self.turning is not None)
+        if self.turning is None:
+            raise RuntimeError('self.turning is None')
         return 1 / self.turning
     
     def getLaborHours(self):
         return self.getBatchingTime() + self.getPressingTime() + self.getTurningTime()
     
     def getLaborCost(self):
-        assert(self.db is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
         return self.getLaborHours() * self.db.globals.laborCost
     
     def getScrap(self):
-        assert(self.db is not None)
-        assert(self.fireScrap is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.fireScrap is None:
+            raise RuntimeError('self.fireScrap is None')
         # return self.greenScrap +self.fireScrap
         return (self.db.globals.greenScrap / 100) + self.fireScrap
     
@@ -303,13 +319,20 @@ class Part:
         return (self.getMatlCost() + self.getLaborCost()) / (1 - self.getScrap()) 
     
     def getPackagingCost(self):
-        assert(self.db is not None)
-        assert(self.box is not None)
-        assert(self.piecesPerBox is not None)
-        assert(self.pad is not None)
-        assert(self.padsPerBox is not None)
-        assert(self.pallet is not None)
-        assert(self.boxesPerPallet is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.box is None:
+            raise RuntimeError('self.box is None')
+        if self.piecesPerBox is None:
+            raise RuntimeError('self.piecesPerBox is None')
+        if self.pad is None:
+            raise RuntimeError('self.pad is None')
+        if self.padsPerBox is None:
+            raise RuntimeError('self.padsPerBox is None')
+        if self.pallet is None:
+            raise RuntimeError('self.pallet is None')
+        if self.boxesPerPallet is None:
+            raise RuntimeError('self.boxesPerPallet is None')
         boxCost = self.db.packaging[self.box].price
         padCost = 0
         for i in range(len(self.pad)):
@@ -323,20 +346,25 @@ class Part:
         return perPalletCost / (self.piecesPerBox * self.boxesPerPallet) + miscCost
     
     def getVariableCost(self):
-        assert(self.db is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
         return self.getGrossMatlLaborCost() + self.getPackagingCost() + self.db.globals.inspection + self.db.globals.loading
     
     def getManufacturingOverhead(self):
-        assert(self.db is not None)
-        assert(self.weight is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.weight is None:
+            raise RuntimeError('self.weight is None')
         return self.weight * self.db.globals.manufacturingOverhead
     
     def getManufacturingCost(self):
         return self.getVariableCost() + self.getManufacturingOverhead()
     
     def getSGA(self):
-        assert(self.db is not None)
-        assert(self.weight is not None)
+        if self.db is None:
+            raise RuntimeError('self.db is None')
+        if self.weight is None:
+            raise RuntimeError('self.weight is None')
         return self.weight * self.db.globals.SGA
     
     def getTotalCost(self):
@@ -397,7 +425,8 @@ class Part:
         self.sales = values[18]
 
     def __str__(self) -> str:
-        assert(self.fireScrap is not None)
+        if self.fireScrap is None:
+            raise RuntimeError('self.fireScrap is None')
         res = "({} | {}, {}, {}, {}, {}, {}, {}, {}% + {}% | {}, {}, {}, {}, {}, {}, {} | {})".format(self.name,
                 self.weight, self.mix, self.pressing, self.turning, f"UNUSED: {self.loading}", f"UNUSED: {self.unloading}", f"UNUSED: {self.inspection}", f"UNUSED: {self.greenScrap}", 100 * self.fireScrap,
                 self.box, self.piecesPerBox, self.pallet, self.boxesPerPallet, self.pad, self.padsPerBox, self.misc,
@@ -422,10 +451,14 @@ class MaterialInventoryRecord:
         self.amount = amount
     
     def getTuple(self):
-        assert(self.name is not None)
-        assert(self.date is not None)
-        assert(self.cost is not None)
-        assert(self.amount is not None)
+        if self.name is None:
+            raise RuntimeError('self.name is None')
+        if self.date is None:
+            raise RuntimeError('self.date is None')
+        if self.cost is None:
+            raise RuntimeError('self.cost is None')
+        if self.amount is None:
+            raise RuntimeError('self.amount is None')
         return (
             self.name,
             self.date.isoformat(),
@@ -465,13 +498,20 @@ class PartInventoryRecord:
         self.amount100 = amount100
     
     def getTuple(self):
-        assert(self.name is not None)
-        assert(self.date is not None)
-        assert(self.cost is not None)
-        assert(self.amount40 is not None)
-        assert(self.amount60 is not None)
-        assert(self.amount80 is not None)
-        assert(self.amount100 is not None)
+        if self.name is None:
+            raise RuntimeError('self.name is None')
+        if self.date is None:
+            raise RuntimeError('self.date is None')
+        if self.cost is None:
+            raise RuntimeError('self.cost is None')
+        if self.amount40 is None:
+            raise RuntimeError('self.amount40 is None')
+        if self.amount60 is None:
+            raise RuntimeError('self.amount60 is None')
+        if self.amount80 is None:
+            raise RuntimeError('self.amount80 is None')
+        if self.amount100 is None:
+            raise RuntimeError('self.amount100 is None')
         return (
             self.name,
             self.date.isoformat(),
@@ -497,41 +537,53 @@ class Inventory:
         self.parts: dict[str, PartInventoryRecord] = {}
     
     def updateMaterialRecord(self, oldName: str, newName: str):
-        assert(oldName in self.materials)
+        if oldName not in self.materials:
+            raise RuntimeError('oldName not in self.materials')
         if not newName == oldName:
             materials = {newName if key == oldName else key:val for key, val in self.materials.items()}
             self.materials = materials
             self.materials[newName].setName(newName)
     
     def addMaterialRecord(self, materialRec: MaterialInventoryRecord):
-        assert(materialRec.name is not None)
-        assert(self.date is not None)
-        assert(self.date == materialRec.date)
-        assert(not materialRec.name in self.parts)
+        if materialRec.name is None:
+            raise RuntimeError('materialRec.name is None')
+        if self.date is None:
+            raise RuntimeError('self.date is None')
+        if not (self.date == materialRec.date):
+            raise RuntimeError('self.date == materialRec.date')
+        if materialRec.name in self.parts:
+            raise RuntimeError('materialRec.name already in self.parts')
 
         self.materials[materialRec.name] = materialRec
     
     def delMaterialRecord(self, name: str):
-        assert(name in self.materials)
+        if name not in self.materials:
+            raise RuntimeError('name not in self.materials')
         del self.materials[name]
     
     def updatePartRecord(self, oldName: str, newName: str):
-        assert(oldName in self.parts)
+        if oldName not in self.parts:
+            raise RuntimeError('oldName not in self.parts')
         if not newName == oldName:
             parts = {newName if key == oldName else key:val for key, val in self.parts.items()}
             self.parts = parts
             self.parts[newName].setName(newName)
     
     def addPartRecord(self, partRec: PartInventoryRecord):
-        assert(partRec.name is not None)
-        assert(self.date is not None)
-        assert(self.date == partRec.date)
-        assert(not partRec.name in self.parts)
+        if partRec.name is None:
+            raise RuntimeError('partRec.name is None')
+        if self.date is None:
+            raise RuntimeError('self.date is None')
+        if not (self.date == partRec.date):
+            raise RuntimeError('self.date == partRec.date')
+        if partRec.name in self.parts:
+            raise RuntimeError('partRec.name already in self.parts')
 
         self.parts[partRec.name] = partRec
     
     def delPartRecord(self, name: str):
-        assert(name in self.parts)
+        if name not in self.parts:
+            raise RuntimeError('name not in self.parts')
         del self.parts[name]
     
     def getMaterialTuples(self):
@@ -568,18 +620,23 @@ class Employee:
         self.status: bool = True
 
     def setAnniversary(self, date: datetime.date):
-        assert(not date == None)
+        if date is None:
+            raise RuntimeError('date is None')
         self.anniversary = date
 
     def setName(self, lastName: str, firstName: str):
-        assert(not lastName == None)
-        assert(not firstName == None)
+        if lastName is None:
+            raise RuntimeError('lastName is None')
+        if firstName is None:
+            raise RuntimeError('firstName is None')
         self.lastName = lastName
         self.firstName = firstName
 
     def setID(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.idNum = num
 
     def setJob(self, role: str, shift: int, fullTime: bool):
@@ -600,7 +657,8 @@ class Employee:
         self.status = active
 
     def getTuple(self):
-        assert(not self.anniversary == None)
+        if self.anniversary is None:
+            raise RuntimeError('self.anniversary is None')
         return (
             self.idNum,
             self.lastName,
@@ -626,22 +684,26 @@ class Employee:
             self.setJob(row[4], row[5], True)
         else:
             jobArgs = row[5].split("|")
-            assert(len(jobArgs) == 2)
+            if not (len(jobArgs) == 2):
+                raise RuntimeError('len(jobArgs) == 2')
             self.setJob(row[4], int(jobArgs[0]), jobArgs[1] == "1")
         self.setAddress(row[6], row[7], row[8], row[9], row[10], row[11], row[12])
         self.setStatus(not row[13] == 0)
 
 class EmployeeReview:
     def __init__(self, idNum: int | None = None, date: datetime.date | None = None, nextReview: datetime.date | None = None, details: str = "") -> None:
-        assert(idNum == None or idNum >= 0)
+        if not (idNum == None or idNum >= 0):
+            raise RuntimeError('idNum == None or idNum >= 0')
         self.idNum: int | None = idNum
         self.date: datetime.date | None = date
         self.nextReview: datetime.date | None = nextReview
         self.details: str = details
 
     def setID(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.idNum = num
 
     def getTuple(self):
@@ -666,19 +728,23 @@ class EmployeeTrainingDate:
         self.comment: str = comment
 
     def setID(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.idNum = num
 
     def setTraining(self, training: str):
-        assert(self.training == None)
+        if self.training is not None:
+            raise RuntimeError('self.training is not None')
         self.training = training
 
     def setDate(self, date: datetime.date):
         self.date = date
 
     def getTuple(self):
-        assert(not self.date == None)
+        if self.date is None:
+            raise RuntimeError('self.date is None')
         return (
             self.idNum,
             self.training,
@@ -700,28 +766,38 @@ class EmployeePTORange:
         self.hours: float = hours
 
     def setEmployee(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.employee = num
 
     def setDate(self, start: datetime.date, end: datetime.date | str):
-        assert(not start == None)
-        assert(not end == None)
+        if start is None:
+            raise RuntimeError('start is None')
+        if end is None:
+            raise RuntimeError('end is None')
         if isinstance(end, datetime.date):
-            assert(start <= end)
+            if not (start <= end):
+                raise RuntimeError('start <= end')
         else:
-            assert(end in ["CARRY", "CASH", "DROP"])
+            if end not in ["CARRY", "CASH", "DROP"]:
+                raise RuntimeError('end not in ["CARRY", "CASH", "DROP"]')
         self.start = start
         self.end = end
 
     def setHours(self, hours: float):
-        assert(not hours == None)
-        assert(hours > 0)
+        if hours is None:
+            raise RuntimeError('hours is None')
+        if not (hours > 0):
+            raise RuntimeError('hours > 0')
         self.hours = hours
 
     def getTuple(self):
-        assert(not self.start == None)
-        assert(not self.end == None)
+        if self.start is None:
+            raise RuntimeError('self.start is None')
+        if self.end is None:
+            raise RuntimeError('self.end is None')
         return (
             self.employee,
             self.start.isoformat(),
@@ -745,13 +821,17 @@ class EmployeeNote:
         self.details: str = details
 
     def setID(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.idNum = num
 
     def getTuple(self):
-        assert(not self.date == None)
-        assert(not self.time == None)
+        if self.date is None:
+            raise RuntimeError('self.date is None')
+        if self.time is None:
+            raise RuntimeError('self.time is None')
         return (
             self.idNum,
             self.date.isoformat(),
@@ -773,22 +853,27 @@ class EmployeePoint:
         self.value: float = value
 
     def setEmployee(self, num: int):
-        assert(not num == None)
-        assert(num >= 0)
+        if num is None:
+            raise RuntimeError('num is None')
+        if not (num >= 0):
+            raise RuntimeError('num >= 0')
         self.idNum = num
 
     def setDate(self, date: datetime.date):
-        assert(not date == None)
+        if date is None:
+            raise RuntimeError('date is None')
         self.date = date
 
     def setReason(self, reason: str, value: float):
         self.reason = reason
         if reason in defaults.POINT_VALS:
-            assert(value == defaults.POINT_VALS[reason])
+            if not (value == defaults.POINT_VALS[reason]):
+                raise RuntimeError('value == defaults.POINT_VALS[reason]')
         self.value = value
 
     def getTuple(self):
-        assert(not self.date == None)
+        if self.date is None:
+            raise RuntimeError('self.date is None')
         return (
             self.idNum,
             self.date.isoformat(),
@@ -808,16 +893,19 @@ class HolidayObservance:
         self.shift: int = shift
 
     def setHoliday(self, holiday: str):
-        assert(holiday in defaults.HOLIDAYS)
+        if holiday not in defaults.HOLIDAYS:
+            raise RuntimeError('holiday not in defaults.HOLIDAYS')
         self.holiday = holiday
 
     def setDate(self, date: datetime.date, shift: int):
-        assert(not date == None)
+        if date is None:
+            raise RuntimeError('date is None')
         self.date = date
         self.shift = shift
 
     def getTuple(self):
-        assert(not self.date == None)
+        if self.date is None:
+            raise RuntimeError('self.date is None')
         return (
             self.holiday,
             self.shift,
@@ -844,7 +932,8 @@ class EmployeeReviewsDB:
     def getTuples(self):
         ret = []
         for date in self.reviews:
-            assert(self.idNum == self.reviews[date].idNum)
+            if not (self.idNum == self.reviews[date].idNum):
+                raise RuntimeError('self.idNum == self.reviews[date].idNum')
             ret.append(self.reviews[date].getTuple())
         return ret
 
@@ -859,7 +948,8 @@ class EmployeeTrainingDB:
         ret = []
         for train in self.training:
             for date in self.training[train]:
-                assert(self.idNum == self.training[train][date].idNum)
+                if not (self.idNum == self.training[train][date].idNum):
+                    raise RuntimeError('self.idNum == self.training[train][date].idNum')
                 ret.append(self.training[train][date].getTuple())
         return ret
 
@@ -914,7 +1004,8 @@ class EmployeePointsDB:
     def getTuples(self):
         ret = []
         for date in self.points:
-            assert(self.idNum == self.points[date].idNum)
+            if not (self.idNum == self.points[date].idNum):
+                raise RuntimeError('self.idNum == self.points[date].idNum')
             ret.append(self.points[date].getTuple())
         return ret
 
@@ -926,7 +1017,8 @@ class EmployeeNotesDB:
     def getTuples(self):
         ret = []
         for key in self.notes:
-            assert(self.idNum == self.notes[key].idNum)
+            if not (self.idNum == self.notes[key].idNum):
+                raise RuntimeError('self.idNum == self.notes[key].idNum')
             ret.append(self.notes[key].getTuple())
         return ret
 
@@ -939,7 +1031,8 @@ class EmployeePTODB:
         total = 0
         for dates in self.PTO:
             if dates[0].year == year and isinstance(dates[1], datetime.date):
-                assert(dates[1].year == year)
+                if not (dates[1].year == year):
+                    raise RuntimeError('dates[1].year == year')
                 total += self.PTO[dates].hours
         return total
 
@@ -969,7 +1062,8 @@ class EmployeePTODB:
                 if dates[1] == "CARRY" or dates[1] == "CASH" or dates[1] == "DROP":
                     count += 1
                     ret = dates[1]
-        assert(count <= 1)
+        if not (count <= 1):
+            raise RuntimeError('count <= 1')
         return ret
 
     def clearCarry(self, year: int):
@@ -991,7 +1085,8 @@ class EmployeePTODB:
                 elif dates[1] == "CASH" or dates[1] == "DROP":
                     count += 1
                     ret = 0
-        assert(count <= 1)
+        if not (count <= 1):
+            raise RuntimeError('count <= 1')
         return ret
 
     def getQuarterHours(self, aniversary: datetime.date, attendance: EmployeePointsDB, today: datetime.date):
@@ -1029,7 +1124,8 @@ class EmployeePTODB:
     def getTuples(self):
         ret = []
         for dateRange in self.PTO:
-            assert(self.idNum == self.PTO[dateRange].employee)
+            if not (self.idNum == self.PTO[dateRange].employee):
+                raise RuntimeError('self.idNum == self.PTO[dateRange].employee')
             ret.append(self.PTO[dateRange].getTuple())
         return ret
 
@@ -1039,7 +1135,8 @@ class ObservancesDB:
         self.observances: dict[int, dict[str, dict[int, HolidayObservance]]] = {}
 
     def setDefault(self, holiday: str, month: int):
-        assert(1 <= month and month <= 12)
+        if not (1 <= month and month <= 12):
+            raise RuntimeError('1 <= month and month <= 12')
         self.defaults[holiday] = month
 
     def getDefault(self, holiday: str):
@@ -1049,8 +1146,10 @@ class ObservancesDB:
             return self.defaults[holiday]
 
     def setObservance(self, holiday: HolidayObservance):
-        assert(not holiday.date == None)
-        assert(not holiday.holiday == None)
+        if holiday.date is None:
+            raise RuntimeError('holiday.date is None')
+        if holiday.holiday is None:
+            raise RuntimeError('holiday.holiday is None')
         year = holiday.date.year
         if not year in self.observances:
             self.observances[year] = {}
@@ -1145,12 +1244,14 @@ class Database:
             self.parts[name].name = name
     
     def addPart(self, part: Part):
-        assert(not part.name in self.parts)
+        if part.name in self.parts:
+            raise RuntimeError('part.name already in self.parts')
         self.parts[part.name] = part
         part.db = self
     
     def delPart(self, name):
-        assert(name in self.parts)
+        if name not in self.parts:
+            raise RuntimeError('name not in self.parts')
         del self.parts[name]
     
     def updatePackaging(self, entry, name):
@@ -1164,7 +1265,8 @@ class Database:
                     part.box = name
                 if part.pallet == entry:
                     part.pallet = name
-                assert(part.pad is not None)
+                if part.pad is None:
+                    raise RuntimeError('part.pad is None')
                 for i in range(len(part.pad)):
                     if part.pad[i] == entry:
                         part.pad[i] = name
@@ -1173,19 +1275,22 @@ class Database:
                         part.misc[i] = name
     
     def addPackaging(self, item: Package):
-        assert(not item.name in self.packaging)
+        if item.name in self.packaging:
+            raise RuntimeError('item.name already in self.packaging')
         self.packaging[item.name] = item
         item.db = self
     
     def delPackaging(self, name):
-        assert(name in self.packaging)
+        if name not in self.packaging:
+            raise RuntimeError('name not in self.packaging')
         usedIn = []
         for pname in self.parts:
             used = False
             part = self.parts[pname]
             used = used or part.box == name
             used = used or part.pallet == name
-            assert(part.pad is not None)
+            if part.pad is None:
+                raise RuntimeError('part.pad is None')
             for i in range(len(part.pad)):
                 used = used or part.pad[i] == name
             for i in range(len(part.misc)):
@@ -1207,12 +1312,14 @@ class Database:
                     part.mix = name
     
     def addMixture(self, mixture: Mixture):
-        assert(not mixture.name in self.mixtures)
+        if mixture.name in self.mixtures:
+            raise RuntimeError('mixture.name already in self.mixtures')
         self.mixtures[mixture.name] = mixture
         mixture.db = self
 
     def delMixture(self, name):
-        assert(name in self.mixtures)
+        if name not in self.mixtures:
+            raise RuntimeError('name not in self.mixtures')
         usedIn = []
         for pname in self.parts:
             used = False
@@ -1236,12 +1343,14 @@ class Database:
                         mix.materials[i] = name
     
     def addMaterial(self, material: Material):
-        assert(not material.name in self.materials)
+        if material.name in self.materials:
+            raise RuntimeError('material.name already in self.materials')
         self.materials[material.name] = material
         material.db = self
     
     def delMaterial(self, name):
-        assert(name in self.materials)
+        if name not in self.materials:
+            raise RuntimeError('name not in self.materials')
         usedIn = []
         for mname in self.mixtures:
             mix = self.mixtures[mname]
@@ -1255,8 +1364,10 @@ class Database:
         return usedIn
     
     def updateInventory(self, oldDate: datetime.date, date: datetime.date):
-        assert(oldDate in self.inventories)
-        assert(not date in self.inventories)
+        if oldDate not in self.inventories:
+            raise RuntimeError('oldDate not in self.inventories')
+        if date in self.inventories:
+            raise RuntimeError('date already in self.inventories')
         inventory = self.inventories[oldDate]
         for material, record in inventory.materials.items():
             record.setDate(date)
@@ -1266,44 +1377,54 @@ class Database:
         self.inventories[date] = inventory
     
     def addInventory(self, date: datetime.date):
-        assert(not date in self.inventories)
+        if date in self.inventories:
+            raise RuntimeError('date already in self.inventories')
         self.inventories[date] = Inventory(date)
     
     def delInventory(self, date: datetime.date):
-        assert(date in self.inventories)
+        if date not in self.inventories:
+            raise RuntimeError('date not in self.inventories')
         del self.inventories[date]
     
     def updateMaterialInventory(self, date: datetime.date, oldName: str, newName: str):
-        assert(date in self.inventories)
+        if date not in self.inventories:
+            raise RuntimeError('date not in self.inventories')
         self.inventories[date].updateMaterialRecord(oldName, newName)
     
     def addMaterialInventory(self, materialRec: MaterialInventoryRecord):
-        assert(materialRec.date is not None)
+        if materialRec.date is None:
+            raise RuntimeError('materialRec.date is None')
         if not materialRec.date in self.inventories:
             self.addInventory(materialRec.date)
         self.inventories[materialRec.date].addMaterialRecord(materialRec)
     
     def delMaterialInventory(self, date: datetime.date, name: str):
-        assert(date in self.inventories)
+        if date not in self.inventories:
+            raise RuntimeError('date not in self.inventories')
         self.inventories[date].delMaterialRecord(name)
     
     def updatePartInventory(self, date: datetime.date, oldName: str, newName: str):
-        assert(date in self.inventories)
+        if date not in self.inventories:
+            raise RuntimeError('date not in self.inventories')
         self.inventories[date].updatePartRecord(oldName, newName)
     
     def addPartInventory(self, partRec: PartInventoryRecord):
-        assert(partRec.date is not None)
+        if partRec.date is None:
+            raise RuntimeError('partRec.date is None')
         if not partRec.date in self.inventories:
             self.addInventory(partRec.date)
         self.inventories[partRec.date].addPartRecord(partRec)
     
     def delPartInventory(self, date: datetime.date, name: str):
-        assert(date in self.inventories)
+        if date not in self.inventories:
+            raise RuntimeError('date not in self.inventories')
         self.inventories[date].delPartRecord(name)
     
     def addEmployee(self, employee: Employee):
-        assert(not employee.idNum in self.employees)
-        assert(not employee.idNum == None)
+        if employee.idNum in self.employees:
+            raise RuntimeError('employee.idNum already in self.employees')
+        if employee.idNum is None:
+            raise RuntimeError('employee.idNum is None')
         self.employees[employee.idNum] = employee
 
     def updateEmployee(self, oldID, newID):
@@ -1341,37 +1462,48 @@ class Database:
                 rec.idNum = newID
 
     def delEmployee(self, employeeID: int):
-        assert(employeeID in self.employees)
+        if employeeID not in self.employees:
+            raise RuntimeError('employeeID not in self.employees')
         del self.employees[employeeID]
-        assert(employeeID in self.reviews)
+        if employeeID not in self.reviews:
+            raise RuntimeError('employeeID not in self.reviews')
         del self.reviews[employeeID]
-        assert(employeeID in self.training)
+        if employeeID not in self.training:
+            raise RuntimeError('employeeID not in self.training')
         del self.training[employeeID]
-        assert(employeeID in self.attendance)
+        if employeeID not in self.attendance:
+            raise RuntimeError('employeeID not in self.attendance')
         del self.attendance[employeeID]
-        assert(employeeID in self.PTO)
+        if employeeID not in self.PTO:
+            raise RuntimeError('employeeID not in self.PTO')
         del self.PTO[employeeID]
-        assert(employeeID in self.notes)
+        if employeeID not in self.notes:
+            raise RuntimeError('employeeID not in self.notes')
         del self.notes[employeeID]
 
     def addEmployeeReviews(self, employeeReviews: EmployeeReviewsDB):
-        assert(not employeeReviews.idNum in self.reviews)
+        if employeeReviews.idNum in self.reviews:
+            raise RuntimeError('employeeReviews.idNum already in self.reviews')
         self.reviews[employeeReviews.idNum] = employeeReviews
 
     def addEmployeeTraining(self, employeeTraining: EmployeeTrainingDB):
-        assert(not employeeTraining.idNum in self.training)
+        if employeeTraining.idNum in self.training:
+            raise RuntimeError('employeeTraining.idNum already in self.training')
         self.training[employeeTraining.idNum] = employeeTraining
 
     def addEmployeePoints(self, employeePoints: EmployeePointsDB):
-        assert(not employeePoints.idNum in self.attendance)
+        if employeePoints.idNum in self.attendance:
+            raise RuntimeError('employeePoints.idNum already in self.attendance')
         self.attendance[employeePoints.idNum] = employeePoints
 
     def addEmployeePTO(self, employeePTO: EmployeePTODB):
-        assert(not employeePTO.idNum in self.PTO)
+        if employeePTO.idNum in self.PTO:
+            raise RuntimeError('employeePTO.idNum already in self.PTO')
         self.PTO[employeePTO.idNum] = employeePTO
 
     def addEmployeeNotes(self, employeeNotes: EmployeeNotesDB):
-        assert(not employeeNotes.idNum in self.notes)
+        if employeeNotes.idNum in self.notes:
+            raise RuntimeError('employeeNotes.idNum already in self.notes')
         self.notes[employeeNotes.idNum] = employeeNotes
 
     def materialCosts(self):

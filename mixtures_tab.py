@@ -212,7 +212,8 @@ class MixturesEditWindow(QWidget):
                 self.mixture = Mixture(name)
                 self.mainApp.db.addMixture(self.mixture)
             else:
-                assert(not self.mixture == None)
+                if self.mixture is None:
+                    raise RuntimeError('self.mixture is None')
                 self.mainApp.db.updateMixture(self.mixture.name, name)
             self.mixture.materials = []
             self.mixture.weights = []

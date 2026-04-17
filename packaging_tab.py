@@ -137,7 +137,8 @@ class PackagingEditWindow(QWidget):
                 self.item = Package(name, None, None)
                 self.mainApp.db.addPackaging(self.item)
             else:
-                assert(not self.item == None)
+                if self.item is None:
+                    raise RuntimeError('self.item is None')
                 self.mainApp.db.updatePackaging(self.item.name, name)
             self.item.kind = kind
             self.item.price = price

@@ -82,7 +82,8 @@ class ObservancesTab(QWidget):
         self.setLayout(layout)
 
     def buildRows(self):
-        assert(len(self.observanceRows) == 0)
+        if not (len(self.observanceRows) == 0):
+            raise RuntimeError('len(self.observanceRows) == 0')
         for holiday in self.observancesDB.getHolidays(self.currentYear):
             barLayout = QHBoxLayout()
             label = QLabel(f"{holiday}")
@@ -331,7 +332,8 @@ class HolidayEditWindow(QWidget):
 
         self.isNew = holiday == None
         if not self.isNew:
-            assert(holiday in self.observancesDB.defaults)
+            if holiday not in self.observancesDB.defaults:
+                raise RuntimeError('holiday not in self.observancesDB.defaults')
         
         self.holidayName = QLineEdit(holiday if not self.isNew else "")
 

@@ -55,7 +55,8 @@ def stringFromB64(enc: str):
 def listToString(data, kind):
     encodings = []
     for val in data:
-        assert(isinstance(val, kind))
+        if not (isinstance(val, kind)):
+            raise RuntimeError('isinstance(val, kind)')
         enc = stringToB64(str(val))
         encodings.append(enc)
     return "#".join(encodings)

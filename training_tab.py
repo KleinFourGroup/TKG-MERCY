@@ -158,21 +158,26 @@ class TrainingTab(QWidget):
 class TrainingEditWindow(QWidget):
     def __init__(self, employeeID, trainingType: str, trainingDate: EmployeeTrainingDate, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"Training ({trainingType}): {employeeID}")
         self.employeeID = employeeID
         self.trainingType = trainingType
 
         self.trainingDateDB = self.mainApp.db.training[employeeID]
-        assert(not self.trainingDateDB == None)
+        if self.trainingDateDB is None:
+            raise RuntimeError('self.trainingDateDB is None')
 
         self.trainingDate = trainingDate
         self.isNew = trainingDate == None
         if not self.isNew:
-            assert(trainingDate.date in self.trainingDateDB.training[trainingType])
-            assert(trainingDate.training == trainingType)
-            assert(trainingDate == self.trainingDateDB.training[trainingDate.training][trainingDate.date])
+            if trainingDate.date not in self.trainingDateDB.training[trainingType]:
+                raise RuntimeError('trainingDate.date not in self.trainingDateDB.training[trainingType]')
+            if not (trainingDate.training == trainingType):
+                raise RuntimeError('trainingDate.training == trainingType')
+            if not (trainingDate == self.trainingDateDB.training[trainingDate.training][trainingDate.date]):
+                raise RuntimeError('trainingDate == self.trainingDateDB.training[trainingDate.training][trainingDate.date]')
 
         self.calendar = QCalendarWidget()
         if not self.isNew:

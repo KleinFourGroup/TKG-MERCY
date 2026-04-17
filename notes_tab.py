@@ -151,19 +151,23 @@ class NotesTab(QWidget):
 class NotesEditWindow(QWidget):
     def __init__(self, employeeID, note: EmployeeNote, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"Note: {employeeID}")
         self.employeeID = employeeID
 
         self.notesDB = self.mainApp.db.notes[employeeID]
-        assert(not self.notesDB == None)
+        if self.notesDB is None:
+            raise RuntimeError('self.notesDB is None')
 
         self.note = note
         self.isNew = note == None
         if not self.isNew:
-            assert((note.date, note.time) in self.notesDB.notes)
-            assert(note == self.notesDB.notes[(note.date, note.time)])
+            if (note.date, note.time) not in self.notesDB.notes:
+                raise RuntimeError('(note.date, note.time) not in self.notesDB.notes')
+            if not (note == self.notesDB.notes[(note.date, note.time)]):
+                raise RuntimeError('note == self.notesDB.notes[(note.date, note.time)]')
 
         self.calendar = QCalendarWidget()
         if not self.isNew:
@@ -171,7 +175,8 @@ class NotesEditWindow(QWidget):
 
         self.timeInput = QTimeEdit()
         if not self.isNew:
-            assert(self.note.time is not None)
+            if self.note.time is None:
+                raise RuntimeError('self.note.time is None')
             hours = int(self.note.time.split(":")[0])
             minutes = int(self.note.time.split(":")[1])
             self.timeInput.setTime(QTime(hours, minutes))

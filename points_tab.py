@@ -155,19 +155,23 @@ class PointsTab(QWidget):
 class PointsEditWindow(QWidget):
     def __init__(self, employeeID, point: EmployeePoint, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"Point: {employeeID}")
         self.employeeID = employeeID
 
         self.pointDB = self.mainApp.db.attendance[employeeID]
-        assert(not self.pointDB == None)
+        if self.pointDB is None:
+            raise RuntimeError('self.pointDB is None')
 
         self.point = point
         self.isNew = point == None
         if not self.isNew:
-            assert(point.date in self.pointDB.points)
-            assert(point == self.pointDB.points[point.date])
+            if point.date not in self.pointDB.points:
+                raise RuntimeError('point.date not in self.pointDB.points')
+            if not (point == self.pointDB.points[point.date]):
+                raise RuntimeError('point == self.pointDB.points[point.date]')
 
         self.calendar = QCalendarWidget()
         if not self.isNew:
@@ -180,7 +184,8 @@ class PointsEditWindow(QWidget):
         self.pointsInput = QLineEdit()
         def setReason(reason: str):
             if not reason == "Other":
-                assert(reason in POINT_VALS)
+                if reason not in POINT_VALS:
+                    raise RuntimeError('reason not in POINT_VALS')
                 self.pointsInput.setText(f"{POINT_VALS[reason]}")
                 self.otherReason.setEnabled(False)
                 self.pointsInput.setEnabled(False)

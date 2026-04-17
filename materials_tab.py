@@ -211,7 +211,8 @@ class MaterialsEditWindow(QWidget):
                 self.material = Material(name)
                 self.mainApp.db.addMaterial(self.material)
             else:
-                assert(self.material is not None)
+                if self.material is None:
+                    raise RuntimeError('self.material is None')
                 self.mainApp.db.updateMaterial(self.material.name, name)
             self.material.price = price
             self.material.freight = freight

@@ -138,7 +138,8 @@ class MainWindow(QWidget):
         self._refreshAllTabs()
 
     def save(self):
-        assert(not self.fileManager.filePath == None)
+        if self.fileManager.filePath is None:
+            raise RuntimeError('self.fileManager.filePath is None')
         self.fileManager.saveFile()
         QMessageBox.information(self, "Success", "Save successful!")
 

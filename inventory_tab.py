@@ -162,7 +162,8 @@ class InventoryDateEditWindow(QWidget):
             if isNew:
                 self.mainApp.db.addInventory(date)
             else:
-                assert(self.date is not None)
+                if self.date is None:
+                    raise RuntimeError('self.date is None')
                 self.mainApp.db.updateInventory(self.date, date)
 
             self.mainApp.inventoryTab.refresh()
@@ -248,18 +249,21 @@ class MaterialsInventoryTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(self.selection)}")
 
     def openNew(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         self.windows.append(MaterialInventoryEditWindow(self.currentDate, None, self.mainApp))
     
     def openEdits(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No materials selected."])
         for material in self.selection:
             self.windows.append(MaterialInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].materials[material], self.mainApp))
     
     def deleteRecords(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
         for material in self.selection:
@@ -289,8 +293,10 @@ class MaterialsInventoryTab(QWidget):
             currVal = 0
             origVal = 0
             for entry in db:
-                assert(db[entry].cost is not None)
-                assert(db[entry].amount is not None)
+                if db[entry].cost is None:
+                    raise RuntimeError('db[entry].cost is None')
+                if db[entry].amount is None:
+                    raise RuntimeError('db[entry].amount is None')
                 if entry in self.mainApp.db.materials:
                     currCost = self.mainApp.db.materials[entry].getCostPerLb()
                     if currCost is not None:
@@ -308,11 +314,13 @@ class MaterialInventoryEditWindow(QWidget):
         self.date = date
         self.entry = entry
         if entry is not None:
-            assert(entry.date == date)
+            if not (entry.date == date):
+                raise RuntimeError('entry.date == date')
 
         materials = ["None"]
         if entry is not None:
-            assert(entry.name is not None)
+            if entry.name is None:
+                raise RuntimeError('entry.name is None')
             if not entry.name in self.mainApp.db.materials or self.mainApp.db.materials[entry.name].getCostPerLb() is None:
                 materials.append(entry.name)
         materials.extend([key for key in self.mainApp.db.materials if self.mainApp.db.materials[key].getCostPerLb() is not None])
@@ -374,7 +382,8 @@ class MaterialInventoryEditWindow(QWidget):
         amount = checkInput(self.mainLayout[2][1].text(), float, "nonneg", errors, "amount")
 
         if len(errors) == 0:
-            assert(name is not None)
+            if name is None:
+                raise RuntimeError('name is None')
             if isNew:
                 self.entry = MaterialInventoryRecord()
                 self.entry.setDate(self.date)
@@ -382,7 +391,8 @@ class MaterialInventoryEditWindow(QWidget):
                 self.entry.setInventory(cost, amount)
                 self.mainApp.db.inventories[self.date].addMaterialRecord(self.entry)
             else:
-                assert(self.entry is not None and self.entry.name is not None and name is not None)
+                if not (self.entry is not None and self.entry.name is not None and name is not None):
+                    raise RuntimeError('self.entry is not None and self.entry.name is not None and name is not None')
                 if not self.entry.name == name:
                     self.mainApp.db.inventories[self.date].updateMaterialRecord(self.entry.name, name)
                 self.entry.setInventory(cost, amount)
@@ -472,18 +482,21 @@ class PartsInventoryTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(self.selection)}")
 
     def openNew(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         self.windows.append(PartInventoryEditWindow(self.currentDate, None, self.mainApp))
     
     def openEdits(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
             self.windows.append(PartInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].parts[part], self.mainApp))
     
     def deleteRecords(self):
-        assert(self.currentDate is not None)
+        if self.currentDate is None:
+            raise RuntimeError('self.currentDate is None')
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
@@ -513,14 +526,20 @@ class PartsInventoryTab(QWidget):
             currVal = 0
             origVal = 0
             for entry in db:
-                assert(db[entry].cost is not None)
-                assert(db[entry].amount40 is not None)
-                assert(db[entry].amount60 is not None)
-                assert(db[entry].amount80 is not None)
-                assert(db[entry].amount100 is not None)
+                if db[entry].cost is None:
+                    raise RuntimeError('db[entry].cost is None')
+                if db[entry].amount40 is None:
+                    raise RuntimeError('db[entry].amount40 is None')
+                if db[entry].amount60 is None:
+                    raise RuntimeError('db[entry].amount60 is None')
+                if db[entry].amount80 is None:
+                    raise RuntimeError('db[entry].amount80 is None')
+                if db[entry].amount100 is None:
+                    raise RuntimeError('db[entry].amount100 is None')
                 if entry in self.mainApp.db.parts:
                     currCost = self.mainApp.db.parts[entry].getManufacturingCost()
-                    assert(currCost is not None)
+                    if currCost is None:
+                        raise RuntimeError('currCost is None')
                     currVal += 0.4 * currCost * db[entry].amount40 + 0.6 * currCost * db[entry].amount60 + 0.8 * currCost * db[entry].amount80 + currCost * db[entry].amount100
                 origVal += 0.4 * db[entry].cost * db[entry].amount40 + 0.6 * db[entry].cost * db[entry].amount60 + 0.8 * db[entry].cost * db[entry].amount80 + db[entry].cost * db[entry].amount100 # type: ignore
             self.currValueLabel.setText(f"Current Total Parts Value: {currVal:.4f}")
@@ -535,11 +554,13 @@ class PartInventoryEditWindow(QWidget):
         self.date = date
         self.entry = entry
         if entry is not None:
-            assert(entry.date == date)
+            if not (entry.date == date):
+                raise RuntimeError('entry.date == date')
 
         parts = ["None"]
         if entry is not None and not entry.name in self.mainApp.db.parts:
-            assert(entry.name is not None)
+            if entry.name is None:
+                raise RuntimeError('entry.name is None')
             parts.append(entry.name)
         parts.extend([key for key in self.mainApp.db.parts])
 
@@ -606,7 +627,8 @@ class PartInventoryEditWindow(QWidget):
         amount100 = checkInput(self.mainLayout[5][1].text(), int, "nonneg", errors, "amount completed")
 
         if len(errors) == 0:
-            assert(name is not None)
+            if name is None:
+                raise RuntimeError('name is None')
             if isNew:
                 self.entry = PartInventoryRecord()
                 self.entry.setDate(self.date)
@@ -614,7 +636,8 @@ class PartInventoryEditWindow(QWidget):
                 self.entry.setInventory(cost, amount40, amount60, amount80, amount100)
                 self.mainApp.db.inventories[self.date].addPartRecord(self.entry)
             else:
-                assert(self.entry is not None and self.entry.name is not None and name is not None)
+                if not (self.entry is not None and self.entry.name is not None and name is not None):
+                    raise RuntimeError('self.entry is not None and self.entry.name is not None and name is not None')
                 if not self.entry.name == name:
                     self.mainApp.db.inventories[self.date].updatePartRecord(self.entry.name, name)
                 self.entry.setInventory(cost, amount40, amount60, amount80, amount100)

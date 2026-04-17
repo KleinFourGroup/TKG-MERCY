@@ -34,7 +34,8 @@ class FileManager:
         # Pre-normalization ANIKA schema (still uses base64-encoded compound fields). Step 8
         # will migrate these to mixture_components / part_pads / part_misc and drop the dead
         # columns from `parts`.
-        assert(self.dbFile is not None)
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS globals(name PRIMARY KEY, value)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS materials(name PRIMARY KEY, cost, freight, SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, LOI, Plus50, Sub50Plus100, Sub100Plus200, Sub200Plus325, Sub325, otherChem)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS mixtures(name PRIMARY KEY, materials, weights)")
@@ -46,7 +47,8 @@ class FileManager:
     def _createBeckyTables(self):
         # Pre-normalization BECKY schema (shift still compound, details still base64). Step 9
         # will split `shift` into shift/fullTime and decode the text fields.
-        assert(self.dbFile is not None)
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS globals(name PRIMARY KEY, value)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS reviews(idNum, date, nextReview, details, UNIQUE(idNum, date))")
@@ -58,7 +60,8 @@ class FileManager:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS observances(holiday, shift, date, UNIQUE(holiday, shift, date))")
 
     def _createProductionTable(self):
-        assert(self.dbFile is not None)
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
         self.dbFile.execute(
             "CREATE TABLE IF NOT EXISTS production("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -74,11 +77,13 @@ class FileManager:
         )
 
     def _setDbVersion(self, version: int):
-        assert(self.dbFile is not None)
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("INSERT OR REPLACE INTO globals VALUES ('db_version', ?)", (version,))
 
     def _getDbVersion(self):
-        assert(self.dbFile is not None)
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
         try:
             row = self.dbFile.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
         except sqlite3.OperationalError:
@@ -93,7 +98,8 @@ class FileManager:
     # ---- initFile --------------------------------------------------------------------------
 
     def initFile(self):
-        assert(not self.filePath == None)
+        if self.filePath is None:
+            raise RuntimeError('self.filePath is None')
         try:
             self.dbFile = sqlite3.connect(self.filePath)
             # WAL allows concurrent readers with a single writer; fine for <5 users (§8.6).
@@ -166,7 +172,8 @@ class FileManager:
     # ---- saveFile --------------------------------------------------------------------------
 
     def saveFile(self):
-        assert((not self.filePath == None) and (not self.dbFile == None))
+        if not ((not self.filePath == None) and (not self.dbFile == None)):
+            raise RuntimeError('(not self.filePath == None) and (not self.dbFile == None)')
         # Atomic save: the body below runs as a single SQLite transaction.
         # Any exception rolls the entire save back, leaving the DB file
         # unchanged (§3.4 of MERGE_PLAN.md).
@@ -190,7 +197,8 @@ class FileManager:
                 print(f" * Error saving {name} = {getattr(db.globals, name)}: {repr(e)}")
 
         def clearOld(dbName, currDict):
-            assert(self.dbFile is not None)
+            if self.dbFile is None:
+                raise RuntimeError('self.dbFile is None')
             res = self.dbFile.execute(f"SELECT name FROM {dbName}")
             deleted = [vals for vals in res.fetchall() if not vals[0] in currDict]
             if len(deleted) > 0:
@@ -435,7 +443,8 @@ class FileManager:
     # ---- loadFile --------------------------------------------------------------------------
 
     def loadFile(self):
-        assert((not self.filePath == None) and (not self.dbFile == None))
+        if not ((not self.filePath == None) and (not self.dbFile == None)):
+            raise RuntimeError('(not self.filePath == None) and (not self.dbFile == None)')
         from records import emptyDB
         self.mainApp.db = emptyDB()
         db = self.mainApp.db
@@ -540,7 +549,8 @@ class FileManager:
             review = EmployeeReview()
             review.fromTuple(values)
 
-            assert(review.idNum in db.reviews)
+            if review.idNum not in db.reviews:
+                raise RuntimeError('review.idNum not in db.reviews')
             db.reviews[review.idNum].reviews[review.date] = review
 
             print(f" * Loaded {values}")
@@ -552,7 +562,8 @@ class FileManager:
             training = EmployeeTrainingDate()
             training.fromTuple(values)
 
-            assert(training.idNum in db.training)
+            if training.idNum not in db.training:
+                raise RuntimeError('training.idNum not in db.training')
             if not training.training in db.training[training.idNum].training:
                 db.training[training.idNum].training[training.training] = {}
             db.training[training.idNum].training[training.training][training.date] = training
@@ -566,7 +577,8 @@ class FileManager:
             point = EmployeePoint()
             point.fromTuple(values)
 
-            assert(point.idNum in db.attendance)
+            if point.idNum not in db.attendance:
+                raise RuntimeError('point.idNum not in db.attendance')
             db.attendance[point.idNum].points[point.date] = point
 
             print(f" * Loaded {values}")
@@ -578,7 +590,8 @@ class FileManager:
             pto = EmployeePTORange()
             pto.fromTuple(values)
 
-            assert(pto.employee in db.PTO)
+            if pto.employee not in db.PTO:
+                raise RuntimeError('pto.employee not in db.PTO')
             db.PTO[pto.employee].PTO[(pto.start, pto.end)] = pto
 
             print(f" * Loaded {values}")
@@ -590,7 +603,8 @@ class FileManager:
             note = EmployeeNote()
             note.fromTuple(values)
 
-            assert(note.idNum in db.notes)
+            if note.idNum not in db.notes:
+                raise RuntimeError('note.idNum not in db.notes')
             db.notes[note.idNum].notes[(note.date, note.time)] = note
 
             print(f" * Loaded {values}")

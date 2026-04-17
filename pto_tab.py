@@ -99,7 +99,8 @@ class PTOTab(QWidget):
     def setSelection(self, selection):
         def getPair(start: str):
             rows = [row for row in self.tableData if row[0] == start]
-            assert(len(rows) == 1)
+            if not (len(rows) == 1):
+                raise RuntimeError('len(rows) == 1')
             end = rows[0][1]
             try:
                 end = datetime.date.fromisoformat(rows[0][1])
@@ -157,7 +158,8 @@ class PTOTab(QWidget):
             self.carryButton.setEnabled(False)
     
     def openNew(self):
-        assert(not self.currentEmployeePTO == None)
+        if self.currentEmployeePTO is None:
+            raise RuntimeError('self.currentEmployeePTO is None')
         self.windows.append(PTOEditWindow(self.currentEmployeePTO.idNum, None, self.mainApp))
     
     def manageCarry(self):
@@ -175,7 +177,8 @@ class PTOTab(QWidget):
             if isinstance(PTOrange[1], str):
                 errorMessage(self.mainApp, ["Carryover cannot be edited through this interface.  Please use the \"Manage Carryover\" button."])
             else:
-                assert(not self.currentEmployeePTO == None)
+                if self.currentEmployeePTO is None:
+                    raise RuntimeError('self.currentEmployeePTO is None')
                 self.windows.append(PTOEditWindow(self.currentEmployeePTO.idNum, self.currentEmployeePTO.PTO[PTOrange], self.mainApp))
     
     def deletePTO(self):
@@ -187,7 +190,8 @@ class PTOTab(QWidget):
             else:
                 confirm = QMessageBox.question(self, f"Delete {PTOrange[0].isoformat()} -- {PTOrange[1].isoformat()}?", f"Are you sure you want to delete the PTO from {PTOrange[0].isoformat()} to {PTOrange[1].isoformat()}?")
                 if confirm == QMessageBox.StandardButton.Yes:
-                    assert(not self.currentEmployeePTO == None)
+                    if self.currentEmployeePTO is None:
+                        raise RuntimeError('self.currentEmployeePTO is None')
                     del self.currentEmployeePTO.PTO[PTOrange]
                 QMessageBox.information(self.mainApp, "Success", f"PTO from {PTOrange[0].isoformat()} to {PTOrange[1].isoformat()} successfully deleted!")
         self.refresh()
@@ -209,7 +213,8 @@ class PTOTab(QWidget):
 class PTOCarryWindow(QWidget):
     def __init__(self, employeeID, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"PTO carryover: {employeeID}")
         self.employeeID = employeeID
@@ -217,9 +222,12 @@ class PTOCarryWindow(QWidget):
         self.PTODB = self.mainApp.db.PTO[employeeID]
         self.attendanceDB = self.mainApp.db.attendance[employeeID]
         self.employee = self.mainApp.db.employees[employeeID]
-        assert(not self.PTODB == None)
-        assert(not self.attendanceDB == None)
-        assert(not self.employee == None)
+        if self.PTODB is None:
+            raise RuntimeError('self.PTODB is None')
+        if self.attendanceDB is None:
+            raise RuntimeError('self.attendanceDB is None')
+        if self.employee is None:
+            raise RuntimeError('self.employee is None')
 
         self.unusedHours = max(
             self.PTODB.getAvailableHours(self.employee.anniversary, self.attendanceDB, datetime.date(year=datetime.date.today().year - 1, month=12, day=31)) - self.PTODB.getUsedHours(datetime.date.today().year - 1),
@@ -359,7 +367,8 @@ class PTOCarryWindow(QWidget):
 class PTOEditWindow(QWidget):
     def __init__(self, employeeID, PTORange: EmployeePTORange | None, mainApp: MainWindow):
         super().__init__()
-        assert(not employeeID == None)
+        if employeeID is None:
+            raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
         self.setWindowTitle(f"PTO: {employeeID}")
         self.employeeID = employeeID
@@ -367,29 +376,37 @@ class PTOEditWindow(QWidget):
         self.PTODB = self.mainApp.db.PTO[employeeID]
         self.employee = self.mainApp.db.employees[employeeID]
         self.attendanceDB = self.mainApp.db.attendance[employeeID]
-        assert(not self.PTODB == None)
-        assert(not self.employee == None)
+        if self.PTODB is None:
+            raise RuntimeError('self.PTODB is None')
+        if self.employee is None:
+            raise RuntimeError('self.employee is None')
 
         self.PTORange = PTORange
         self.isNew = PTORange == None
         if not self.isNew:
-            assert(not PTORange == None) # Redundant but the type hinter wants it
-            assert((PTORange.start, PTORange.end) in self.PTODB.PTO)
-            assert(PTORange == self.PTODB.PTO[(PTORange.start, PTORange.end)])
+            if PTORange is None:  # Redundant but the type hinter wants it
+                raise RuntimeError('PTORange is None')
+            if (PTORange.start, PTORange.end) not in self.PTODB.PTO:
+                raise RuntimeError('(PTORange.start, PTORange.end) not in self.PTODB.PTO')
+            if not (PTORange == self.PTODB.PTO[(PTORange.start, PTORange.end)]):
+                raise RuntimeError('PTORange == self.PTODB.PTO[(PTORange.start, PTORange.end)]')
 
         self.calendarStart = QCalendarWidget()
         if not self.isNew:
-            assert(not self.PTORange == None) # Redundant but the type hinter wants it
+            if self.PTORange is None:  # Redundant but the type hinter wants it
+                raise RuntimeError('self.PTORange is None')
             self.calendarStart.setSelectedDate(toQDate(self.PTORange.start))
 
         self.calendarEnd = QCalendarWidget()
         if not self.isNew:
-            assert(not self.PTORange == None) # Redundant but the type hinter wants it
+            if self.PTORange is None:  # Redundant but the type hinter wants it
+                raise RuntimeError('self.PTORange is None')
             self.calendarEnd.setSelectedDate(toQDate(self.PTORange.end))
 
         self.hours = QLineEdit()
         if not self.isNew:
-            assert(not self.PTORange == None) # Redundant but the type hinter wants it
+            if self.PTORange is None:  # Redundant but the type hinter wants it
+                raise RuntimeError('self.PTORange is None')
             self.hours.setText(f"{self.PTORange.hours}")
 
         self.mainLayout = [
@@ -451,7 +468,8 @@ class PTOEditWindow(QWidget):
         if len(errors) == 0:
             if isNew:
                 self.PTORange = EmployeePTORange(self.employeeID, start, end, hours)
-            assert(not self.PTORange == None) # Redundant but the type hinter wants it
+            if self.PTORange is None:  # Redundant but the type hinter wants it
+                raise RuntimeError('self.PTORange is None')
             if not isNew:
                 del self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)]
                 self.PTORange.start = start
