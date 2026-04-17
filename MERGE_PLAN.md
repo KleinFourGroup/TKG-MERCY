@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Approved for implementation — all design questions resolved
+**Status:** Implementation in progress — Steps 1–5 of 13 complete as of 2026-04-17. See §12 for current state, deviations, and deferred items before picking up Step 6.
 
 ---
 
@@ -504,4 +504,53 @@ All production tracking design questions have been answered by the team lead.
 
 ---
 
-*This document was prepared with Claude Code (claude-opus-4-6 / claude-sonnet-4-6) as a planning artifact. No code changes have been made to either repository.*
+## 12. Implementation Progress
+
+*Last updated 2026-04-17. Steps 1–5 complete; Step 6 is next. Each step was committed separately on `main` with a message that names the step.*
+
+### 12.1 Step status
+
+| Step | Status | Commit subject |
+|------|--------|----------------|
+| 1  | ✅ Done | Merge plan Step 1 |
+| 2  | ✅ Done | Merge plan Steps 2–3: shared files and records.py |
+| 3  | ✅ Done | (same commit as Step 2) |
+| 4  | ✅ Done | Merge plan Step 4: unified file_manager.py |
+| 5  | ✅ Done | Merge plan Step 5: BECKY tabs + new tab layout |
+| 6  | ⏳ Next | Merge `report.py`. |
+| 7–13 | ⏳ Pending | Per §9. |
+
+### 12.2 Decisions / deviations worth knowing before Step 6+
+
+**Step 2 — `defaults.py` was copied in Step 2, not Step 5.** The plan's file list puts `defaults.py` under Step 5's BECKY-tab work, but `records.py` imports it (for `POINT_VALS`, `TRAINING`, `HOLIDAYS`), so it had to land before Step 3. No downstream impact; just noting so nobody is surprised that it already exists.
+
+**Step 3 — `Database.__init__` has optional BECKY params.** ANIKA's original positional signature is unchanged; BECKY's collections were appended as `| None = None` kwargs that get replaced with empty containers inside `__init__`. This kept existing call sites working through the merge. Step 7's tech-debt pass is the right time to promote these to required positional args (or equivalent) if desired.
+
+**Step 3 — `Database.toWrite` still only tracks ANIKA tables.** The `toWrite` dict on the unified `Database` lists materials / mixtures / packaging / parts only. The employee tables aren't tracked. `file_manager.saveFile` iterates `db.employees`, `db.reviews`, etc. directly, so `toWrite` isn't load-bearing for the BECKY domain — but the asymmetry is a landmine. Step 7's atomic-save rework should either add the employee tables to `toWrite` or retire `toWrite` in favor of something uniform.
+
+**Step 4 — Unified schema is pre-normalization.** The schema created by `file_manager.initFile()` is the *superset* of ANIKA + BECKY + `production`, but the individual table definitions still have the old shape: ANIKA's `mixtures.materials` / `mixtures.weights` / `parts.pad` / `parts.padsPerBox` / `parts.misc` are still base64-encoded compound columns; `parts` still carries `loading` / `unloading` / `inspection` / `greenScrap`; `employees.shift` is still a compound `"shift|fullTime"` string; `reviews.details` and `notes.details` are still base64. This was deliberate — Steps 8–9 do the normalization and will bump `MERCY_DB_VERSION` from 1 → 2 (or beyond). Don't sneak normalization into intermediate steps.
+
+**Step 4 — Legacy DBs get a "light" on-open migration.** Opening a legacy ANIKA DB adds empty BECKY + production tables and stamps `db_version=1`; opening a legacy BECKY DB adds empty ANIKA + production tables (and adds a `notes` table if the BECKY file predates it) and stamps `db_version=1`. Existing data is untouched. This covers §8.3 items 6–8 and §8.4 items 5–7. The heavy parts of those same sections (base64 decode, column drops, `shift` split) are still for Steps 8 and 9 respectively.
+
+**Step 4 — `MERCY_DB_VERSION` baseline is 1.** Constant lives at the top of `file_manager.py`. Steps 8 and 9 should bump it and add an `if dbVersion < N: migrate()` block inside Case 2 ("Already in unified MERCY format") of `initFile()`.
+
+**Step 4 — Two known bugs are preserved on purpose.** `res.executemany(...)` on a consumed cursor (§3.6) and non-atomic `commit()` per table (§3.4) are both still present in the merged `saveFile`. Leave them alone until Step 7 — don't "helpfully" fix them in Step 6.
+
+**Step 5 — Class rename partial.** `main_tab.py` became `employee_overview_tab.py`, but the class inside is still `MainTab` (not `EmployeeOverviewTab` — that name is already taken by a different class in `employees_tab.py`). Six BECKY sub-tabs had their `from main_tab import MainTab` imports rewritten to `from employee_overview_tab import MainTab`. If Step 7 wants fully consistent naming, pick a different class name (e.g. `EmployeeDetailTab`) and update those six imports in lockstep.
+
+**Step 5 — Layout deviations from §7.1.** (a) No Production tab yet — it's Step 11. Current top-level is 4 tabs, not 5. (b) Settings currently has only Cost Parameters — the "App Info" sub-tab from §7.1 was skipped as trivial polish; add whenever convenient. (c) BECKY's `QLabel("TODO")` "Upcoming Actions" tab was dropped as planned (§4).
+
+### 12.3 Known deferred issues visible in the current build
+
+- **BECKY tabs' "Generate Report" buttons crash at runtime.** `pto_tab`, `employees_tab`, `notes_tab`, and `points_tab` all `from report import PDFReport` and call employee-specific methods that don't exist on ANIKA's `PDFReport` yet. Imports resolve (so `MainWindow` builds); only a click on those buttons triggers the `AttributeError`. **This is what Step 6 fixes.**
+- `updateEmployee()` is still the partial version from BECKY (§3.3) — Step 7.
+- Base64 everywhere, compound `shift`, dead `parts` columns — Steps 8–9.
+- `assert` for internal validation, `print()` for logging, window-list leak — Step 7.
+
+### 12.4 Test conventions used so far
+
+Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
+
+---
+
+*This document was prepared with Claude Code (claude-opus-4-6 / claude-sonnet-4-6) as a planning artifact; §12 is being maintained as implementation proceeds.*
