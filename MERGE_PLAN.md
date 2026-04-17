@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–5 of 13 complete as of 2026-04-17. See §12 for current state, deviations, and deferred items before picking up Step 6.
+**Status:** Implementation in progress — Steps 1–6 of 13 complete as of 2026-04-17. See §12 for current state, deviations, and deferred items before picking up Step 7.
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–5 complete; Step 6 is next. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 complete; Step 7 is next. Each step was committed separately on `main` with a message that names the step.*
 
 ### 12.1 Step status
 
@@ -517,8 +517,9 @@ All production tracking design questions have been answered by the team lead.
 | 3  | ✅ Done | (same commit as Step 2) |
 | 4  | ✅ Done | Merge plan Step 4: unified file_manager.py |
 | 5  | ✅ Done | Merge plan Step 5: BECKY tabs + new tab layout |
-| 6  | ⏳ Next | Merge `report.py`. |
-| 7–13 | ⏳ Pending | Per §9. |
+| 6  | ✅ Done | Merge plan Step 6: merged report.py |
+| 7  | ⏳ Next | Tech-debt pass (assertions → exceptions, atomic saves, `executemany` bug, `updateEmployee`, logging, window cleanup). |
+| 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -540,9 +541,10 @@ All production tracking design questions have been answered by the team lead.
 
 **Step 5 — Layout deviations from §7.1.** (a) No Production tab yet — it's Step 11. Current top-level is 4 tabs, not 5. (b) Settings currently has only Cost Parameters — the "App Info" sub-tab from §7.1 was skipped as trivial polish; add whenever convenient. (c) BECKY's `QLabel("TODO")` "Upcoming Actions" tab was dropped as planned (§4).
 
+**Step 6 — `report.py` is a pure union of the two sources.** ANIKA's existing four reports (`globalsReport`, `mixReport`, `salesReport`, `inventoryReport`) are unchanged; BECKY's three helpers (`drawSubtitle`, `drawParagraph`, `drawSignatureLine`) and five employee reports (`employeePointsReport`, `employeePTOReport`, `employeeNotesReport`, `employeeIncidentReport`, `employeeActiveReport`) were appended. The shared infrastructure (`__init__`, margins, page logic, `_wrapText`, `drawTable`) was byte-identical in both sources, so no reconciliation was needed. `from defaults import PTO_ELIGIBILITY` was added; the tech-debt items in the copied BECKY code (`assert(not x == None)`, `# type: ignore` comments) were left intact for Step 7 to sweep along with the rest of the codebase.
+
 ### 12.3 Known deferred issues visible in the current build
 
-- **BECKY tabs' "Generate Report" buttons crash at runtime.** `pto_tab`, `employees_tab`, `notes_tab`, and `points_tab` all `from report import PDFReport` and call employee-specific methods that don't exist on ANIKA's `PDFReport` yet. Imports resolve (so `MainWindow` builds); only a click on those buttons triggers the `AttributeError`. **This is what Step 6 fixes.**
 - `updateEmployee()` is still the partial version from BECKY (§3.3) — Step 7.
 - Base64 everywhere, compound `shift`, dead `parts` columns — Steps 8–9.
 - `assert` for internal validation, `print()` for logging, window-list leak — Step 7.
