@@ -167,6 +167,17 @@ class FileManager:
 
     def saveFile(self):
         assert((not self.filePath == None) and (not self.dbFile == None))
+        # Atomic save: the body below runs as a single SQLite transaction.
+        # Any exception rolls the entire save back, leaving the DB file
+        # unchanged (§3.4 of MERGE_PLAN.md).
+        try:
+            self._saveFileBody()
+        except Exception:
+            self.dbFile.rollback()
+            raise
+        self.dbFile.commit()
+
+    def _saveFileBody(self):
         db = self.mainApp.db
 
         # --- globals (ANIKA cost parameters; db_version is preserved separately) ---
@@ -177,7 +188,6 @@ class FileManager:
                 print(f" * Saving {name} = {getattr(db.globals, name)}")
             except Exception as e:
                 print(f" * Error saving {name} = {getattr(db.globals, name)}: {repr(e)}")
-        self.dbFile.commit()
 
         def clearOld(dbName, currDict):
             assert(self.dbFile is not None)
@@ -185,11 +195,10 @@ class FileManager:
             deleted = [vals for vals in res.fetchall() if not vals[0] in currDict]
             if len(deleted) > 0:
                 try:
-                    res.executemany(f"DELETE FROM {dbName} WHERE name=?", deleted)
+                    self.dbFile.executemany(f"DELETE FROM {dbName} WHERE name=?", deleted)
                     print(f" * Deleting old entries {", ".join([f"{name[0]}" for name in deleted])}")
                 except Exception as e:
                     print(f" * Error deleting old entries {", ".join([f"{name[0]}" for name in deleted])}: {repr(e)}")
-            self.dbFile.commit()
 
         # --- ANIKA: materials / mixtures / packaging / parts / inventories ---
 
@@ -201,7 +210,6 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
         clearOld("materials", db.materials)
 
         print(f"Saving mixtures to {self.filePath}")
@@ -212,7 +220,6 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
         clearOld("mixtures", db.mixtures)
 
         print(f"Saving packaging to {self.filePath}")
@@ -223,7 +230,6 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
         clearOld("packaging", db.packaging)
 
         print(f"Saving parts to {self.filePath}")
@@ -234,7 +240,6 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
         clearOld("parts", db.parts)
 
         print(f"Saving materials inventories to {self.filePath}")
@@ -246,17 +251,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT name, date FROM materialInventory")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[1]) in db.inventories or not vals[0] in db.inventories[datetime.date.fromisoformat(vals[1])].materials]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM materialInventory WHERE (name, date)=(?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM materialInventory WHERE (name, date)=(?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving parts inventories to {self.filePath}")
         for date in db.inventories:
@@ -267,17 +270,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT name, date FROM partInventory")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[1]) in db.inventories or not vals[0] in db.inventories[datetime.date.fromisoformat(vals[1])].parts]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM partInventory WHERE (name, date)=(?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM partInventory WHERE (name, date)=(?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         # --- BECKY: employees / reviews / training / attendance / PTO / notes / holidays / observances ---
 
@@ -289,17 +290,15 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum FROM employees")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.employees]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM employees WHERE idNum=?", deleted)
+                self.dbFile.executemany(f"DELETE FROM employees WHERE idNum=?", deleted)
                 print(f" * Deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving reviews to {self.filePath}")
         for idNum in db.reviews:
@@ -310,17 +309,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum, date FROM reviews")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.reviews or not datetime.date.fromisoformat(vals[1]) in db.reviews[vals[0]].reviews]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM reviews WHERE (idNum, date)=(?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM reviews WHERE (idNum, date)=(?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving training to {self.filePath}")
         for idNum in db.training:
@@ -331,17 +328,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum, training, date FROM training")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.training or not vals[1] in db.training[vals[0]].training or not datetime.date.fromisoformat(vals[2]) in db.training[vals[0]].training[vals[1]]]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM training WHERE (idNum, training, date)=(?, ?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM training WHERE (idNum, training, date)=(?, ?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving attendance to {self.filePath}")
         for idNum in db.attendance:
@@ -352,17 +347,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum, date FROM attendance")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.attendance or not datetime.date.fromisoformat(vals[1]) in db.attendance[vals[0]].points]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM attendance WHERE (idNum, date)=(?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM attendance WHERE (idNum, date)=(?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving PTO to {self.filePath}")
         for idNum in db.PTO:
@@ -373,17 +366,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum, start, end FROM PTO")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.PTO or not (datetime.date.fromisoformat(vals[1]), vals[2] if vals[2] in ["CARRY", "CASH", "DROP"] else datetime.date.fromisoformat(vals[2])) in db.PTO[vals[0]].PTO]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM PTO WHERE (idNum, start, end)=(?, ?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM PTO WHERE (idNum, start, end)=(?, ?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving notes to {self.filePath}")
         for idNum in db.notes:
@@ -394,17 +385,15 @@ class FileManager:
                     print(f" * Saving {vals}")
                 except Exception as e:
                     print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT idNum, date, time FROM notes")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.notes or not (datetime.date.fromisoformat(vals[1]), vals[2]) in db.notes[vals[0]].notes]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM notes WHERE (idNum, date, time)=(?, ?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM notes WHERE (idNum, date, time)=(?, ?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving holidays to {self.filePath}")
         for vals in db.holidays.getDefaultTuples():
@@ -413,17 +402,15 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT holiday FROM holidays")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.holidays.defaults]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM holidays WHERE holiday=?", deleted)
+                self.dbFile.executemany(f"DELETE FROM holidays WHERE holiday=?", deleted)
                 print(f" * Deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
         print(f"Saving observances to {self.filePath}")
         for vals in db.holidays.getObservanceTuples():
@@ -432,7 +419,6 @@ class FileManager:
                 print(f" * Saving {vals}")
             except Exception as e:
                 print(f" * Error saving {vals}: {repr(e)}")
-        self.dbFile.commit()
 
         res = self.dbFile.execute(f"SELECT holiday, shift, date FROM observances")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[2]).year in db.holidays.observances or
@@ -441,11 +427,10 @@ class FileManager:
                                                       not db.holidays.observances[datetime.date.fromisoformat(vals[2]).year][vals[0]][vals[1]].date.isoformat() == vals[2]]
         if len(deleted) > 0:
             try:
-                res.executemany(f"DELETE FROM observances WHERE (holiday, shift, date)=(?, ?, ?)", deleted)
+                self.dbFile.executemany(f"DELETE FROM observances WHERE (holiday, shift, date)=(?, ?, ?)", deleted)
                 print(f" * Deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}")
             except Exception as e:
                 print(f" * Error deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}: {repr(e)}")
-        self.dbFile.commit()
 
     # ---- loadFile --------------------------------------------------------------------------
 

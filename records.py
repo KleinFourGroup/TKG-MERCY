@@ -1137,14 +1137,7 @@ class Database:
             self.packaging[entry].db = self
         for entry in self.parts:
             self.parts[entry].db = self
-        self.toWrite: dict[str, list[str]] = {
-            # "globals": self.globals.getGlobals(),
-            "materials": list(self.materials.keys()),
-            "mixtures": list(self.mixtures.keys()),
-            "packaging": list(self.packaging.keys()),
-            "parts": list(self.parts.keys())
-        }
-    
+
     def updatePart(self, entry, name):
         if not name == entry:
             parts = {name if key == entry else key:val for key, val in self.parts.items()}
@@ -1314,19 +1307,38 @@ class Database:
         self.employees[employee.idNum] = employee
 
     def updateEmployee(self, oldID, newID):
-        if not oldID == newID:
-            emloyees = {newID if key == oldID else key:val for key, val in self.employees.items()}
-            self.employees = emloyees
+        if oldID == newID:
+            return
+        # 1. Rekey every employee-indexed collection that contains oldID.
+        for name in ("employees", "reviews", "training", "attendance", "PTO", "notes"):
+            coll = getattr(self, name)
+            if oldID in coll:
+                setattr(self, name, {newID if key == oldID else key: val for key, val in coll.items()})
+        # 2. Update the stored id on the employee and each sub-DB wrapper.
+        if newID in self.employees:
             self.employees[newID].idNum = newID
-            # TODO: replacement logic for other DBs
-            if oldID in self.reviews:
-                reviews = {newID if key == oldID else key:val for key, val in self.reviews.items()}
-                self.reviews = reviews
-                self.reviews[newID].idNum = newID
-            if oldID in self.notes:
-                notes = {newID if key == oldID else key:val for key, val in self.notes.items()}
-                self.notes = notes
-                self.notes[newID].idNum = newID
+        for name in ("reviews", "training", "attendance", "PTO", "notes"):
+            coll = getattr(self, name)
+            if newID in coll:
+                coll[newID].idNum = newID
+        # 3. Propagate to each child record so per-record consistency holds.
+        #    (EmployeePTORange uses `.employee` instead of `.idNum`.)
+        if newID in self.reviews:
+            for rec in self.reviews[newID].reviews.values():
+                rec.idNum = newID
+        if newID in self.training:
+            for byDate in self.training[newID].training.values():
+                for rec in byDate.values():
+                    rec.idNum = newID
+        if newID in self.attendance:
+            for rec in self.attendance[newID].points.values():
+                rec.idNum = newID
+        if newID in self.PTO:
+            for rec in self.PTO[newID].PTO.values():
+                rec.employee = newID
+        if newID in self.notes:
+            for rec in self.notes[newID].notes.values():
+                rec.idNum = newID
 
     def delEmployee(self, employeeID: int):
         assert(employeeID in self.employees)

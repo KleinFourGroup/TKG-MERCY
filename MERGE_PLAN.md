@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 of 13 complete as of 2026-04-17. See §12 for current state, deviations, and deferred items before picking up Step 7.
+**Status:** Implementation in progress — Steps 1–6 + 7a of 13 complete as of 2026-04-17. Step 7 is being run as three sub-steps (7a correctness → 7b signature → 7c hygiene); see §12 for current state, deviations, and deferred items before picking up **Step 7b**.
 
 ---
 
@@ -506,7 +506,13 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 complete; Step 7 is next. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a complete; **Step 7b is next**. Each step was committed separately on `main` with a message that names the step.*
+
+Step 7 has been split into three sub-steps to keep each review surface small:
+
+- **7a** — correctness / data-integrity fixes (done).
+- **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (next).
+- **7c** — hygiene sweep (`assert` → `raise`, `print` → `logging`, `not x == None` → `x is not None`, window-close leak, `LBS_PER_TON` constant, drop BECKY debug `print`, add `requirements.txt`).
 
 ### 12.1 Step status
 
@@ -518,7 +524,9 @@ All production tracking design questions have been answered by the team lead.
 | 4  | ✅ Done | Merge plan Step 4: unified file_manager.py |
 | 5  | ✅ Done | Merge plan Step 5: BECKY tabs + new tab layout |
 | 6  | ✅ Done | Merge plan Step 6: merged report.py |
-| 7  | ⏳ Next | Tech-debt pass (assertions → exceptions, atomic saves, `executemany` bug, `updateEmployee`, logging, window cleanup). |
+| 7a | ✅ Done | Merge plan Step 7a: correctness fixes |
+| 7b | ⏳ Next | Promote BECKY kwargs on `Database.__init__` to required args; update call sites. |
+| 7c | ⏳ Pending | Hygiene sweep (see §12.2 Step 7 notes for full list). |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -543,15 +551,49 @@ All production tracking design questions have been answered by the team lead.
 
 **Step 6 — `report.py` is a pure union of the two sources.** ANIKA's existing four reports (`globalsReport`, `mixReport`, `salesReport`, `inventoryReport`) are unchanged; BECKY's three helpers (`drawSubtitle`, `drawParagraph`, `drawSignatureLine`) and five employee reports (`employeePointsReport`, `employeePTOReport`, `employeeNotesReport`, `employeeIncidentReport`, `employeeActiveReport`) were appended. The shared infrastructure (`__init__`, margins, page logic, `_wrapText`, `drawTable`) was byte-identical in both sources, so no reconciliation was needed. `from defaults import PTO_ELIGIBILITY` was added; the tech-debt items in the copied BECKY code (`assert(not x == None)`, `# type: ignore` comments) were left intact for Step 7 to sweep along with the rest of the codebase.
 
+**Step 7a — correctness / data-integrity fixes landed.** Four changes:
+1. `Database.updateEmployee()` now handles all six employee-indexed collections (`employees`, `reviews`, `training`, `attendance`, `PTO`, `notes`), updates each sub-DB wrapper's `idNum`, **and propagates the new id down to every child record** — necessary because `EmployeeReviewsDB.getTuples()` (and the analogous methods on training / attendance / notes) assert `self.idNum == child.idNum`, and `EmployeePTODB.getTuples()` asserts `self.idNum == child.employee` (naming diverges: PTO range uses `.employee`, the other four use `.idNum`).
+2. All 11 buggy `res.executemany(...)` calls in `file_manager.saveFile`'s save-side code were changed to `self.dbFile.executemany(...)`. §3.6 done.
+3. `saveFile()` is now atomic: its body was extracted into a new `_saveFileBody()`, and `saveFile()` wraps it in `try / except: self.dbFile.rollback(); raise / self.dbFile.commit()`. All 26 intermediate `commit()` calls were removed from the body. **Deviation from §3.4:** the plan suggested `with self.dbFile:` (the idiomatic context-manager form); I used the explicit try/rollback/commit wrapper instead because it avoided re-indenting 280 lines of body code and kept the diff reviewable. Functionally identical atomicity — a mid-save exception discards everything; clean exit commits everything. `initFile()`'s four commits at indent 16 were left alone (they finalize schema detection/creation at open time, which is separate from save atomicity).
+4. `Database.toWrite` was **retired entirely**. A grep confirmed it was declared once in `records.py` and never read anywhere, so the asymmetry noted in Step 3 was resolved by deletion rather than by extending to employee tables.
+
+Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates child ids, and subsequent `getTuples()` passes the id-consistency asserts; save/reload roundtrip preserves the renamed tree; poisoning a second employee's `getTuple` mid-save raised as expected and left the on-disk `employees` table showing only the pre-failure state (atomicity confirmed).
+
 ### 12.3 Known deferred issues visible in the current build
 
-- `updateEmployee()` is still the partial version from BECKY (§3.3) — Step 7.
-- Base64 everywhere, compound `shift`, dead `parts` columns — Steps 8–9.
-- `assert` for internal validation, `print()` for logging, window-list leak — Step 7.
+- `Database.__init__` still has the BECKY kwargs typed `| None = None` — Step 7b will promote them to required args and update `emptyDB()` in `records.py` (the only caller found so far — grep for `Database(` before editing, in case more have been added).
+- `assert` for internal validation (100+ occurrences), `print()` for logging, window-list leak, `not x == None` idiom, magic `2000` in `Part` costing, debug `print` in BECKY `records.py` points logic, no `requirements.txt` — all Step 7c.
+- Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
+- Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope unless we want to pick it up in 7c; see Step 5 note above.
 
 ### 12.4 Test conventions used so far
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
+
+Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
+
+### 12.5 Pick-up notes for Step 7b
+
+Goal: make the BECKY collections required args on `Database.__init__` (matching ANIKA's positional style) and remove the `| None = None` / `if X is not None else {}` boilerplate.
+
+- Current signature lives at `records.py:1105` (as of the post-7a commit). Everything from `employees:` through `holidays:` is currently `| None = None`; inside the body, `self.X = X if X is not None else {}` (or `ObservancesDB()` for `holidays`) replaces each with an empty container.
+- The single known caller is `emptyDB()` at `records.py:1414-1419`, which already passes all 13 containers explicitly — so once the signature is tightened, `emptyDB()` needs no change. **Re-run `grep -n "Database(" **/*.py` first** to confirm no new call sites landed since.
+- While you're there: the `if X is not None else {}` scaffolding in `__init__` becomes dead after the signature change and should be simplified to plain `self.X = X` assignments.
+- Expected scope: ~15 lines in `records.py`, no other files touched. After the change, run the offscreen smoke test from §12.4 to confirm `MainWindow()` still builds. Then commit as `Merge plan Step 7b: tighten Database signature` and move to Step 7c.
+
+### 12.6 Pick-up notes for Step 7c
+
+Hygiene sweep. Items (all from §3.7, §3.8, §12.2):
+
+1. **`assert` → explicit exceptions.** 100+ occurrences across `records.py`, `file_manager.py`, `report.py`, and the tab files. For internal invariants that should never fire in correct code, use `raise RuntimeError(...)`; for invalid-input validation at method boundaries, use `raise ValueError(...)`. A few asserts inside short-lived helpers (e.g. `assert(self.dbFile is not None)` right after opening) can stay as sanity checks if switching them to `if` / `raise` would add noise without clarity.
+2. **`print()` → `logging`.** `print(f"Saving ...")` / `print(f" * Error ...")` chatter all over `file_manager.py` should become `logging.info(...)` / `logging.error(...)`. Add a simple `logging.basicConfig(level=logging.INFO)` call in `main.py` near startup.
+3. **`not x == None` → `x is not None`** across both `records.py` and `file_manager.py`. Safe replace_all candidates. Watch for the inverted form `if not x == None:` which becomes `if x is not None:`.
+4. **Window-list leak in `*_tab.py` files.** All the "edit" sub-windows (e.g. `parts_tab`'s edit dialog) are appended to a list on the parent tab and never removed. Fix: set `Qt.WA_DeleteOnClose` on each window and stop retaining references — or move to modal `QDialog.exec()` if the interaction model allows.
+5. **`LBS_PER_TON = 2000` constant** in `records.py` (§3.8). One magic `2000` in `Material.getCostPerLb()` / wherever; extract with a short comment noting "short ton".
+6. **Remove the debug `print()` in BECKY's points logic** at `records.py:345` (BECKY's line; may be offset in the merged `records.py` — grep for the `print` inside `EmployeePointsDB.currentPoints`).
+7. **Add `requirements.txt`** listing `PySide6` and `reportlab`.
+
+Split 7c further if it grows — e.g. separate "`assert` → `raise`" as its own step since it's the largest line-count item and carries the most review surface.
 
 ---
 
