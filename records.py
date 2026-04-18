@@ -1,6 +1,5 @@
 import sqlite3
 import datetime
-from utils import stringToB64, stringFromB64
 import defaults
 import logging
 
@@ -668,7 +667,8 @@ class Employee:
             self.firstName,
             self.anniversary.isoformat(),
             self.role,
-            f"{self.shift}|{1 if self.fullTime else 0}",
+            self.shift,
+            1 if self.fullTime else 0,
             self.addressLine1,
             self.addressLine2,
             self.addressCity,
@@ -679,19 +679,13 @@ class Employee:
             1 if self.status else 0
         )
 
-    def fromTuple(self, row: tuple[int, str, str, str, str, int | str, str, str, str, str, str, str, str, int]):
+    def fromTuple(self, row: tuple[int, str, str, str, str, int, int, str, str, str, str, str, str, str, int]):
         self.setID(row[0])
         self.setName(row[1], row[2])
         self.setAnniversary(datetime.date.fromisoformat(row[3]))
-        if isinstance(row[5], int):
-            self.setJob(row[4], row[5], True)
-        else:
-            jobArgs = row[5].split("|")
-            if not (len(jobArgs) == 2):
-                raise RuntimeError('len(jobArgs) == 2')
-            self.setJob(row[4], int(jobArgs[0]), jobArgs[1] == "1")
-        self.setAddress(row[6], row[7], row[8], row[9], row[10], row[11], row[12])
-        self.setStatus(not row[13] == 0)
+        self.setJob(row[4], row[5], row[6] == 1)
+        self.setAddress(row[7], row[8], row[9], row[10], row[11], row[12], row[13])
+        self.setStatus(not row[14] == 0)
 
 class EmployeeReview:
     def __init__(self, idNum: int | None = None, date: datetime.date | None = None, nextReview: datetime.date | None = None, details: str = "") -> None:
@@ -714,14 +708,14 @@ class EmployeeReview:
             self.idNum,
             "" if self.date == None else self.date.isoformat(),
             "" if self.nextReview == None else self.nextReview.isoformat(),
-            stringToB64(self.details)
+            self.details
         )
 
     def fromTuple(self, row: tuple[int, str, str, str]):
         self.setID(row[0])
         self.date = None if row[1] == "" else datetime.date.fromisoformat(row[1])
         self.nextReview = None if row[2] == "" else datetime.date.fromisoformat(row[2])
-        self.details = stringFromB64(row[3])
+        self.details = row[3] if row[3] is not None else ""
 
 class EmployeeTrainingDate:
     def __init__(self, idNum: int | None = None, training: str | None = None, date: datetime.date | None = None, comment: str = "") -> None:
@@ -839,14 +833,14 @@ class EmployeeNote:
             self.idNum,
             self.date.isoformat(),
             self.time,
-            stringToB64(self.details)
+            self.details
         )
 
     def fromTuple(self, row: tuple[int, str, str, str]):
         self.setID(row[0])
         self.date = datetime.date.fromisoformat(row[1])
         self.time = row[2]
-        self.details = stringFromB64(row[3])
+        self.details = row[3] if row[3] is not None else ""
 
 class EmployeePoint:
     def __init__(self, idNum: int | None = None, date: datetime.date | None = None, reason: str | None = None, value: float = 0) -> None:

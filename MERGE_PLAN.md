@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–8 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 9**.
+**Status:** Implementation in progress — Steps 1–9 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 9.5** (vestigial `Part` attribute cleanup) and **Step 10** (DB merge).
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-18. Steps 1–8 complete; **Step 9 is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-18. Steps 1–9 complete; **Step 9.5 (polish) is next**, then **Step 10 (DB merge)**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -536,7 +536,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 7d | ✅ Done | Merge plan Step 7d: clean up double-negation leftovers |
 | 7e | ✅ Done | Merge plan Step 7e: restore window centering |
 | 8  | ✅ Done | Merge plan Step 8: ANIKA schema migration |
-| 9–13 | ⏳ Pending | Per §9. |
+| 9  | ✅ Done | Merge plan Step 9: BECKY schema migration |
+| 10–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -624,55 +625,76 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** `smoke.py` gained a `legacy_anika_migration` check that hand-crafts a v1 ANIKA DB with 2 mixtures (one 3-material, one 1-material) and 3 parts (one with 2 pads, one with 2 misc, one with 1 pad + 1 misc), opens it with MERCY, and asserts: `db_version=2`, `mixtures` has just the `name` column, `parts` has the 12 expected cols, each child table has the expected rows in the expected order, the in-memory `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc` reconstruct correctly, a sibling `.db.bak-*` file was written, and a full save/reload roundtrip preserves the data. All three smoke checks (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`) pass. Case 1 (brand-new), Case 2 (v1 MERCY → v2), and Case 4 (legacy BECKY) were also spot-checked via throwaway scripts and verified manually in the GUI on the user's machine before commit.
 
+**Step 9 — BECKY schema migration landed (v2 → v3).** `MERCY_DB_VERSION` bumped from 2 to 3. Four groups of changes:
+
+1. **Schema creation updated to v3 shape.** `_createBeckyTables()` now creates the normalized schema directly: `employees(idNum, lastName, firstName, anniversary, role, shift INTEGER, fullTime INTEGER, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)` — 15 cols with the compound `shift` split into two separate int columns; `reviews.details` and `notes.details` declared as `TEXT`. Brand-new MERCY DBs (Case 1) and Case 3's empty BECKY side are born at v3 shape with no migration needed.
+
+2. **Migration function `_migrateBeckyV2ToV3()`.** Three pieces of work: (a) recreate-and-copy on `employees` — `SELECT shift` from the old table, split the `"{shift}|{fullTime}"` string on `|`, `INSERT` into a new 15-col table; (b) decode base64 `reviews.details` / `notes.details` via in-place `UPDATE` statements (no schema change — just content); (c) orphan sweep on `training` / `attendance` / `PTO` for rows whose `idNum` doesn't reference a valid employee (§3.3 — pre-7a `updateEmployee` could leave these dangling). Reviews and notes are not swept because the pre-7a bug already handled those dicts; only training/attendance/PTO were skipped. Wired into `initFile()`:
+   - **Case 2 (unified MERCY)** — `if dbVersion < 3: _migrateBeckyV2ToV3()`, chained *after* `if dbVersion < 2: _migrateAnikaV1ToV2()`. Old v1 MERCY files get both migrations in a single open.
+   - **Case 3 (legacy ANIKA)** — BECKY side is empty (tables created fresh at v3 shape), so after the ANIKA v1→v2 migration, just `_setDbVersion(MERCY_DB_VERSION)` — no BECKY migration call. Net: one open takes a legacy ANIKA file all the way to v3.
+   - **Case 4 (legacy BECKY)** — `_setDbVersion(2)` first (atomicity marker, same pattern as Step 8's v1 stamp), then `_migrateBeckyV2ToV3()` which bumps to v3 at its end. The outer `try/except` closes without commit on failure, leaving the file untouched.
+
+3. **Model + save path updated.** `Employee.getTuple()` now emits a 15-tuple with `shift` and `fullTime` as separate fields (instead of `f"{shift}|{fullTime}"`); `Employee.fromTuple` reads them as two cols and the `isinstance(row[5], int)` / `.split('|')` compatibility branch was removed — by the time `fromTuple` is called, migration has normalized. `EmployeeReview.getTuple`/`fromTuple` and `EmployeeNote.getTuple`/`fromTuple` emit/read `details` as plain strings (no more `stringToB64`/`stringFromB64` wrapping). `saveFile`'s employees INSERT placeholder count bumped 14 → 15. The `from utils import stringToB64, stringFromB64` import at `records.py:3` was dropped.
+
+4. **Shift-type tolerance in migration.** The split-shift code accepts either a compound `"{shift}|{fullTime}"` string (the post-Step-4 BECKY norm) or a bare integer (hypothetical pre-compound legacy format — defaults `fullTime=1`). Anything else raises `RuntimeError` naming the offending employee. In practice only the compound-string form has been observed.
+
+**Verification.** `smoke.py` gained a `legacy_becky_migration` check that hand-crafts a v2 BECKY-shape DB with 3 employees (full-time / part-time / full-time), 2 reviews with b64-wrapped details (one multi-line), 2 notes, and deliberately-orphaned training/attendance/PTO rows (one per table) alongside valid rows. Opens with MERCY (Case 4) and asserts: `db_version=3`, `employees` has 15 cols with `shift INTEGER` + `fullTime INTEGER` split, parsed shift/fullTime values correct per employee, `reviews.details`/`notes.details` are plain text (including newlines preserved), orphan rows removed from all three tables while valid rows are preserved, backup sibling file exists, in-memory `Employee.shift`/`fullTime` reconstruct as `int`/`bool` (not compound), and save/reload roundtrip preserves the migrated data. All four smoke checks (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`) pass. Case 2 (hand-crafted v1 unified MERCY → v3 in one open, chained v1→v2→v3 migrations) was also spot-checked via a throwaway script and confirmed both the ANIKA compound decode and the BECKY shift split in the same open.
+
+**Deviations from plan.** None material. §12.5's aspirational note about removing all four base64 utilities once Step 9 lands turned out to be too ambitious: `_migrateAnikaV1ToV2` still depends on `stringToList`, `_migrateBeckyV2ToV3` depends on `stringFromB64`, and those depend in turn on `stringToB64`/`listToString`. All four remain in `utils.py` indefinitely for legacy-file support. `records.py` and the rest of the main app no longer import them.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
 - One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
-- BECKY still pre-normalized: base64-wrapped `reviews.details` and `notes.details`, compound `employees.shift` — Step 9.
-- **Vestigial `Part` attributes.** `Part.loading`/`unloading`/`inspection`/`greenScrap` are still instance attributes, accepted by `setProduction()` and printed by `__str__`, but no longer persisted (Step 8 dropped the DB columns). UI forms in `parts_tab.py` may still collect values for them, which then vanish on save/reload — misleading but not breaking, because cost calcs already used the globals-table counterparts (§3.2). Polish pass post-Step-9 should drop the attrs + `setProduction` params + any UI widgets that feed them.
+- **Vestigial `Part` attributes.** `Part.loading`/`unloading`/`inspection`/`greenScrap` are still instance attributes, accepted by `setProduction()` and printed by `__str__`, but no longer persisted (Step 8 dropped the DB columns). UI forms in `parts_tab.py` may still collect values for them, which then vanish on save/reload — misleading but not breaking, because cost calcs already use the globals-table counterparts (§3.2). **Step 9.5 will drop the attrs + `setProduction` params + any UI widgets that feed them.**
 - Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope; see Step 5 note above.
 
 ### 12.4 Test conventions used so far
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Step 8). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Three checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8 and 9). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Four checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
-- `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v2 schema shape (`mixtures`=[`name`] only; `parts` = 12 expected cols), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. This is the template Step 9 should follow — a `legacy_becky_migration` function seeding a v1 BECKY-shape DB (with compound shift + base64 details) would verify the v2→v3 migration.
+- `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v3 schema (`mixtures`=[`name`] only; `parts` = 12 expected cols; `db_version=3` after chained v1→v3 migration), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. Updated in Step 9 to assert v3 (the BECKY v2→v3 migration is a no-op version-bump in Case 3 since the employee tables are empty).
+- `legacy_becky_migration` (Step 9) — hand-crafts a v2 BECKY-shape DB with 3 employees covering both compound-shift shapes (`"1|1"`, `"2|0"`, `"3|1"`), 2 base64-wrapped reviews (one multi-line), 2 base64-wrapped notes, and deliberately-orphaned `training`/`attendance`/`PTO` rows alongside valid ones. Opens with MERCY to trigger Case 4, then asserts `db_version=3`, the 15-col v3 `employees` shape, correct shift/fullTime split per row, plain-text `reviews.details`/`notes.details` (newlines preserved), orphan sweep removed only the dangling rows, backup sibling file exists, in-memory `Employee.shift`/`fullTime` reconstruct as `int`/`bool`, and save/reload roundtrip fidelity.
 
 Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 9
+### 12.5 Pick-up notes for Step 9.5 (Part attribute cleanup) and Step 10 (DB merge)
 
-**Per §9, Step 9 is the BECKY migration** — the symmetric counterpart to Step 8's ANIKA work. Bring legacy BECKY `.db` files (and any post-Step-8 v2 MERCY file that still carries BECKY's pre-normalization shape) up to v3. Key references: §3.1 (base64-encoded `reviews.details` / `notes.details`), `employees.shift` compound field, §3.3 (the old incomplete `updateEmployee()` — already fixed in 7a, but Step 9 still has to handle orphans that may have slipped in before the fix), §5.1 target schema, §8.4 (migration steps 1–7).
+**Step 9.5 — drop vestigial `Part.loading` / `unloading` / `inspection` / `greenScrap`.** Step 8 dropped the corresponding DB columns but the model attributes (and `setProduction` params) stayed in place so the codebase would stay buildable during Step 9. Now safe to remove end-to-end. Scope:
 
-**Scope from §8.4.** Three real pieces of work; the rest is already done by earlier steps:
-1. **Split `employees.shift`.** Currently stored as a single `"{shift}|{fullTime}"` string (e.g. `"2|1"`). Recreate `employees` with `shift INTEGER, fullTime INTEGER` columns; `SELECT` the old string, parse on `|`, insert into the new table. Same recreate-and-copy pattern Step 8 used for `parts` / `mixtures`. Name columns explicitly in the `INSERT INTO employees_new ... SELECT ... FROM employees`.
-2. **Decode `reviews.details` and `notes.details`.** Both fields store base64-wrapped plain text via `stringToB64`/`stringFromB64` (per `EmployeeReview.getTuple()` at `records.py:717` and `EmployeeNote.getTuple()` at `records.py:842`). SQLite TEXT handles newlines natively — the wrapping serves no purpose. Migration: `SELECT details, UPDATE details = <decoded>` for each row. No schema change for these two columns — just an in-place decode. Afterwards, drop the `stringToB64`/`stringFromB64` calls from the `getTuple`/`fromTuple` methods on both classes.
-3. **FK consistency sweep for `training` / `attendance` / `PTO`.** Step 7a fixed `Database.updateEmployee()` so it propagates ID changes to all six collections; legacy DBs written before that fix could still have dangling `idNum` references in those three tables. Step 9 should scan for rows whose `idNum` is absent from `employees` and log any orphans found (delete, or leave with a warning — Matthew's call; I'd log + delete in the migration, since orphaned rows will otherwise break the load path at `file_manager.py:582` / `:595` / `:608` where RuntimeError fires on unknown `idNum`).
+1. **`records.py` `Part.__init__`.** Delete the four attribute assignments (`self.loading`, `self.unloading`, `self.inspection`, `self.greenScrap`) around `records.py:229–232`.
+2. **`records.py` `Part.setProduction`.** Current signature is `setProduction(self, weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, price)`. Drop the four dead params, leaving `setProduction(self, weight, mix, pressing, turning, fireScrap, price)`. Drop the corresponding `self.X = X` assignments in the body.
+3. **`records.py` `Part.__str__`.** The format string at `records.py:434` prints `f"UNUSED: {self.loading}"` etc. four times — strip those tokens from the f-string and their positional args.
+4. **`parts_tab.py`.** Find any UI widgets that collect these four values (likely `QLineEdit`s in the edit dialog) and remove them + their layout rows + any `checkInput` calls + the `setProduction` call site that passes them. `Globals` still has `loading` / `inspection` / `greenScrap` — those are the live values used by cost calcs (§3.2). Do **not** touch `globals_tab.py` or the `Globals` class.
+5. **`report.py`.** Grep for `.loading` / `.unloading` / `.inspection` / `.greenScrap` — most hits should be `db.globals.X` (live) not `part.X` (dead). Any `part.X` references can be deleted.
 
-**Already done by earlier steps** (don't redo): creating empty ANIKA-side tables (Step 4 Case 4 + Step 8 updates made `_createBeckyTables()`'s companion `_createAnikaTables()` v2-shape), creating `production` (Step 4), stamping an initial `db_version` (Step 4 and Step 8 combined).
+**Not a schema change.** No `MERCY_DB_VERSION` bump, no migration function. The DB already has the correct shape; this just cleans up the Python side.
 
-**Version bump.** `MERCY_DB_VERSION = 2` → `3` at the top of `file_manager.py`. Wire into `initFile()` Case 2 as the second arm: `if dbVersion < 3: self._migrateBeckyV2ToV3()`. The existing Case 4 (legacy BECKY) should run the BECKY migration too — stamp v2 first, then run `_migrateBeckyV2ToV3`. Case 3 (legacy ANIKA) stamps v1 → migrates to v2 currently; after Step 9, legacy ANIKA files don't need the BECKY decode (their BECKY tables are created empty), but they should still be stamped at v3 (the current DB version) once migration finishes. Simplest: after `_migrateAnikaV1ToV2()` succeeds, bump to v3 unconditionally in Case 3, and let `_migrateBeckyV2ToV3` be a no-op when the BECKY tables are empty.
+**Verification.** `smoke.py` should still pass all four checks unchanged. The existing `legacy_anika_migration` test hits the `Part` code path (loads migrated parts into in-memory `Part` objects), so that's already covering the shape. Manual UI test: open the parts edit dialog, confirm the four dead fields are gone, and save a part to confirm no AttributeError.
 
-Similarly update `_createBeckyTables()` to create the v3-shape schema directly (`shift INTEGER, fullTime INTEGER` split; `details` columns documented as plain TEXT) so Case 1 (brand-new) and Case 3 (legacy ANIKA) get empty v3 BECKY tables without migration.
+---
 
-**Backup.** Call `_backupDbFile()` at the top of `_migrateBeckyV2ToV3()` — same pattern Step 8 established. The helper already handles the WAL-lock gotcha (don't reintroduce the `wal_checkpoint` call).
+**Step 10 — DB merge (importing one legacy file into another).** Per §8.5. Supports the team's real-world migration from two separate `.db` files (one ANIKA, one BECKY) into a single MERCY DB.
 
-**Key gotcha — column ordering when recreating `employees`.** The new table column order must match what `Employee.getTuple()` produces. Check `Employee.fromTuple` at `records.py:682` and `getTuple` at `records.py:662` — both currently encode `shift` as `f"{self.shift}|{self.fullTime}"`. Step 9 needs to: (a) update the model so `getTuple` emits `shift, fullTime` as two separate fields and `fromTuple` reads them as two separate fields, and (b) update the `INSERT OR REPLACE INTO employees VALUES (?, ?, ..., ?)` in `file_manager.saveFile` to match the new column count. §5.1's target schema lists the expected final column order.
+**Scope.** Add a menu action (File → *Import from BECKY database…* or similarly named) that:
+1. Opens a file picker for a second `.db`.
+2. Detects its format (Case 3 or Case 4 logic from `initFile`, lifted into a reusable helper).
+3. Runs the full migration chain on the second file in memory (reuse `_migrateAnikaV1ToV2` / `_migrateBeckyV2ToV3`).
+4. Copies the non-overlapping tables into the currently-open DB. For an ANIKA-side import: materials, mixtures, mixture_components, packaging, parts, part_pads, part_misc, materialInventory, partInventory. For a BECKY-side import: employees, reviews, training, attendance, PTO, notes, holidays, observances. `production` is always empty in the legacy files.
+5. Conflict resolution on `globals`: use the already-open file's cost parameters (ANIKA side); the second file's `db_version` is ignored — the already-open file's version wins.
+6. Prompts the user with a summary ("X materials, Y parts, Z employees will be imported") and requires confirmation before the copy.
+7. Runs inside a single transaction; any failure rolls back both DBs.
 
-**Key gotcha — `Employee.shift` type coercion in tests.** Per §12.4 gotcha note: setting `e.shift = "1|1"` on an in-memory `Employee` object is currently wrong because `getTuple` re-appends `|{fullTime}`. After Step 9, `shift` is a plain int; test code should just set `e.shift = 1; e.fullTime = True` (already the correct idiom) or use `setJob()`.
+**Key gotchas.** (a) `idNum` collisions between two BECKY files are unlikely in practice but the code should detect and warn. (b) The second file's backup (`_backupDbFile`) should still run before its in-memory migration, same as opening it standalone. (c) Be explicit about read-only vs. write — the second file only needs to be read from; don't mutate it. (d) After the import, save the merged result to the already-open file (the user's *first* DB).
 
-**Atomicity.** Same single-transaction pattern as Step 8: migration is wired into `initFile()` which commits at the end; any raise aborts the whole thing via connection close. No special work needed beyond `try`/`commit`/`except`/`close`.
+**Smoke-test scaffolding.** Add `legacy_merge` to `smoke.py` that creates both a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one, runs the import action on the BECKY one, and asserts all the expected tables are populated. Existing per-side migration checks continue to cover the individual migration paths.
 
-**Smoke-test scaffolding.** Add a `legacy_becky_migration` function to `smoke.py` modeled on `legacy_anika_migration`. Seed a pre-v3 BECKY-shape DB with: at least one employee with a compound shift (e.g. `"2|1"`), one review with a base64-wrapped details string, one note with a base64-wrapped details string, and — to exercise the orphan sweep — one `training` or `attendance` row whose `idNum` doesn't match any employee. Open with MERCY; assert `db_version=3`, `employees.shift`/`fullTime` split correctly, `reviews.details`/`notes.details` are plain text, orphan rows were dropped (and logged), and a save/reload roundtrip preserves the real data.
-
-**Cleanup enabled by Step 9.** Once BECKY migration lands, `utils.listToString` / `stringToList` / `stringToB64` / `stringFromB64` are all unreferenced — remove them from `utils.py`, and clean up the corresponding imports in `records.py` (currently `from utils import stringToB64, stringFromB64`). Also the vestigial `Part` attributes noted in §12.3 can be dropped from the model + `setProduction` signature + any `parts_tab.py` UI that feeds them — reasonable to fold into the same commit or handle as a small Step 9.5 polish.
-
-**Follow-ups explicitly NOT in Step 9.** DB merging (importing an ANIKA `.db` into a BECKY `.db` or vice versa) is Step 10. Production feature is Step 11. Keep Step 9 focused on BECKY normalization.
+**Follow-ups explicitly NOT in Step 10.** Production feature is Step 11; keep Step 10 limited to the import path.
 
 ---
 

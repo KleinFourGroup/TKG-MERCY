@@ -10,7 +10,7 @@ from records import (
     Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB,
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance
 )
-from utils import stringToList
+from utils import stringToList, stringFromB64
 
 # Bumped whenever the unified schema changes.
 #   v1 — Step 4: superset schema with base64-encoded ANIKA compound columns and compound BECKY
@@ -18,8 +18,10 @@ from utils import stringToList
 #   v2 — Step 8: ANIKA schema normalized. `mixtures.materials`/`weights` replaced by
 #        `mixture_components`; `parts.pad`/`padsPerBox`/`misc` replaced by `part_pads`/`part_misc`;
 #        `parts.loading`/`unloading`/`inspection`/`greenScrap` dropped (§3.1, §3.2).
-#   v3+ — Step 9 will normalize BECKY (shift split, base64 decode of review/note details).
-MERCY_DB_VERSION = 2
+#   v3 — Step 9: BECKY schema normalized. `employees.shift` split into `shift INTEGER` +
+#        `fullTime INTEGER`; `reviews.details` and `notes.details` stored as plain TEXT
+#        (base64 wrapping removed); orphan rows in training/attendance/PTO swept out (§3.1, §3.3).
+MERCY_DB_VERSION = 3
 
 # Table-set fingerprints for format detection (§8.1 of MERGE_PLAN).
 ANIKA_TABLES = {"globals", "materials", "mixtures", "packaging", "parts",
@@ -55,17 +57,17 @@ class FileManager:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS partInventory(name, date, cost, amount40, amount60, amount80, amount100, UNIQUE(name, date))")
 
     def _createBeckyTables(self):
-        # Pre-normalization BECKY schema (shift still compound, details still base64). Step 9
-        # will split `shift` into shift/fullTime and decode the text fields.
+        # v3 normalized BECKY schema. `employees.shift` split into separate shift/fullTime
+        # INTEGER cols; `reviews.details` / `notes.details` stored as plain TEXT (§3.1).
         if self.dbFile is None:
             raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS globals(name PRIMARY KEY, value)")
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS reviews(idNum, date, nextReview, details, UNIQUE(idNum, date))")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift INTEGER, fullTime INTEGER, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS reviews(idNum, date, nextReview, details TEXT, UNIQUE(idNum, date))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS training(idNum, training, date, comment, UNIQUE(idNum, training, date))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS attendance(idNum, date, reason, value, UNIQUE(idNum, date))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS PTO(idNum, start, end, hours, UNIQUE(idNum, start, end))")
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS notes(idNum, date, time, details, UNIQUE(idNum, date, time))")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS notes(idNum, date, time, details TEXT, UNIQUE(idNum, date, time))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS holidays(holiday PRIMARY KEY, month)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS observances(holiday, shift, date, UNIQUE(holiday, shift, date))")
 
@@ -212,6 +214,93 @@ class FileManager:
         self._setDbVersion(2)
         logging.info(" --> ANIKA v1->v2 migration complete")
 
+    def _migrateBeckyV2ToV3(self):
+        # BECKY schema normalization (§3.1, §3.3). Split `employees.shift` compound string
+        # into shift + fullTime INTEGER cols; decode base64-wrapped `reviews.details` /
+        # `notes.details` into plain TEXT; sweep orphan rows from training / attendance /
+        # PTO whose idNum no longer references a valid employee (§3.3 — `updateEmployee`
+        # bug in pre-7a BECKY code could leave dangling references).
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running BECKY v2->v3 migration: normalize shift / details / orphan sweep")
+        self._backupDbFile()
+
+        # --- employees: split compound shift column ---
+        empRows = self.dbFile.execute(
+            "SELECT idNum, lastName, firstName, anniversary, role, shift, "
+            "addressLine1, addressLine2, addressCity, addressState, addressZip, "
+            "addressTel, addressEmail, status FROM employees"
+        ).fetchall()
+        parsedRows = []
+        for row in empRows:
+            shiftVal = row[5]
+            if isinstance(shiftVal, int):
+                # Pre-compound legacy format (older than "shift|fullTime" convention):
+                # treat as shift only, default fullTime=1.
+                shift, fullTime = shiftVal, 1
+            elif isinstance(shiftVal, str):
+                parts = shiftVal.split("|")
+                if len(parts) != 2:
+                    raise RuntimeError(f"Employee {row[0]}: malformed shift {shiftVal!r}")
+                shift, fullTime = int(parts[0]), int(parts[1])
+            else:
+                raise RuntimeError(f"Employee {row[0]}: unrecognized shift type {type(shiftVal).__name__}")
+            parsedRows.append((row[0], row[1], row[2], row[3], row[4], shift, fullTime, *row[6:]))
+
+        self.dbFile.execute(
+            "CREATE TABLE employees_new("
+            "idNum PRIMARY KEY, lastName, firstName, anniversary, role, "
+            "shift INTEGER, fullTime INTEGER, "
+            "addressLine1, addressLine2, addressCity, addressState, addressZip, "
+            "addressTel, addressEmail, status)"
+        )
+        if parsedRows:
+            self.dbFile.executemany(
+                "INSERT INTO employees_new VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                parsedRows
+            )
+        self.dbFile.execute("DROP TABLE employees")
+        self.dbFile.execute("ALTER TABLE employees_new RENAME TO employees")
+
+        # --- reviews.details: decode base64 in place ---
+        reviewRows = self.dbFile.execute("SELECT idNum, date, details FROM reviews").fetchall()
+        for (idNum, date, encDetails) in reviewRows:
+            plain = stringFromB64(encDetails) if encDetails else ""
+            self.dbFile.execute(
+                "UPDATE reviews SET details=? WHERE idNum=? AND date=?",
+                (plain, idNum, date)
+            )
+
+        # --- notes.details: decode base64 in place ---
+        noteRows = self.dbFile.execute("SELECT idNum, date, time, details FROM notes").fetchall()
+        for (idNum, date, time, encDetails) in noteRows:
+            plain = stringFromB64(encDetails) if encDetails else ""
+            self.dbFile.execute(
+                "UPDATE notes SET details=? WHERE idNum=? AND date=? AND time=?",
+                (plain, idNum, date, time)
+            )
+
+        # --- orphan sweep on training / attendance / PTO ---
+        validIds = set(row[0] for row in self.dbFile.execute("SELECT idNum FROM employees").fetchall())
+
+        def sweepOrphans(table: str, keyCols: tuple[str, ...]):
+            if self.dbFile is None:
+                raise RuntimeError('self.dbFile is None')
+            colList = ", ".join(keyCols)
+            rows = self.dbFile.execute(f"SELECT {colList} FROM {table}").fetchall()
+            orphans = [r for r in rows if r[0] not in validIds]
+            if orphans:
+                logging.info(f" --> Removing {len(orphans)} orphan row(s) from {table}: {orphans}")
+                whereClause = " AND ".join(f"{c}=?" for c in keyCols)
+                self.dbFile.executemany(f"DELETE FROM {table} WHERE {whereClause}", orphans)
+
+        sweepOrphans("training", ("idNum", "training", "date"))
+        sweepOrphans("attendance", ("idNum", "date"))
+        sweepOrphans("PTO", ("idNum", "start", "end"))
+
+        self._setDbVersion(3)
+        logging.info(" --> BECKY v2->v3 migration complete")
+
     # ---- initFile --------------------------------------------------------------------------
 
     def initFile(self):
@@ -246,11 +335,14 @@ class FileManager:
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
                 if dbVersion < 2:
                     self._migrateAnikaV1ToV2()
+                if dbVersion < 3:
+                    self._migrateBeckyV2ToV3()
                 self.dbFile.commit()
                 return True
 
-            # Case 3: Legacy ANIKA DB. Add empty employee + production tables, then run the
-            # ANIKA v1->v2 normalization on the existing ANIKA tables.
+            # Case 3: Legacy ANIKA DB. Add empty employee + production tables (at v3 shape
+            # since they're empty — no BECKY migration needed), then run the ANIKA v1->v2
+            # normalization on the existing ANIKA tables, then stamp v3.
             if ("materials" in tables and "parts" in tables) and ("employees" not in tables):
                 logging.info(f" --> Detected legacy ANIKA format. Adding empty employee + production "
                              f"tables, then normalizing ANIKA schema to v2.")
@@ -264,19 +356,27 @@ class FileManager:
                 # connection without committing, leaving the original file untouched.
                 self._setDbVersion(1)
                 self._migrateAnikaV1ToV2()
+                # No BECKY data to migrate — the tables we just created are already v3 shape.
+                self._setDbVersion(MERCY_DB_VERSION)
                 self.dbFile.commit()
                 return True
 
-            # Case 4: Legacy BECKY DB. Add empty product + production tables, stamp version.
+            # Case 4: Legacy BECKY DB. Add empty product + production tables (at v2-equivalent
+            # ANIKA shape since Step 8 normalized the create path), then run the BECKY v2->v3
+            # normalization on the existing BECKY tables.
             if ("employees" in tables and "PTO" in tables) and ("materials" not in tables):
                 logging.info(f" --> Detected legacy BECKY format. Adding empty product + production "
-                             f"tables. Full schema normalization will run in a later migration step.")
-                # Pre-notes BECKY DBs didn't have a `notes` table.
+                             f"tables, then normalizing BECKY schema to v3.")
+                # Pre-notes BECKY DBs didn't have a `notes` table. Create with v2 shape (plain
+                # `details` column) so the base64 decode pass finds no rows to update.
                 if "notes" not in tables:
                     self.dbFile.execute("CREATE TABLE notes(idNum, date, time, details, UNIQUE(idNum, date, time))")
                 self._createAnikaTables()
                 self._createProductionTable()
-                self._setDbVersion(MERCY_DB_VERSION)
+                # Stamp v2 so that if the BECKY migration throws partway, the outer try/except
+                # closes the connection without committing and leaves the file untouched.
+                self._setDbVersion(2)
+                self._migrateBeckyV2ToV3()
                 self.dbFile.commit()
                 return True
 
@@ -472,7 +572,7 @@ class FileManager:
         for idNum in db.employees:
             vals = db.employees[idNum].getTuple()
             try:
-                self.dbFile.execute("INSERT OR REPLACE INTO employees VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
+                self.dbFile.execute("INSERT OR REPLACE INTO employees VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
                 logging.info(f" * Saving {vals}")
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
