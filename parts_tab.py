@@ -317,8 +317,8 @@ class PartsEditWindow(QWidget):
                 self.part = Part(name)
                 self.mainApp.db.addPart(self.part)
             else:
-                if not (not isNone):
-                    raise RuntimeError('not isNone')
+                if isNone:
+                    raise RuntimeError('isNone')
                 self.mainApp.db.updatePart(self.part.name, name)
             self.part.setProduction(weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, price)
             self.part.setPackaging(box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc)

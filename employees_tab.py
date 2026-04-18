@@ -296,8 +296,8 @@ class EmployeeEditWindow(QWidget):
                 notes = EmployeeNotesDB(id)
                 self.mainApp.db.addEmployeeNotes(notes)
             else:
-                if not (not isNone):
-                    raise RuntimeError('not isNone')
+                if isNone:
+                    raise RuntimeError('isNone')
                 self.mainApp.db.updateEmployee(self.employee.idNum, id)
             self.employee.setName(lastName, firstName)
             logging.debug(self.calendar.selectedDate())
