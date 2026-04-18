@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 import random
 import math
 
@@ -17,7 +17,6 @@ class TrainingTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
         
         self.currentTraining = "None"
         self.trainingOptions = ["None"]
@@ -86,7 +85,7 @@ class TrainingTab(QWidget):
         else:
             self.currentTraining = "None"
 
-        if not self.currentEmployeeTraining == None and not self.currentTraining == "None":
+        if self.currentEmployeeTraining is not None and not self.currentTraining == "None":
             self.trainingLabel.setText(f"Training: {self.currentTraining}")
         else:
             self.trainingLabel.setText("Training: N/A")
@@ -95,7 +94,7 @@ class TrainingTab(QWidget):
     
     def refreshPicker(self):
         self.trainingOptions = ["None"]
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.trainingOptions.extend(list(self.currentEmployeeTraining.training.keys()))
 
         oldTraining = self.currentTraining
@@ -110,7 +109,7 @@ class TrainingTab(QWidget):
         self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
         self.currentEmployeeTraining = None if employeeID == None else self.mainApp.db.training[self.mainTab.employeeID]
         
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
@@ -121,24 +120,23 @@ class TrainingTab(QWidget):
         self.genTableData()
         self.table.setData(self.tableData)
 
-        dateDict: dict[datetime.date, EmployeeTrainingDate] = self.currentEmployeeTraining.training[self.currentTraining] if not self.currentEmployeeTraining == None and self.currentTraining in self.currentEmployeeTraining.training else {}
+        dateDict: dict[datetime.date, EmployeeTrainingDate] = self.currentEmployeeTraining.training[self.currentTraining] if self.currentEmployeeTraining is not None and self.currentTraining in self.currentEmployeeTraining.training else {}
         selection = [entry.isoformat() for entry in self.selection if entry in dateDict]
         self.setSelection(selection)
 
-        self.newB.setEnabled(not self.currentEmployee == None and not self.currentTraining == "None")
-        self.editB.setEnabled(not self.currentEmployee == None and not self.currentTraining == "None")
-        self.deleteB.setEnabled(not self.currentEmployee == None and not self.currentTraining == "None")
+        self.newB.setEnabled(self.currentEmployee is not None and not self.currentTraining == "None")
+        self.editB.setEnabled(self.currentEmployee is not None and not self.currentTraining == "None")
+        self.deleteB.setEnabled(self.currentEmployee is not None and not self.currentTraining == "None")
     
     def openNew(self):
-        self.windows.append(TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, None, self.mainApp))
+        TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, None, self.mainApp)
     
     def openEdits(self):
         pass
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
         for date in self.selection:
-            self.windows.append(TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, self.currentEmployeeTraining.training[self.currentTraining][date], self.mainApp))
+            TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, self.currentEmployeeTraining.training[self.currentTraining][date], self.mainApp)
     
     def deleteTraining(self):
         if len(self.selection) == 0:
@@ -157,7 +155,8 @@ class TrainingTab(QWidget):
 
 class TrainingEditWindow(QWidget):
     def __init__(self, employeeID, trainingType: str, trainingDate: EmployeeTrainingDate, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp

@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 import random
 import math
 
@@ -52,7 +52,6 @@ class ObservancesTab(QWidget):
         super().__init__()
         self.holidayTab = holidayTab
         self.mainApp = self.holidayTab.mainApp
-        self.windows = []
         self.observancesDB = self.mainApp.db.holidays
         
         self.currentYear = datetime.date.today().year
@@ -124,11 +123,11 @@ class ObservancesTab(QWidget):
         self.refresh()
     
     def openYear(self):
-        self.windows.append(YearSelectWindow(self, self.mainApp))
+        YearSelectWindow(self, self.mainApp)
     
     def setObservanceFn(self, holiday, shift):
         def callback():
-            self.windows.append(ObservanceSelectWindow(self, self.currentYear, holiday, shift, self.mainApp))
+            ObservanceSelectWindow(self, self.currentYear, holiday, shift, self.mainApp)
         return callback
     
     def delObservanceFn(self, holiday, shift):
@@ -163,7 +162,8 @@ class ObservancesTab(QWidget):
 
 class YearSelectWindow(QWidget):
     def __init__(self, observanceTab: ObservancesTab, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.observanceTab = observanceTab
         self.setWindowTitle(f"Select Observance Year")
@@ -199,7 +199,8 @@ class YearSelectWindow(QWidget):
 
 class ObservanceSelectWindow(QWidget):
     def __init__(self, observanceTab: ObservancesTab, year: int, holiday: str, shift: int, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.observanceTab = observanceTab
         self.observancesDB = observanceTab.observancesDB
@@ -250,7 +251,6 @@ class DefaultHolidaysTab(QWidget):
         super().__init__()
         self.holidayTab = holidayTab
         self.mainApp = self.holidayTab.mainApp
-        self.windows = []
         self.observancesDB = self.mainApp.db.holidays
 
         self.genTableData()
@@ -292,15 +292,14 @@ class DefaultHolidaysTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: str(x), self.selection))}")
     
     def openNew(self):
-        self.windows.append(HolidayEditWindow(self, None, self.mainApp))
+        HolidayEditWindow(self, None, self.mainApp)
     
     def openEdits(self):
         pass
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No holidays selected."])
         for holiday in self.selection:
-            self.windows.append(HolidayEditWindow(self, holiday, self.mainApp))
+            HolidayEditWindow(self, holiday, self.mainApp)
     
     def deleteHolidays(self):
         if len(self.selection) == 0:
@@ -322,12 +321,13 @@ class DefaultHolidaysTab(QWidget):
 
 class HolidayEditWindow(QWidget):
     def __init__(self, defaultsTab: DefaultHolidaysTab, holiday: str, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.defaultsTab = defaultsTab
         self.observancesDB = defaultsTab.observancesDB
         self.holiday = holiday
-        self.setWindowTitle(f"Holiday: {holiday if not holiday == None else "New"}")
+        self.setWindowTitle(f"Holiday: {holiday if holiday is not None else "New"}")
 
 
         self.isNew = holiday == None

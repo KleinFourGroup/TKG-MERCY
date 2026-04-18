@@ -173,8 +173,8 @@ class FileManager:
     # ---- saveFile --------------------------------------------------------------------------
 
     def saveFile(self):
-        if not ((not self.filePath == None) and (not self.dbFile == None)):
-            raise RuntimeError('(not self.filePath == None) and (not self.dbFile == None)')
+        if not ((self.filePath is not None) and (self.dbFile is not None)):
+            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
         # Atomic save: the body below runs as a single SQLite transaction.
         # Any exception rolls the entire save back, leaving the DB file
         # unchanged (§3.4 of MERGE_PLAN.md).
@@ -444,8 +444,8 @@ class FileManager:
     # ---- loadFile --------------------------------------------------------------------------
 
     def loadFile(self):
-        if not ((not self.filePath == None) and (not self.dbFile == None)):
-            raise RuntimeError('(not self.filePath == None) and (not self.dbFile == None)')
+        if not ((self.filePath is not None) and (self.dbFile is not None)):
+            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
         from records import emptyDB
         self.mainApp.db = emptyDB()
         db = self.mainApp.db
@@ -641,7 +641,7 @@ class FileManager:
         self.filePath = filePath
         success = self.initFile()
         if success:
-            if not oldConn == None:
+            if oldConn is not None:
                 oldConn.close()
         else:
             logging.info(f"Failed to initialize {filePath}")

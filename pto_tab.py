@@ -19,7 +19,6 @@ class PTOTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
         
         self.currentEmployee: Employee | None = None
         self.currentEmployeePTO: EmployeePTODB | None = None
@@ -113,26 +112,26 @@ class PTOTab(QWidget):
     def setEmployee(self, employeeID: int):
         self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
         self.currentEmployeePTO = None if employeeID == None else self.mainApp.db.PTO[self.mainTab.employeeID] 
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
 
-        self.newB.setEnabled(not self.currentEmployee == None and self.currentEmployee.fullTime)
-        self.editB.setEnabled(not self.currentEmployee == None and self.currentEmployee.fullTime)
-        self.deleteB.setEnabled(not self.currentEmployee == None and self.currentEmployee.fullTime)
-        self.reportB.setEnabled(not self.currentEmployee == None and self.currentEmployee.fullTime)
+        self.newB.setEnabled(self.currentEmployee is not None and self.currentEmployee.fullTime)
+        self.editB.setEnabled(self.currentEmployee is not None and self.currentEmployee.fullTime)
+        self.deleteB.setEnabled(self.currentEmployee is not None and self.currentEmployee.fullTime)
+        self.reportB.setEnabled(self.currentEmployee is not None and self.currentEmployee.fullTime)
     
     def refreshPTO(self):
         self.genTableData()
         self.table.setData(self.tableData)
-        selection = [entry[0].isoformat() for entry in self.selection if not self.currentEmployeePTO == None and entry in self.currentEmployeePTO.PTO]
+        selection = [entry[0].isoformat() for entry in self.selection if self.currentEmployeePTO is not None and entry in self.currentEmployeePTO.PTO]
         self.setSelection(selection)
 
         isEmpty = False
-        if not self.currentEmployeePTO == None and not self.currentEmployee == None and self.currentEmployee.fullTime:
+        if self.currentEmployeePTO is not None and self.currentEmployee is not None and self.currentEmployee.fullTime:
             today = datetime.date.today()
             self.PTOHoursLabel.setText(f"PTO hours in {datetime.date.today().year}: {self.currentEmployeePTO.getAvailableHours(self.currentEmployee.anniversary, self.mainApp.db.attendance[self.mainTab.employeeID], today)}{"" if (today - self.currentEmployee.anniversary).days >= PTO_ELIGIBILITY else f" (available {(self.currentEmployee.anniversary + datetime.timedelta(days=PTO_ELIGIBILITY)).isoformat()})"}")
             self.PTOUsedLabel.setText(f"PTO used in {datetime.date.today().year}: {self.currentEmployeePTO.getUsedHours(today.year)}")
@@ -142,7 +141,7 @@ class PTOTab(QWidget):
             self.carryLabel.setText(f"PTO carryover from {datetime.date.today().year - 1}: {self.currentEmployeePTO.getCarryHours(today.year)}")
             self.carryButton.setEnabled(True)
             # currentPTO = self.currentEmployeePTO.currentPTO(today)
-            # if not currentPTO == None:
+            # if currentPTO is not None:
             #     self.PTOLabel.setText(f"PTO: {currentPTO}")
             # else:
             #     isEmpty = True
@@ -160,17 +159,15 @@ class PTOTab(QWidget):
     def openNew(self):
         if self.currentEmployeePTO is None:
             raise RuntimeError('self.currentEmployeePTO is None')
-        self.windows.append(PTOEditWindow(self.currentEmployeePTO.idNum, None, self.mainApp))
+        PTOEditWindow(self.currentEmployeePTO.idNum, None, self.mainApp)
     
     def manageCarry(self):
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if self.currentEmployeePTO == None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
-            self.windows.append(PTOCarryWindow(self.currentEmployeePTO.idNum, self.mainApp))
+            PTOCarryWindow(self.currentEmployeePTO.idNum, self.mainApp)
     
     def openEdits(self):
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
         for PTOrange in self.selection:
@@ -179,7 +176,7 @@ class PTOTab(QWidget):
             else:
                 if self.currentEmployeePTO is None:
                     raise RuntimeError('self.currentEmployeePTO is None')
-                self.windows.append(PTOEditWindow(self.currentEmployeePTO.idNum, self.currentEmployeePTO.PTO[PTOrange], self.mainApp))
+                PTOEditWindow(self.currentEmployeePTO.idNum, self.currentEmployeePTO.PTO[PTOrange], self.mainApp)
     
     def deletePTO(self):
         if len(self.selection) == 0:
@@ -212,7 +209,8 @@ class PTOTab(QWidget):
 
 class PTOCarryWindow(QWidget):
     def __init__(self, employeeID, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
@@ -304,7 +302,7 @@ class PTOCarryWindow(QWidget):
         if self.unusedType == "CARRY":
             errorMessage(self, ["Unused hours have already been carried over"])
         else:
-            if not self.unusedType == None:
+            if self.unusedType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
@@ -322,7 +320,7 @@ class PTOCarryWindow(QWidget):
         if self.unusedType == "CASH":
             errorMessage(self, ["Unused hours have already been cashed out"])
         else:
-            if not self.unusedType == None:
+            if self.unusedType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
@@ -340,7 +338,7 @@ class PTOCarryWindow(QWidget):
         if self.unusedType == "DROP":
             errorMessage(self, ["Unused hours have already been dropped"])
         else:
-            if not self.unusedType == None:
+            if self.unusedType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
@@ -366,7 +364,8 @@ class PTOCarryWindow(QWidget):
 
 class PTOEditWindow(QWidget):
     def __init__(self, employeeID, PTORange: EmployeePTORange | None, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp
@@ -448,7 +447,7 @@ class PTOEditWindow(QWidget):
             for dates in self.PTODB.PTO:
                 if isinstance(dates[1], datetime.date) and not (start > dates[1] or dates[0] > end):
                     # Intersection?
-                    if isNew or (not self.PTORange == None and not dates == (self.PTORange.start, self.PTORange.end)):
+                    if isNew or (self.PTORange is not None and not dates == (self.PTORange.start, self.PTORange.end)):
                         errors.append(f"Employee {self.employeeID} already has conflicting PTO from {dates[0].isoformat()} to {dates[1].isoformat()}")
         if not start.year == end.year:
             errors.append(f"Range spans multiple calendar years ({start.year} to {end.year})")
@@ -459,7 +458,7 @@ class PTOEditWindow(QWidget):
         hours = checkInput(self.hours.text(), float, "pos", errors, "hours")
 
         used = self.PTODB.getUsedHours(start.year)
-        if not isNew and not self.PTORange == None and self.PTORange.start.year == start.year:
+        if not isNew and self.PTORange is not None and self.PTORange.start.year == start.year:
             used -= self.PTORange.hours
         available = self.PTODB.getAvailableHours(self.employee.anniversary, self.attendanceDB, end) # In case bonus hours apply mid range
         if used + hours > available:

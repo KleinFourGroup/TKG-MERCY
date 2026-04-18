@@ -101,8 +101,8 @@ class PDFReport:
         return lines
 
     def drawTable(self, data: list[list[str]], headers: list[str] | None = None, widths: list[float] | None = None):
-        hasHeader = not headers == None
-        columns = len(widths) if not widths == None else len(headers) if hasHeader else len(data[0]) if len(data) > 0 else 1
+        hasHeader = headers is not None
+        columns = len(widths) if widths is not None else len(headers) if hasHeader else len(data[0]) if len(data) > 0 else 1
 
         if widths == None:
             widths = [(self.right - self.left) / columns for i in range(columns)]
@@ -444,7 +444,7 @@ class PDFReport:
 
             headers = ["Date", "Points", "Reason"]
             data = [[
-                "{}".format(entry.date.isoformat() if not entry.date == None else "ERROR"),
+                "{}".format(entry.date.isoformat() if entry.date is not None else "ERROR"),
                 "{}".format(entry.value),
                 "{}".format(entry.reason)
 

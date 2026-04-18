@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QTextEdit, QFileDialog, QTimeEdit
-from PySide6.QtCore import QTime
+from PySide6.QtCore import QTime, Qt
 import os
 
 from table import DBTable
@@ -16,7 +16,6 @@ class NotesTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
 
         self.currentEmployee: Employee = None
         self.currentEmployeeNotes: EmployeeNotesDB = None
@@ -78,33 +77,33 @@ class NotesTab(QWidget):
     def setEmployee(self, employeeID: int):
         self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID]
         self.currentEmployeeNotes = None if employeeID == None else self.mainApp.db.notes[self.mainTab.employeeID]
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
 
-        self.newB.setEnabled(not self.currentEmployee == None)
-        self.editB.setEnabled(not self.currentEmployee == None)
-        self.deleteB.setEnabled(not self.currentEmployee == None)
-        self.reportB.setEnabled(not self.currentEmployee == None)
-        self.incidentReportB.setEnabled(not self.currentEmployee == None)
+        self.newB.setEnabled(self.currentEmployee is not None)
+        self.editB.setEnabled(self.currentEmployee is not None)
+        self.deleteB.setEnabled(self.currentEmployee is not None)
+        self.reportB.setEnabled(self.currentEmployee is not None)
+        self.incidentReportB.setEnabled(self.currentEmployee is not None)
 
     def refreshNotes(self):
         self.genTableData()
         self.table.setData(self.tableData)
-        selection = [(d, t) for d, t in self.selection if not self.currentEmployeeNotes == None and (d, t) in self.currentEmployeeNotes.notes]
+        selection = [(d, t) for d, t in self.selection if self.currentEmployeeNotes is not None and (d, t) in self.currentEmployeeNotes.notes]
         self.selection = selection
         self.selectLabel.setText(f"Selection: {', '.join([f'{d.isoformat()} {t}' for d, t in self.selection])}" if len(self.selection) > 0 else "Selection: N/A")
 
     def openNew(self):
-        self.windows.append(NotesEditWindow(self.currentEmployeeNotes.idNum, None, self.mainApp))
+        NotesEditWindow(self.currentEmployeeNotes.idNum, None, self.mainApp)
 
     def openEdits(self):
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No notes selected."])
         for key in self.selection:
             if key in self.currentEmployeeNotes.notes:
-                self.windows.append(NotesEditWindow(self.currentEmployeeNotes.idNum, self.currentEmployeeNotes.notes[key], self.mainApp))
+                NotesEditWindow(self.currentEmployeeNotes.idNum, self.currentEmployeeNotes.notes[key], self.mainApp)
 
     def deleteNotes(self):
         if len(self.selection) == 0:
@@ -150,7 +149,8 @@ class NotesTab(QWidget):
 
 class NotesEditWindow(QWidget):
     def __init__(self, employeeID, note: EmployeeNote, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp

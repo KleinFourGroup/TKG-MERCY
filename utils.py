@@ -5,7 +5,7 @@ import base64, os, sys, datetime
 def getComboBox(items: list[str], item):
     box = QComboBox()
     box.addItems(items)
-    if not item == None:
+    if item is not None:
         box.setCurrentIndex(items.index(item))
     return box
 

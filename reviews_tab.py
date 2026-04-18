@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 import random
 import math
 
@@ -16,7 +16,6 @@ class ReviewsTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
         
         self.currentEmployee: Employee = None
         self.currentEmployeeReviews: EmployeeReviewsDB = None
@@ -75,27 +74,27 @@ class ReviewsTab(QWidget):
     def setEmployee(self, employeeID: int):
         self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
         self.currentEmployeeReviews = None if employeeID == None else self.mainApp.db.reviews[self.mainTab.employeeID] 
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
 
-        self.newB.setEnabled(not self.currentEmployee == None)
-        self.editB.setEnabled(not self.currentEmployee == None)
-        self.deleteB.setEnabled(not self.currentEmployee == None)
+        self.newB.setEnabled(self.currentEmployee is not None)
+        self.editB.setEnabled(self.currentEmployee is not None)
+        self.deleteB.setEnabled(self.currentEmployee is not None)
     
     def refreshReviews(self):
         self.genTableData()
         self.table.setData(self.tableData)
-        selection = [entry.isoformat() for entry in self.selection if not self.currentEmployeeReviews == None and entry in self.currentEmployeeReviews.reviews]
+        selection = [entry.isoformat() for entry in self.selection if self.currentEmployeeReviews is not None and entry in self.currentEmployeeReviews.reviews]
         self.setSelection(selection)
 
         isEmpty = False
-        if not self.currentEmployeeReviews == None:
+        if self.currentEmployeeReviews is not None:
             last = self.currentEmployeeReviews.lastReview()
-            if not last == None:
+            if last is not None:
                 self.reviewLast.setText(f"Last Review: {last.date.isoformat()}")
                 self.reviewNext.setText(f"Next Review: {last.nextReview.isoformat()}")
             else:
@@ -108,15 +107,14 @@ class ReviewsTab(QWidget):
             self.reviewNext.setText(f"Next Review: N/A")
     
     def openNew(self):
-        self.windows.append(ReviewsEditWindow(self.currentEmployeeReviews.idNum, None, self.mainApp))
+        ReviewsEditWindow(self.currentEmployeeReviews.idNum, None, self.mainApp)
     
     def openEdits(self):
         pass
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No reviews selected."])
         for date in self.selection:
-            self.windows.append(ReviewsEditWindow(self.currentEmployeeReviews.idNum, self.currentEmployeeReviews.reviews[date], self.mainApp))
+            ReviewsEditWindow(self.currentEmployeeReviews.idNum, self.currentEmployeeReviews.reviews[date], self.mainApp)
     
     def deleteReviews(self):
         if len(self.selection) == 0:
@@ -136,7 +134,8 @@ class ReviewsTab(QWidget):
 
 class ReviewsEditWindow(QWidget):
     def __init__(self, employeeID, review: EmployeeReview, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp

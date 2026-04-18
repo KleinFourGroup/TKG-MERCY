@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog
+from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Mixture
@@ -13,7 +14,6 @@ class MixturesTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
-        self.windows = []
         # self.error = None
         self.genTableData()
         self.table = DBTable(self.mixtures, self.headers)
@@ -54,7 +54,7 @@ class MixturesTab(QWidget):
         self.headers = ["Mixture", "Price", "Batch Weight", "+50", "-50+100", "-100+200", "-200+325", "-325", "Al2O3", "SiO2", "Fe2O3"]
         self.mixtures = [[
             entry,
-            "${:.4f} / lb".format(db.mixtures[entry].getCost()) if not db.mixtures[entry].getCost() == None else "N/A",
+            "${:.4f} / lb".format(db.mixtures[entry].getCost()) if db.mixtures[entry].getCost() is not None else "N/A",
             "{:.4f} lbs".format(db.mixtures[entry].getBatchWeight()),
             "{:.2f}%".format(db.mixtures[entry].getProp("Plus50", False)),
             "{:.2f}%".format(db.mixtures[entry].getProp("Sub50Plus100", False)),
@@ -77,15 +77,15 @@ class MixturesTab(QWidget):
             errorMessage(self.mainApp, ["No mixtures selected."])
         for mixture in self.selection:
             logging.debug(mixture)
-            self.windows.append(MixturesDetailsWindow(mixture, self.mainApp))
+            MixturesDetailsWindow(mixture, self.mainApp)
     
     def openEdits(self):
         for mixture in self.selection:
             logging.debug(mixture)
-            self.windows.append(MixturesEditWindow(mixture, self.mainApp))
+            MixturesEditWindow(mixture, self.mainApp)
     
     def openNew(self):
-        self.windows.append(MixturesEditWindow(None, self.mainApp))
+        MixturesEditWindow(None, self.mainApp)
 
     def deleteSelection(self):
         if len(self.selection) == 0:
@@ -119,14 +119,15 @@ class MixturesTab(QWidget):
 
 class MixturesDetailsWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.setWindowTitle(f"Details: {entry}")
 
         mixture = self.mainApp.db.mixtures[entry]        
         labels = [
             [QLabel(f"Mixture: {entry}")],
-            [QLabel(f"Price: ${mixture.getCost()} per ton" if not mixture.getCost() == None else "Price: N/A")]
+            [QLabel(f"Price: ${mixture.getCost()} per ton" if mixture.getCost() is not None else "Price: N/A")]
         ]
         for i in range(len(mixture.materials)):
             labels.append([QLabel(f"Material {i+1}: {mixture.materials[i]}"), QLabel(f"Weight: {mixture.weights[i]}")])
@@ -160,20 +161,21 @@ class MixturesDetailsWindow(QWidget):
 
 class MixturesEditWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry if not entry == None else "New Mixture"}")
+        self.setWindowTitle(f"Edit: {entry if entry is not None else "New Mixture"}")
 
-        mixture = self.mainApp.db.mixtures[entry] if not entry == None else None
+        mixture = self.mainApp.db.mixtures[entry] if entry is not None else None
         self.mixture = mixture
 
         self.error = None
 
         materials = ["None"]
-        materials.extend([key for key in self.mainApp.db.materials if not self.mainApp.db.materials[key].price == None])
+        materials.extend([key for key in self.mainApp.db.materials if self.mainApp.db.materials[key].price is not None])
 
         self.mainLayout = [
-            [QLabel("Mixture:"), QLineEdit(f"{entry if not entry == None else "New Mixture"}")],
+            [QLabel("Mixture:"), QLineEdit(f"{entry if entry is not None else "New Mixture"}")],
         ]
         for i in range(12):
             if mixture == None or i >= len(mixture.materials):
@@ -183,7 +185,7 @@ class MixturesEditWindow(QWidget):
         self.mainLayout.append([QPushButton("Update"), QPushButton("Create")])
 
         widgetFromList(self, self.mainLayout)
-        if not mixture == None:
+        if mixture is not None:
             self.mainLayout[13][0].clicked.connect(self.updateMixture)
         else:
             self.mainLayout[13][0].setEnabled(False)
@@ -228,7 +230,7 @@ class MixturesEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.mixture.name if not self.mixture == None else "New Mixture"}")
+        self.setWindowTitle(f"Edit: {self.mixture.name if self.mixture is not None else "New Mixture"}")
         return res
     
     def updateMixture(self):

@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox, QFileDialog
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 import random
 import math
 import os
@@ -38,7 +38,6 @@ class EmployeeTab(QWidget):
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
         self.active = active
-        self.windows = []
         # self.error = None
         self.genTableData()
         self.table = DBTable(self.tableData, self.headers)
@@ -85,7 +84,7 @@ class EmployeeTab(QWidget):
             "{}".format(db.employees[entry].shift),
             "{}".format(db.employees[entry].fullTime),
             "{}, {}, {} {}".format(
-                ", ".join([str(line) for line in [db.employees[entry].addressLine1, db.employees[entry].addressLine2] if not line == None or not line == ""]),
+                ", ".join([str(line) for line in [db.employees[entry].addressLine1, db.employees[entry].addressLine2] if line is not None or not line == ""]),
                 db.employees[entry].addressCity,
                 db.employees[entry].addressState,
                 db.employees[entry].addressZip
@@ -102,10 +101,10 @@ class EmployeeTab(QWidget):
     def openEdits(self):
         for employee in self.selection:
             logging.debug(employee)
-            self.windows.append(EmployeeEditWindow(employee, self.mainApp, self.active))
+            EmployeeEditWindow(employee, self.mainApp, self.active)
     
     def openNew(self):
-        self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
+        EmployeeEditWindow(None, self.mainApp, self.active)
 
     def toggleSelection(self):
         if len(self.selection) == 0:
@@ -162,34 +161,35 @@ STATES = [
 
 class EmployeeEditWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow, active: bool):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.active = active
-        self.setWindowTitle(f"Edit: {entry if not entry == None else "New Employee"}")
+        self.setWindowTitle(f"Edit: {entry if entry is not None else "New Employee"}")
 
-        employee = self.mainApp.db.employees[entry] if not entry == None else None
+        employee = self.mainApp.db.employees[entry] if entry is not None else None
         self.employee = employee
 
         self.calendar = QCalendarWidget()
-        if not self.employee == None:
+        if self.employee is not None:
             self.calendar.setSelectedDate(toQDate(self.employee.anniversary))
 
         self.shift = QComboBox()
         self.shift.setEditable(False)
         self.shift.addItems(SHIFTS)
-        if not self.employee == None:
+        if self.employee is not None:
             self.shift.setCurrentText(str(self.employee.shift))
 
         self.fullTime = QComboBox()
         self.fullTime.setEditable(False)
         self.fullTime.addItems(["True", "False"])
-        if not self.employee == None:
+        if self.employee is not None:
             self.fullTime.setCurrentText(str(self.employee.fullTime))
 
         self.states = QComboBox()
         self.states.setEditable(False)
         self.states.addItems(STATES)
-        if not self.employee == None:
+        if self.employee is not None:
             self.states.setCurrentText(str(self.employee.addressState))
         else:
             self.states.setCurrentText("PA")
@@ -205,31 +205,31 @@ class EmployeeEditWindow(QWidget):
             return SCREEN + ((idRand + tries * tries) % (9 * SCREEN))
 
         self.mainLayout = [
-            [QLabel("ID Number:"), QLineEdit(f"{entry if not entry == None else randID()}")],
+            [QLabel("ID Number:"), QLineEdit(f"{entry if entry is not None else randID()}")],
             [
-                QLabel("Last Name:"), QLineEdit(f"{employee.lastName if not employee == None else ""}"),
-                QLabel("First Name:"), QLineEdit(f"{employee.firstName if not employee == None else ""}")
+                QLabel("Last Name:"), QLineEdit(f"{employee.lastName if employee is not None else ""}"),
+                QLabel("First Name:"), QLineEdit(f"{employee.firstName if employee is not None else ""}")
             ],
             [
-                QLabel("Role:"), QLineEdit(f"{employee.role if not employee == None else ""}")
+                QLabel("Role:"), QLineEdit(f"{employee.role if employee is not None else ""}")
             ],
             [
                 QLabel("Shift:"), self.shift, QLabel("Full Time:"), self.fullTime
             ],
             [
-                QLabel("Address Line 1:"), QLineEdit(f"{employee.addressLine1 if not employee == None else ""}")
+                QLabel("Address Line 1:"), QLineEdit(f"{employee.addressLine1 if employee is not None else ""}")
             ],
             [
-                QLabel("Address Line 2:"), QLineEdit(f"{employee.addressLine2 if not employee == None else ""}")
+                QLabel("Address Line 2:"), QLineEdit(f"{employee.addressLine2 if employee is not None else ""}")
             ],
             [
-                QLabel("City:"), QLineEdit(f"{employee.addressCity if not employee == None else ""}"), QLabel("State:"), self.states, QLabel("ZIP:"), QLineEdit(f"{employee.addressZip if not employee == None else ""}")
+                QLabel("City:"), QLineEdit(f"{employee.addressCity if employee is not None else ""}"), QLabel("State:"), self.states, QLabel("ZIP:"), QLineEdit(f"{employee.addressZip if employee is not None else ""}")
             ],
             [
-                QLabel("Telephone:"), QLineEdit(f"{employee.addressTel if not employee == None else ""}")
+                QLabel("Telephone:"), QLineEdit(f"{employee.addressTel if employee is not None else ""}")
             ],
             [
-                QLabel("Email:"), QLineEdit(f"{employee.addressEmail if not employee == None else ""}")
+                QLabel("Email:"), QLineEdit(f"{employee.addressEmail if employee is not None else ""}")
             ],
             [
                 QLabel("Anniversary:"), self.calendar
@@ -240,7 +240,7 @@ class EmployeeEditWindow(QWidget):
         ]
 
         widgetFromList(self, self.mainLayout)
-        if not employee == None:
+        if employee is not None:
             self.mainLayout[-1][0].clicked.connect(self.updateEmployee)
         else:
             self.mainLayout[-1][0].setEnabled(False)
@@ -314,7 +314,7 @@ class EmployeeEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.employee.idNum if not self.employee == None else "New Employee"}")
+        self.setWindowTitle(f"Edit: {self.employee.idNum if self.employee is not None else "New Employee"}")
         return res
     
     def updateEmployee(self):

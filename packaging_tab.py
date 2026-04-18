@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox
+from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Package
@@ -10,7 +11,6 @@ class PackagingTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
-        self.windows = []
         # self.error = None
         self.genTableData()
         self.table = DBTable(self.data, self.headers)
@@ -63,10 +63,10 @@ class PackagingTab(QWidget):
     def openEdits(self):
         for item in self.selection:
             logging.debug(item)
-            self.windows.append(PackagingEditWindow(item, self.mainApp))
+            PackagingEditWindow(item, self.mainApp)
     
     def openNew(self):
-        self.windows.append(PackagingEditWindow(None, self.mainApp))
+        PackagingEditWindow(None, self.mainApp)
 
     def deleteSelection(self):
         if len(self.selection) == 0:
@@ -90,11 +90,12 @@ class PackagingTab(QWidget):
         
 class PackagingEditWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry if not entry == None else "New Packaging"}")
+        self.setWindowTitle(f"Edit: {entry if entry is not None else "New Packaging"}")
 
-        item = self.mainApp.db.packaging[entry] if not entry == None else None
+        item = self.mainApp.db.packaging[entry] if entry is not None else None
         self.item = item
 
         self.error = None
@@ -103,11 +104,11 @@ class PackagingEditWindow(QWidget):
         kinds.extend(["box", "pad", "pallet", "misc"])
 
         self.mainLayout = [
-            [QLabel("Item:"), QLineEdit(f"{entry if not entry == None else "New Packaging"}")],
+            [QLabel("Item:"), QLineEdit(f"{entry if entry is not None else "New Packaging"}")],
             [
                 QLabel("Type:"), getComboBox(list(dict.fromkeys(kinds)),
-                                             item.kind if not item == None else None),
-                QLabel("Price:"), QLineEdit(f"{item.price if not item == None else ""}")
+                                             item.kind if item is not None else None),
+                QLabel("Price:"), QLineEdit(f"{item.price if item is not None else ""}")
             ],
             [
                 QPushButton("Update"), QPushButton("Create")
@@ -115,7 +116,7 @@ class PackagingEditWindow(QWidget):
         ]
 
         widgetFromList(self, self.mainLayout)
-        if not item == None:
+        if item is not None:
             self.mainLayout[2][0].clicked.connect(self.updatePackaging)
         else:
             self.mainLayout[2][0].setEnabled(False)
@@ -151,7 +152,7 @@ class PackagingEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.item.name if not self.item == None else "New Packaging"}")
+        self.setWindowTitle(f"Edit: {self.item.name if self.item is not None else "New Packaging"}")
         return res
     
     def updatePackaging(self):

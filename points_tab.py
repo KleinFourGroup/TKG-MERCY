@@ -1,6 +1,6 @@
 import datetime
 from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox, QFileDialog
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 import random
 import math
 import os
@@ -19,7 +19,6 @@ class PointsTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
         
         self.currentEmployee: Employee = None
         self.currentEmployeePoints: EmployeePointsDB = None
@@ -79,29 +78,29 @@ class PointsTab(QWidget):
     def setEmployee(self, employeeID: int):
         self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
         self.currentEmployeePoints = None if employeeID == None else self.mainApp.db.attendance[self.mainTab.employeeID] 
-        if not self.currentEmployee == None:
+        if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
 
-        self.newB.setEnabled(not self.currentEmployee == None)
-        self.editB.setEnabled(not self.currentEmployee == None)
-        self.deleteB.setEnabled(not self.currentEmployee == None)
-        self.reportB.setEnabled(not self.currentEmployee == None)
+        self.newB.setEnabled(self.currentEmployee is not None)
+        self.editB.setEnabled(self.currentEmployee is not None)
+        self.deleteB.setEnabled(self.currentEmployee is not None)
+        self.reportB.setEnabled(self.currentEmployee is not None)
     
     def refreshPoints(self):
         self.genTableData()
         self.table.setData(self.tableData)
-        selection = [entry.isoformat() for entry in self.selection if not self.currentEmployeePoints == None and entry in self.currentEmployeePoints.points]
+        selection = [entry.isoformat() for entry in self.selection if self.currentEmployeePoints is not None and entry in self.currentEmployeePoints.points]
         self.setSelection(selection)
 
         isEmpty = False
-        if not self.currentEmployeePoints == None:
+        if self.currentEmployeePoints is not None:
             today = datetime.date.today()
             currentPoints = self.currentEmployeePoints.currentPoints(today)
-            if not currentPoints == None:
+            if currentPoints is not None:
                 self.pointsLabel.setText(f"Points: {currentPoints}")
             else:
                 isEmpty = True
@@ -112,18 +111,17 @@ class PointsTab(QWidget):
             self.pointsLabel.setText("Points: N/A")
     
     def openNew(self):
-        self.windows.append(PointsEditWindow(self.currentEmployeePoints.idNum, None, self.mainApp))
+        PointsEditWindow(self.currentEmployeePoints.idNum, None, self.mainApp)
     
     def openEdits(self):
         pass
-        # self.windows.append(EmployeeEditWindow(None, self.mainApp, self.active))
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
         for date in self.selection:
             if not date in self.currentEmployeePoints.points:
                 errorMessage(self.mainApp, [f"{date} is an automatic deduction and cannot be edited."])
             else:
-                self.windows.append(PointsEditWindow(self.currentEmployeePoints.idNum, self.currentEmployeePoints.points[date], self.mainApp))
+                PointsEditWindow(self.currentEmployeePoints.idNum, self.currentEmployeePoints.points[date], self.mainApp)
     
     def deletePoints(self):
         if len(self.selection) == 0:
@@ -154,7 +152,8 @@ class PointsTab(QWidget):
 
 class PointsEditWindow(QWidget):
     def __init__(self, employeeID, point: EmployeePoint, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
             raise RuntimeError('employeeID is None')
         self.mainApp = mainApp

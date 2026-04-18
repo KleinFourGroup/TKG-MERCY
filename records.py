@@ -4,6 +4,8 @@ from utils import listToString, stringToList, stringToB64, stringFromB64
 import defaults
 import logging
 
+LBS_PER_TON = 2000  # short ton
+
 class Material:
     def __init__(self, name) -> None:
         self.name = name
@@ -55,7 +57,7 @@ class Material:
     def getCostPerLb(self):
         if self.price == None or self.freight == None:
             return None
-        return (self.price + self.freight) / 2000 #2200?
+        return (self.price + self.freight) / LBS_PER_TON
     
     def getTuple(self):
         return (
@@ -1509,7 +1511,7 @@ class Database:
     def materialCosts(self):
         for entry in self.materials:
             cost = self.materials[entry].getCostPerLb()
-            if not cost == None:
+            if cost is not None:
                 logging.info("{} {}".format(self.materials[entry].name, cost))
     
     def mixtureCosts(self):

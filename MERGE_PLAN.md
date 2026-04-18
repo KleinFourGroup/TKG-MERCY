@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation); see §12 for current state, deviations, and deferred items before picking up **Step 7c-3**.
+**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation); see §12 for current state, deviations, and deferred items before picking up **Step 7d**.
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 complete; **Step 7c-3 is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 complete; **Step 7d is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three:
 
@@ -530,7 +530,7 @@ Step 7 has been split into sub-steps to keep each review surface small. The hygi
 | 7b | ✅ Done | Merge plan Step 7b: tighten Database signature |
 | 7c-1 | ✅ Done | Merge plan Step 7c-1: assert → raise sweep |
 | 7c-2 | ✅ Done | Merge plan Step 7c-2: print → logging |
-| 7c-3 | ⏳ Pending | `not x == None` → `is not None`, window-close leak, `LBS_PER_TON`, `requirements.txt`. |
+| 7c-3 | ✅ Done | Merge plan Step 7c-3: polish sweep |
 | 7d | ⏳ Pending | Clean up 2 double-negation leftovers from 7c-1 (`if not (not isNone):` in `employees_tab.py:298`, `parts_tab.py:317`). |
 | 8–13 | ⏳ Pending | Per §9. |
 
@@ -586,11 +586,27 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification:** all 23 source files compile; `grep -E '^\s*print\('` returns zero hits in MERCY source (only deps remain); offscreen `MainWindow()` build passes; end-to-end save of an `emptyDB()` produced the expected `INFO Saving globals to ...` / `INFO  * Saving gasCost = 0.0523` / etc. chatter.
 
+**Step 7c-3 — mechanical + polish sweep landed.** Four items:
+
+1. **`not x == None` → `x is not None` (146 conversions across 18 files).** Regex-based script replace with `not\s+((?:\w+)(?:\.\w+|\[[^\]]*\]|\([^)]*\))*)\s*==\s*None` → `\1 is not None`. The extended LHS grammar handles attribute chains, subscripts (`db.materials[key]`), and empty method calls (`mixture.getCost()`) — the narrower attribute-only regex from the original pick-up notes missed 5 method-call/subscript sites. Compound conditions where `not` applies to a parenthesized expression (`if not (idNum == None or idNum >= 0):` at `records.py:698`) are correctly left alone — the LHS starts with `(`, not `\w`. One awkward residual: `if not ((self.filePath is not None) and (self.dbFile is not None)):` at `file_manager.py:176` / `:447`, outputs of 7c-1's compound-fallback. Correct but DeMorgan-able; left for a future stylistic pass since it's still mechanically correct.
+
+2. **Window-list leak fixed via Qt parent-retention + `WA_DeleteOnClose`.** 21 window classes across 12 tab files (`MaterialsDetailsWindow`, `MaterialsEditWindow`, `MixturesDetailsWindow`, `MixturesEditWindow`, `PartsDetailsWindow`, `PartsMarginsWindow`, `PartsEditWindow`, `PackagingEditWindow`, `InventoryDateEditWindow`, `MaterialInventoryEditWindow`, `PartInventoryEditWindow`, `EmployeeEditWindow`, `YearSelectWindow`, `ObservanceSelectWindow`, `HolidayEditWindow`, `NotesEditWindow`, `PointsEditWindow`, `PTOCarryWindow`, `PTOEditWindow`, `ReviewsEditWindow`, `TrainingEditWindow`). Each window class now calls `super().__init__(mainApp, Qt.WindowType.Window)` and `self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)`. Tab classes drop `self.windows = []` init and the append wrapping (36 active call sites unwrapped; 6 commented-out append lines removed). **Key subtlety verified offscreen:** PySide6 parentless widgets get Python-GC'd once the Python reference drops — `WA_DeleteOnClose` alone does NOT keep them alive (I confirmed this with a bespoke `QWidget.__del__` probe before touching any source). Parenting to `mainApp` (which is itself a long-lived `QWidget`) uses Qt's parent-child tree for retention; the `Qt.WindowType.Window` flag makes the widget render as a top-level window even though it has a parent. Open-without-retention → GC → widget still alive → `.close()` → widget destroyed via `WA_DeleteOnClose` was verified end-to-end on `MaterialsDetailsWindow`. `Qt` import added to `PySide6.QtCore` in 10 files that didn't already have it.
+
+3. **`LBS_PER_TON = 2000` constant** added at the top of `records.py`, referenced in `Material.getCostPerLb()`. Original trailing `#2200?` comment (stale author TODO) dropped; the constant's `# short ton` comment captures the intent.
+
+4. **`requirements.txt`** at repo root: `PySide6` and `reportlab`, unpinned.
+
+**Known follow-up (out of scope for 7c-3):** bare `x == None` / `x != None` → `x is None` / `x is not None` was not in the plan's scope but the sweep highlights it — e.g. `records.py:58` `if self.price == None or self.freight == None:`. Small follow-up if desired; otherwise harmless.
+
+**Verification:** all 23 source files compile; `grep -rE 'not\s+.*==\s*None' *.py` returns one residual (the intentional compound at `records.py:698`); offscreen `MainWindow()` build passes; offscreen open-and-close test on a real window class confirmed parent-retention (survives GC while open) and close-destruction (`WA_DeleteOnClose` fires) both work as intended.
+
 ### 12.3 Known deferred issues visible in the current build
 
-- `assert` for internal validation (100+ occurrences), `print()` for logging, window-list leak, `not x == None` idiom, magic `2000` in `Part` costing, debug `print` in BECKY `records.py` points logic, no `requirements.txt` — all Step 7c.
+- Two double-negation leftovers from the 7c-1 sweep (`if not (not isNone):` at `employees_tab.py:298` and `parts_tab.py:317`) — **Step 7d**.
+- Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
+- One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
 - Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
-- Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope unless we want to pick it up in 7c; see Step 5 note above.
+- Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope; see Step 5 note above.
 
 ### 12.4 Test conventions used so far
 
@@ -598,19 +614,27 @@ Testing has been manual in the real PySide6 GUI on the user's machine. Headless 
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 7c
+### 12.5 Pick-up notes for Step 7d
 
-Hygiene sweep. Items (all from §3.7, §3.8, §12.2):
+Cleanup of two double-negation leftovers from the 7c-1 `assert`→`raise` script. Both sites have identical structure and the same fix. Trivial — can be batched into 7c-3's commit if desired, but called out separately so it isn't forgotten.
 
-1. **`assert` → explicit exceptions.** 100+ occurrences across `records.py`, `file_manager.py`, `report.py`, and the tab files. For internal invariants that should never fire in correct code, use `raise RuntimeError(...)`; for invalid-input validation at method boundaries, use `raise ValueError(...)`. A few asserts inside short-lived helpers (e.g. `assert(self.dbFile is not None)` right after opening) can stay as sanity checks if switching them to `if` / `raise` would add noise without clarity.
-2. **`print()` → `logging`.** `print(f"Saving ...")` / `print(f" * Error ...")` chatter all over `file_manager.py` should become `logging.info(...)` / `logging.error(...)`. Add a simple `logging.basicConfig(level=logging.INFO)` call in `main.py` near startup.
-3. **`not x == None` → `x is not None`** across both `records.py` and `file_manager.py`. Safe replace_all candidates. Watch for the inverted form `if not x == None:` which becomes `if x is not None:`.
-4. **Window-list leak in `*_tab.py` files.** All the "edit" sub-windows (e.g. `parts_tab`'s edit dialog) are appended to a list on the parent tab and never removed. Fix: set `Qt.WA_DeleteOnClose` on each window and stop retaining references — or move to modal `QDialog.exec()` if the interaction model allows.
-5. **`LBS_PER_TON = 2000` constant** in `records.py` (§3.8). One magic `2000` in `Material.getCostPerLb()` / wherever; extract with a short comment noting "short ton".
-6. **Remove the debug `print()` in BECKY's points logic** at `records.py:345` (BECKY's line; may be offset in the merged `records.py` — grep for the `print` inside `EmployeePointsDB.currentPoints`).
-7. **Add `requirements.txt`** listing `PySide6` and `reportlab`.
+1. **`employees_tab.py:298-300`** — currently:
+   ```python
+   else:
+       if not (not isNone):
+           raise RuntimeError('not isNone')
+       self.mainApp.db.updateEmployee(self.employee.idNum, id)
+   ```
+   Should become:
+   ```python
+   else:
+       if isNone:
+           raise RuntimeError('isNone')
+       self.mainApp.db.updateEmployee(self.employee.idNum, id)
+   ```
+2. **`parts_tab.py:317-319`** — identical pattern with the same fix.
 
-Split 7c further if it grows — e.g. separate "`assert` → `raise`" as its own step since it's the largest line-count item and carries the most review surface.
+Root cause: the 7c-1 script had explicit patterns for `not X == None` and `not X in Y` but not plain `not X`, so `assert(not isNone)` fell through to the generic `if not (COND): raise RuntimeError(COND)` wrapper and produced the double-negation. Not a bug — just ugly. After this step, `grep -n 'if not (not' *.py` should return zero hits in MERCY source.
 
 ---
 

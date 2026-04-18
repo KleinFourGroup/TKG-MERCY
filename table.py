@@ -54,5 +54,5 @@ class DBTable(QTableView):
         for ind in selected.indexes():
             row = ind.row()
             selection.append(self.dbModel._data[row][0])
-        if not self.parentTab == None:
+        if self.parentTab is not None:
             self.parentTab.setSelection(list(dict.fromkeys(selection)))

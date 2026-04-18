@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox, QPushButton, QCalendarWidget, QMessageBox, QLineEdit, QFileDialog
+from PySide6.QtCore import Qt
 from records import Database, emptyDB, MaterialInventoryRecord, PartInventoryRecord
 from error import errorMessage
 from utils import newHLine, widgetFromList, checkInput, toQDate, fromQDate, getComboBox, startfile
@@ -21,7 +22,6 @@ class InventoryTab(QWidget):
     def __init__(self, mainApp: MainWindow):
         super().__init__()
         self.mainApp = mainApp
-        self.windows = []
 
         self.datePicker = QComboBox()
         self.datePicker.setEditable(False)
@@ -88,7 +88,7 @@ class InventoryTab(QWidget):
         self.refreshPicker()
     
     def openNew(self):
-        self.windows.append(InventoryDateEditWindow(None, self.mainApp))
+        InventoryDateEditWindow(None, self.mainApp)
     
     def openEdit(self):
         if self.date is None:
@@ -97,7 +97,7 @@ class InventoryTab(QWidget):
             if not self.date in self.mainApp.db.inventories: # Should never happen, but if I screwed something up, fail gracefully
                 errorMessage(self.mainApp, [f"No inventory on {self.date.isoformat()}"])
             else:
-                self.windows.append(InventoryDateEditWindow(self.date, self.mainApp))
+                InventoryDateEditWindow(self.date, self.mainApp)
     
     def deleteDate(self):
         if self.date is None:
@@ -124,7 +124,8 @@ class InventoryTab(QWidget):
 
 class InventoryDateEditWindow(QWidget):
     def __init__(self, date: datetime.date | None, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.setWindowTitle(f"Edit: {date.isoformat()}" if date is not None else "New Inventory Date")
         self.date = date
@@ -190,7 +191,6 @@ class MaterialsInventoryTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
 
         self.newB = QPushButton("New Material Inventory Record")
         self.newB.clicked.connect(self.openNew)
@@ -251,7 +251,7 @@ class MaterialsInventoryTab(QWidget):
     def openNew(self):
         if self.currentDate is None:
             raise RuntimeError('self.currentDate is None')
-        self.windows.append(MaterialInventoryEditWindow(self.currentDate, None, self.mainApp))
+        MaterialInventoryEditWindow(self.currentDate, None, self.mainApp)
     
     def openEdits(self):
         if self.currentDate is None:
@@ -259,7 +259,7 @@ class MaterialsInventoryTab(QWidget):
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No materials selected."])
         for material in self.selection:
-            self.windows.append(MaterialInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].materials[material], self.mainApp))
+            MaterialInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].materials[material], self.mainApp)
     
     def deleteRecords(self):
         if self.currentDate is None:
@@ -307,9 +307,10 @@ class MaterialsInventoryTab(QWidget):
 
 class MaterialInventoryEditWindow(QWidget):
     def __init__(self, date: datetime.date, entry: MaterialInventoryRecord | None, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry.name} for {date.isoformat()}" if not entry == None else f"New Material Record for {date.isoformat()}")
+        self.setWindowTitle(f"Edit: {entry.name} for {date.isoformat()}" if entry is not None else f"New Material Record for {date.isoformat()}")
 
         self.date = date
         self.entry = entry
@@ -401,7 +402,7 @@ class MaterialInventoryEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.entry.name} for {self.date.isoformat()}" if not self.entry == None else f"New Material Record for {self.date.isoformat()}")
+        self.setWindowTitle(f"Edit: {self.entry.name} for {self.date.isoformat()}" if self.entry is not None else f"New Material Record for {self.date.isoformat()}")
         return res
     
     def updateEntry(self):
@@ -421,7 +422,6 @@ class PartsInventoryTab(QWidget):
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
-        self.windows = []
         
         self.newB = QPushButton("New Parts Inventory Record")
         self.newB.clicked.connect(self.openNew)
@@ -484,7 +484,7 @@ class PartsInventoryTab(QWidget):
     def openNew(self):
         if self.currentDate is None:
             raise RuntimeError('self.currentDate is None')
-        self.windows.append(PartInventoryEditWindow(self.currentDate, None, self.mainApp))
+        PartInventoryEditWindow(self.currentDate, None, self.mainApp)
     
     def openEdits(self):
         if self.currentDate is None:
@@ -492,7 +492,7 @@ class PartsInventoryTab(QWidget):
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
-            self.windows.append(PartInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].parts[part], self.mainApp))
+            PartInventoryEditWindow(self.currentDate, self.mainApp.db.inventories[self.currentDate].parts[part], self.mainApp)
     
     def deleteRecords(self):
         if self.currentDate is None:
@@ -547,9 +547,10 @@ class PartsInventoryTab(QWidget):
 
 class PartInventoryEditWindow(QWidget):
     def __init__(self, date: datetime.date, entry: PartInventoryRecord | None, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry.name} for {date.isoformat()}" if not entry == None else f"New Part Record for {date.isoformat()}")
+        self.setWindowTitle(f"Edit: {entry.name} for {date.isoformat()}" if entry is not None else f"New Part Record for {date.isoformat()}")
 
         self.date = date
         self.entry = entry
@@ -646,7 +647,7 @@ class PartInventoryEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.entry.name} for {self.date.isoformat()}" if not self.entry == None else f"New Part Record for {self.date.isoformat()}")
+        self.setWindowTitle(f"Edit: {self.entry.name} for {self.date.isoformat()}" if self.entry is not None else f"New Part Record for {self.date.isoformat()}")
         return res
     
     def updateEntry(self):

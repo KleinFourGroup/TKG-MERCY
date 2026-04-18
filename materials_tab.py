@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox
+from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Material
@@ -10,7 +11,6 @@ class MaterialsTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
-        self.windows = []
         # self.error = None
         self.genTableData()
         self.table = DBTable(self.materials, self.headers)
@@ -44,12 +44,12 @@ class MaterialsTab(QWidget):
         db = self.mainApp.db
         def getKey(entry):
             item = db.materials[entry]
-            hasPrice = 0 if not db.materials[entry].getCostPerLb() == None else 1
+            hasPrice = 0 if db.materials[entry].getCostPerLb() is not None else 1
             return (hasPrice, entry)
         self.headers = ["Material", "Price", "+50", "-50+100", "-100+200", "-200+325", "-325", "Al2O3", "SiO2", "Fe2O3"]
         self.materials = [[
             entry,
-            "${:.4f} / lb".format(db.materials[entry].getCostPerLb()) if not db.materials[entry].getCostPerLb() == None else "N/A",
+            "${:.4f} / lb".format(db.materials[entry].getCostPerLb()) if db.materials[entry].getCostPerLb() is not None else "N/A",
             "{:.2f}%".format(db.materials[entry].Plus50),
             "{:.2f}%".format(db.materials[entry].Sub50Plus100),
             "{:.2f}%".format(db.materials[entry].Sub100Plus200),
@@ -71,15 +71,15 @@ class MaterialsTab(QWidget):
             errorMessage(self.mainApp, ["No materials selected."])
         for material in self.selection:
             logging.debug(material)
-            self.windows.append(MaterialsDetailsWindow(material, self.mainApp))
+            MaterialsDetailsWindow(material, self.mainApp)
     
     def openEdits(self):
         for material in self.selection:
             logging.debug(material)
-            self.windows.append(MaterialsEditWindow(material, self.mainApp))
+            MaterialsEditWindow(material, self.mainApp)
     
     def openNew(self):
-        self.windows.append(MaterialsEditWindow(None, self.mainApp))
+        MaterialsEditWindow(None, self.mainApp)
 
     def deleteSelection(self):
         if len(self.selection) == 0:
@@ -103,14 +103,15 @@ class MaterialsTab(QWidget):
 
 class MaterialsDetailsWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.setWindowTitle(f"Details: {entry}")
 
         material = self.mainApp.db.materials[entry]        
         labels = [
             [QLabel(f"Material: {entry}")],
-            [QLabel(f"Price: ${material.price} per ton" if not material.price == None else "Price: N/A"), QLabel(f"Freight: ${material.freight} per ton" if not material.freight == None else "Freight: N/A")],
+            [QLabel(f"Price: ${material.price} per ton" if material.price is not None else "Price: N/A"), QLabel(f"Freight: ${material.freight} per ton" if material.freight is not None else "Freight: N/A")],
             [QLabel(f"SiO2: {material.SiO2}"), QLabel(f"Al2O3: {material.Al2O3}"), QLabel(f"Fe2O3: {material.Fe2O3}"), QLabel(f"TiO2: {material.TiO2}"), QLabel(f"Li2O: {material.Li2O}")],
             [QLabel(f"P2O5: {material.P2O5}"), QLabel(f"Na2O: {material.Na2O}"), QLabel(f"CaO: {material.CaO}"), QLabel(f"K2O: {material.K2O}"), QLabel(f"MgO: {material.MgO}"), QLabel(f"Other: {material.otherChem}")],
             [QLabel(f"LOI: {material.LOI}")],
@@ -128,43 +129,44 @@ class MaterialsDetailsWindow(QWidget):
 
 class MaterialsEditWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry if not entry == None else "New Material"}")
+        self.setWindowTitle(f"Edit: {entry if entry is not None else "New Material"}")
 
-        material = self.mainApp.db.materials[entry] if not entry == None else None
+        material = self.mainApp.db.materials[entry] if entry is not None else None
         self.material = material
 
         self.error = None
 
         self.mainLayout = [
-            [QLabel("Material:"), QLineEdit(f"{entry if not entry == None else "New Material"}")],
+            [QLabel("Material:"), QLineEdit(f"{entry if entry is not None else "New Material"}")],
             [
-                QLabel("Price:"), QLineEdit(f"{material.price if not material == None else ""}"), QLabel("per ton"),
-                QLabel("Freight:"), QLineEdit(f"{material.freight if not material == None else ""}"), QLabel("per ton"),
+                QLabel("Price:"), QLineEdit(f"{material.price if material is not None else ""}"), QLabel("per ton"),
+                QLabel("Freight:"), QLineEdit(f"{material.freight if material is not None else ""}"), QLabel("per ton"),
             ],
             [
-                QLabel("SiO2:"), QLineEdit(f"{material.SiO2 if not material == None else ""}"),
-                QLabel("Al2O3:"), QLineEdit(f"{material.Al2O3 if not material == None else ""}"),
-                QLabel("Fe2O3:"), QLineEdit(f"{material.Fe2O3 if not material == None else ""}"),
-                QLabel("TiO2:"), QLineEdit(f"{material.TiO2 if not material == None else ""}"),
-                QLabel("Li2O:"), QLineEdit(f"{material.Li2O if not material == None else ""}")
+                QLabel("SiO2:"), QLineEdit(f"{material.SiO2 if material is not None else ""}"),
+                QLabel("Al2O3:"), QLineEdit(f"{material.Al2O3 if material is not None else ""}"),
+                QLabel("Fe2O3:"), QLineEdit(f"{material.Fe2O3 if material is not None else ""}"),
+                QLabel("TiO2:"), QLineEdit(f"{material.TiO2 if material is not None else ""}"),
+                QLabel("Li2O:"), QLineEdit(f"{material.Li2O if material is not None else ""}")
             ],
             [
-                QLabel("P2O5:"), QLineEdit(f"{material.P2O5 if not material == None else ""}"),
-                QLabel("Na2O:"), QLineEdit(f"{material.Na2O if not material == None else ""}"),
-                QLabel("CaO:"), QLineEdit(f"{material.CaO if not material == None else ""}"),
-                QLabel("K2O:"), QLineEdit(f"{material.K2O if not material == None else ""}"),
-                QLabel("MgO:"), QLineEdit(f"{material.MgO if not material == None else ""}"),
-                QLabel("Other:"), QLineEdit(f"{material.otherChem if not material == None else ""}"),
-                QLabel("LOI:"), QLineEdit(f"{material.LOI if not material == None else ""}")
+                QLabel("P2O5:"), QLineEdit(f"{material.P2O5 if material is not None else ""}"),
+                QLabel("Na2O:"), QLineEdit(f"{material.Na2O if material is not None else ""}"),
+                QLabel("CaO:"), QLineEdit(f"{material.CaO if material is not None else ""}"),
+                QLabel("K2O:"), QLineEdit(f"{material.K2O if material is not None else ""}"),
+                QLabel("MgO:"), QLineEdit(f"{material.MgO if material is not None else ""}"),
+                QLabel("Other:"), QLineEdit(f"{material.otherChem if material is not None else ""}"),
+                QLabel("LOI:"), QLineEdit(f"{material.LOI if material is not None else ""}")
             ],
             [
-                QLabel("+50:"), QLineEdit(f"{material.Plus50 if not material == None else ""}"), QLabel("%"),
-                QLabel("-50+100:"), QLineEdit(f"{material.Sub50Plus100 if not material == None else ""}"), QLabel("%"),
-                QLabel("-100+200:"), QLineEdit(f"{material.Sub100Plus200 if not material == None else ""}"), QLabel("%"),
-                QLabel("-200+325:"), QLineEdit(f"{material.Sub200Plus325 if not material == None else ""}"), QLabel("%"),
-                QLabel("-325:"), QLineEdit(f"{material.Sub325 if not material == None else ""}"), QLabel("%")
+                QLabel("+50:"), QLineEdit(f"{material.Plus50 if material is not None else ""}"), QLabel("%"),
+                QLabel("-50+100:"), QLineEdit(f"{material.Sub50Plus100 if material is not None else ""}"), QLabel("%"),
+                QLabel("-100+200:"), QLineEdit(f"{material.Sub100Plus200 if material is not None else ""}"), QLabel("%"),
+                QLabel("-200+325:"), QLineEdit(f"{material.Sub200Plus325 if material is not None else ""}"), QLabel("%"),
+                QLabel("-325:"), QLineEdit(f"{material.Sub325 if material is not None else ""}"), QLabel("%")
             ],
             [
                 QPushButton("Update"), QPushButton("Create")
@@ -172,7 +174,7 @@ class MaterialsEditWindow(QWidget):
         ]
 
         widgetFromList(self, self.mainLayout)
-        if not material == None:
+        if material is not None:
             self.mainLayout[5][0].clicked.connect(self.updateMaterial)
         else:
             self.mainLayout[5][0].setEnabled(False)
@@ -229,7 +231,7 @@ class MaterialsEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.material.name if not self.material == None else "New Material"}")
+        self.setWindowTitle(f"Edit: {self.material.name if self.material is not None else "New Material"}")
         return res
     
     def updateMaterial(self):

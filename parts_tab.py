@@ -14,7 +14,6 @@ class PartsTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
-        self.windows = []
         # self.error = None
         self.genTableData()
         self.table = DBTable(self.parts, self.headers)
@@ -85,7 +84,7 @@ class PartsTab(QWidget):
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
             logging.debug(part)
-            self.windows.append(PartsDetailsWindow(part, self.mainApp))
+            PartsDetailsWindow(part, self.mainApp)
     
     def openMargins(self):
         if len(self.selection) == 0:
@@ -93,12 +92,12 @@ class PartsTab(QWidget):
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
             logging.debug(part)
-            self.windows.append(PartsMarginsWindow(part, self.mainApp))
+            PartsMarginsWindow(part, self.mainApp)
     
     def openEdits(self):
         for part in self.selection:
             logging.debug(part)
-            self.windows.append(PartsEditWindow(part, self.mainApp))
+            PartsEditWindow(part, self.mainApp)
 
     def deleteSelection(self):
         if len(self.selection) == 0:
@@ -119,7 +118,7 @@ class PartsTab(QWidget):
             startfile(reportFile[0])
     
     def openNew(self):
-        self.windows.append(PartsEditWindow(None, self.mainApp))
+        PartsEditWindow(None, self.mainApp)
     
     def refreshTable(self):
         self.genTableData()
@@ -129,7 +128,8 @@ class PartsTab(QWidget):
 
 class PartsDetailsWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.setWindowTitle(f"Details: {entry}")
 
@@ -149,7 +149,8 @@ class PartsDetailsWindow(QWidget):
 
 class PartsMarginsWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
         self.setWindowTitle(f"Margin Calculator: {entry}")
 
@@ -180,11 +181,12 @@ class PartsMarginsWindow(QWidget):
 
 class PartsEditWindow(QWidget):
     def __init__(self, entry, mainApp: MainWindow):
-        super().__init__()
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
-        self.setWindowTitle(f"Edit: {entry if not entry == None else "New Part"}")
+        self.setWindowTitle(f"Edit: {entry if entry is not None else "New Part"}")
 
-        part = self.mainApp.db.parts[entry] if not entry == None else None
+        part = self.mainApp.db.parts[entry] if entry is not None else None
         self.part = part
 
         self.error = None
@@ -196,7 +198,7 @@ class PartsEditWindow(QWidget):
         pads.extend([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pad"])
 
         for i in range(5):
-            if (not part == None) and i < len(part.pad):
+            if (part is not None) and i < len(part.pad):
                 self.padsLayout.append([
                     QLabel("Pad:"),
                     getComboBox(pads, part.pad[i]),
@@ -219,7 +221,7 @@ class PartsEditWindow(QWidget):
         miscs.extend([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "misc"])
 
         for i in range(5):
-            if (not part == None) and i < len(part.misc):
+            if (part is not None) and i < len(part.misc):
                 self.miscLayout.append([QLabel("Misc.:"), getComboBox(miscs, part.misc[i])])
             else:
                 self.miscLayout.append([QLabel("Misc.:"), getComboBox(miscs, None)])
@@ -227,29 +229,29 @@ class PartsEditWindow(QWidget):
         widgetFromList(miscWidget, self.miscLayout)
 
         self.mainLayout = [
-            [QLabel("Part:"), QLineEdit(f"{entry if not entry == None else "New Part"}")],
+            [QLabel("Part:"), QLineEdit(f"{entry if entry is not None else "New Part"}")],
             [
-                QLabel("Weight:"), QLineEdit(f"{part.weight if not part == None else ""}"), QLabel("lbs"),
-                QLabel("Mix:"), getComboBox(list(self.mainApp.db.mixtures.keys()), part.mix if not part == None else None)
+                QLabel("Weight:"), QLineEdit(f"{part.weight if part is not None else ""}"), QLabel("lbs"),
+                QLabel("Mix:"), getComboBox(list(self.mainApp.db.mixtures.keys()), part.mix if part is not None else None)
             ],
             [
-                QLabel("Pressing:"), QLineEdit(f"{part.pressing if not part == None else ""}"), QLabel("pieces/hour"),
-                QLabel("Turning:"), QLineEdit(f"{part.turning if not part == None else ""}"), QLabel("pieces/hour")
+                QLabel("Pressing:"), QLineEdit(f"{part.pressing if part is not None else ""}"), QLabel("pieces/hour"),
+                QLabel("Turning:"), QLineEdit(f"{part.turning if part is not None else ""}"), QLabel("pieces/hour")
             ],
             [
-                QLabel("Box:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "box"], part.box if not part == None else None),
-                QLabel("Pieces / box:"), QLineEdit(f"{part.piecesPerBox if not part == None else ""}"),
-                QLabel("Pallet:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pallet"], part.pallet if not part == None else None),
-                QLabel("Boxes / pallet:"), QLineEdit(f"{part.boxesPerPallet if not part == None else ""}"),
+                QLabel("Box:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "box"], part.box if part is not None else None),
+                QLabel("Pieces / box:"), QLineEdit(f"{part.piecesPerBox if part is not None else ""}"),
+                QLabel("Pallet:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pallet"], part.pallet if part is not None else None),
+                QLabel("Boxes / pallet:"), QLineEdit(f"{part.boxesPerPallet if part is not None else ""}"),
                 padsWidget,
                 miscWidget
             ],
             [
-                QLabel("Fire scrap:"), QLineEdit(f"{100 * part.fireScrap if not part == None else ""}"), QLabel("%")
+                QLabel("Fire scrap:"), QLineEdit(f"{100 * part.fireScrap if part is not None else ""}"), QLabel("%")
             ],
             [
-                QLabel("Price:"), QLineEdit(f"{part.price if not part == None else ""}"),
-                QLabel("Annual sales:"), QLineEdit(f"{part.sales if not part == None else ""}"), QCheckBox("Quote")
+                QLabel("Price:"), QLineEdit(f"{part.price if part is not None else ""}"),
+                QLabel("Annual sales:"), QLineEdit(f"{part.sales if part is not None else ""}"), QCheckBox("Quote")
             ],
             [
                 QPushButton("Update"), QPushButton("Create")
@@ -257,7 +259,7 @@ class PartsEditWindow(QWidget):
         ]
 
         widgetFromList(self, self.mainLayout)
-        if not part == None:
+        if part is not None:
             self.mainLayout[6][0].clicked.connect(self.updatePart)
         else:
             self.mainLayout[6][0].setEnabled(False)
@@ -328,7 +330,7 @@ class PartsEditWindow(QWidget):
         else:
             # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
-        self.setWindowTitle(f"Edit: {self.part.name if not self.part == None else "New Part"}")
+        self.setWindowTitle(f"Edit: {self.part.name if self.part is not None else "New Part"}")
         return res
     
     def updatePart(self):
