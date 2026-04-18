@@ -225,10 +225,6 @@ class Part:
         self.mix = None
         self.pressing: float | None = None # pieces / hour
         self.turning: float | None = None # pieces / hour
-        self.loading: float | None = None # pieces / hour
-        self.unloading: float | None = None # pieces / hour
-        self.inspection: float | None = None # pieces / hour
-        self.greenScrap = None
         self.fireScrap = None
         self.box: str | None = None
         self.piecesPerBox: int | None = None
@@ -240,15 +236,11 @@ class Part:
         self.price: float | None = None
         self.sales = None
 
-    def setProduction(self, weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, price):
+    def setProduction(self, weight, mix, pressing, turning, fireScrap, price):
         self.weight = weight
         self.mix = mix
         self.pressing = pressing
         self.turning = turning
-        self.loading = loading
-        self.unloading = unloading
-        self.inspection = inspection
-        self.greenScrap = greenScrap
         self.fireScrap = fireScrap
         self.price = price
 
@@ -407,10 +399,7 @@ class Part:
 
     def fromTuple(self, values):
         self.name = values[0]
-        # loading/unloading/inspection/greenScrap dropped from the schema in v2 (§3.2);
-        # UI may still set them in memory but they are no longer persisted.
         self.setProduction(values[1], values[2], values[3], values[4],
-                           None, None, None, None,
                            values[5], values[10])
         self.setPackaging(
             values[6], values[7], values[8], values[9],
@@ -429,8 +418,8 @@ class Part:
     def __str__(self) -> str:
         if self.fireScrap is None:
             raise RuntimeError('self.fireScrap is None')
-        res = "({} | {}, {}, {}, {}, {}, {}, {}, {}% + {}% | {}, {}, {}, {}, {}, {}, {} | {})".format(self.name,
-                self.weight, self.mix, self.pressing, self.turning, f"UNUSED: {self.loading}", f"UNUSED: {self.unloading}", f"UNUSED: {self.inspection}", f"UNUSED: {self.greenScrap}", 100 * self.fireScrap,
+        res = "({} | {}, {}, {}, {}, {}% | {}, {}, {}, {}, {}, {}, {} | {})".format(self.name,
+                self.weight, self.mix, self.pressing, self.turning, 100 * self.fireScrap,
                 self.box, self.piecesPerBox, self.pallet, self.boxesPerPallet, self.pad, self.padsPerBox, self.misc,
                 self.price)
         return res

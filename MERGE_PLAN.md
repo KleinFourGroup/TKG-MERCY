@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–9 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 9.5** (vestigial `Part` attribute cleanup) and **Step 10** (DB merge).
+**Status:** Implementation in progress — Steps 1–9 of 13 complete as of 2026-04-18, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 10** (DB merge).
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-18. Steps 1–9 complete; **Step 9.5 (polish) is next**, then **Step 10 (DB merge)**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-18. Steps 1–9 complete plus the Step 9.5 polish; **Step 10 (DB merge) is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -537,6 +537,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 7e | ✅ Done | Merge plan Step 7e: restore window centering |
 | 8  | ✅ Done | Merge plan Step 8: ANIKA schema migration |
 | 9  | ✅ Done | Merge plan Step 9: BECKY schema migration |
+| 9.5 | ✅ Done | Merge plan Step 9.5: drop vestigial Part attributes |
 | 10–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -642,11 +643,20 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Deviations from plan.** None material. §12.5's aspirational note about removing all four base64 utilities once Step 9 lands turned out to be too ambitious: `_migrateAnikaV1ToV2` still depends on `stringToList`, `_migrateBeckyV2ToV3` depends on `stringFromB64`, and those depend in turn on `stringToB64`/`listToString`. All four remain in `utils.py` indefinitely for legacy-file support. `records.py` and the rest of the main app no longer import them.
 
+**Step 9.5 — vestigial `Part` attributes dropped.** Cleanup follow-up flagged back in §12.3 after Step 8. Three groups of edits:
+
+1. **`records.py` `Part.__init__`.** Removed the four attribute declarations (`self.loading`, `self.unloading`, `self.inspection`, `self.greenScrap`). The `Globals` class's identically-named attributes (`Globals.loading`, `Globals.inspection`, `Globals.greenScrap`) are unrelated — those are the *live* cost-calc inputs and remain untouched.
+2. **`records.py` `Part.setProduction` / `Part.fromTuple` / `Part.__str__`.** `setProduction` lost its four dead params (signature went from 10 args to 6: `weight, mix, pressing, turning, fireScrap, price`). `fromTuple` no longer passes four `None`s through to `setProduction` — just the live values. `__str__` format string lost the four `f"UNUSED: {...}"` tokens and their placeholders; the green scrap `%` suffix is gone too since only the fire scrap half of the `{}% + {}%` pair survived.
+3. **`parts_tab.py` `PartsEditWindow.readData`.** Dropped the four `X = None` stub locals and the corresponding positional args from the `self.part.setProduction(...)` call.
+
+**Not a schema change.** No `MERCY_DB_VERSION` bump. The on-disk shape already didn't carry these columns (Step 8 handled that). This was purely Python-side cleanup.
+
+**Verification.** All four smoke checks still pass. A `Part.setProduction` call from `Part.fromTuple` initially crashed the `legacy_anika_migration` smoke check with `TypeError: takes 7 positional arguments but 11 were given` — easy fix (update `fromTuple` to match the new signature), caught immediately by the existing test. No other sites needed changes — grep for `part.(loading|unloading|inspection|greenScrap)` across the repo returned zero hits in source.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
 - One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
-- **Vestigial `Part` attributes.** `Part.loading`/`unloading`/`inspection`/`greenScrap` are still instance attributes, accepted by `setProduction()` and printed by `__str__`, but no longer persisted (Step 8 dropped the DB columns). UI forms in `parts_tab.py` may still collect values for them, which then vanish on save/reload — misleading but not breaking, because cost calcs already use the globals-table counterparts (§3.2). **Step 9.5 will drop the attrs + `setProduction` params + any UI widgets that feed them.**
 - Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope; see Step 5 note above.
 
 ### 12.4 Test conventions used so far
@@ -663,21 +673,7 @@ Run `smoke.py` as the always-on baseline at the start and end of any invasive st
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 9.5 (Part attribute cleanup) and Step 10 (DB merge)
-
-**Step 9.5 — drop vestigial `Part.loading` / `unloading` / `inspection` / `greenScrap`.** Step 8 dropped the corresponding DB columns but the model attributes (and `setProduction` params) stayed in place so the codebase would stay buildable during Step 9. Now safe to remove end-to-end. Scope:
-
-1. **`records.py` `Part.__init__`.** Delete the four attribute assignments (`self.loading`, `self.unloading`, `self.inspection`, `self.greenScrap`) around `records.py:229–232`.
-2. **`records.py` `Part.setProduction`.** Current signature is `setProduction(self, weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, price)`. Drop the four dead params, leaving `setProduction(self, weight, mix, pressing, turning, fireScrap, price)`. Drop the corresponding `self.X = X` assignments in the body.
-3. **`records.py` `Part.__str__`.** The format string at `records.py:434` prints `f"UNUSED: {self.loading}"` etc. four times — strip those tokens from the f-string and their positional args.
-4. **`parts_tab.py`.** Find any UI widgets that collect these four values (likely `QLineEdit`s in the edit dialog) and remove them + their layout rows + any `checkInput` calls + the `setProduction` call site that passes them. `Globals` still has `loading` / `inspection` / `greenScrap` — those are the live values used by cost calcs (§3.2). Do **not** touch `globals_tab.py` or the `Globals` class.
-5. **`report.py`.** Grep for `.loading` / `.unloading` / `.inspection` / `.greenScrap` — most hits should be `db.globals.X` (live) not `part.X` (dead). Any `part.X` references can be deleted.
-
-**Not a schema change.** No `MERCY_DB_VERSION` bump, no migration function. The DB already has the correct shape; this just cleans up the Python side.
-
-**Verification.** `smoke.py` should still pass all four checks unchanged. The existing `legacy_anika_migration` test hits the `Part` code path (loads migrated parts into in-memory `Part` objects), so that's already covering the shape. Manual UI test: open the parts edit dialog, confirm the four dead fields are gone, and save a part to confirm no AttributeError.
-
----
+### 12.5 Pick-up notes for Step 10 (DB merge)
 
 **Step 10 — DB merge (importing one legacy file into another).** Per §8.5. Supports the team's real-world migration from two separate `.db` files (one ANIKA, one BECKY) into a single MERCY DB.
 

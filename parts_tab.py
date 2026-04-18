@@ -290,14 +290,10 @@ class PartsEditWindow(QWidget):
         mix = self.mainLayout[1][4].currentText()
         pressing = checkInput(self.mainLayout[2][1].text(), float, "pos", errors, "pressing")
         turning = checkInput(self.mainLayout[2][4].text(), float, "pos", errors, "turning")
-        loading = None
-        unloading = None
-        inspection = None
         box = self.mainLayout[3][1].currentText()
         piecesPerBox = checkInput(self.mainLayout[3][3].text(), int, "pos", errors, "pieces / box")
         pallet = self.mainLayout[3][5].currentText()
         boxesPerPallet = checkInput(self.mainLayout[3][7].text(), int, "pos", errors, "boxes / pallet")
-        greenScrap = None
         fireScrap = checkInput(self.mainLayout[4][1].text(), float, "nonneg", errors, "fire scrap") / 100
         price = checkInput(self.mainLayout[5][1].text(), float, "nonneg", errors, "price")
         sales = "Quote" if self.mainLayout[5][4].isChecked() else checkInput(self.mainLayout[5][3].text(), int, "nonneg", errors, "annual sales")
@@ -322,7 +318,7 @@ class PartsEditWindow(QWidget):
                 if isNone:
                     raise RuntimeError('isNone')
                 self.mainApp.db.updatePart(self.part.name, name)
-            self.part.setProduction(weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, price)
+            self.part.setProduction(weight, mix, pressing, turning, fireScrap, price)
             self.part.setPackaging(box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc)
             self.part.sales = sales
             if isNone:
