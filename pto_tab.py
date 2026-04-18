@@ -11,7 +11,7 @@ from employee_overview_tab import MainTab
 from records import Employee, EmployeePTORange, EmployeePTODB
 from defaults import POINT_VALS, PTO_ELIGIBILITY
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
 from report import PDFReport
 
 class PTOTab(QWidget):
@@ -295,6 +295,7 @@ class PTOCarryWindow(QWidget):
         self.cashButton.clicked.connect(self.cash)
         self.dropButton.clicked.connect(self.drop)
         self.cancelButton.clicked.connect(self.cancel)
+        centerOnScreen(self)
         self.show()
 
     def carry(self):
@@ -429,6 +430,7 @@ class PTOEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newPTO)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

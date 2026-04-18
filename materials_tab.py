@@ -4,7 +4,7 @@ from table import DBTable
 from app import MainWindow
 from records import Material
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput
+from utils import getComboBox, widgetFromList, checkInput, centerOnScreen
 import logging
 
 class MaterialsTab(QWidget):
@@ -125,6 +125,7 @@ class MaterialsDetailsWindow(QWidget):
         ]
 
         widgetFromList(self, labels) # type: ignore
+        centerOnScreen(self)
         self.show()
 
 class MaterialsEditWindow(QWidget):
@@ -179,6 +180,7 @@ class MaterialsEditWindow(QWidget):
         else:
             self.mainLayout[5][0].setEnabled(False)
         self.mainLayout[5][1].clicked.connect(self.newMaterial)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

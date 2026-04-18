@@ -8,7 +8,7 @@ from app import MainWindow
 from employee_overview_tab import MainTab
 from records import Employee, EmployeeNote, EmployeeNotesDB
 from error import errorMessage
-from utils import widgetFromList, toQDate, fromQDate, startfile
+from utils import widgetFromList, toQDate, fromQDate, startfile, centerOnScreen
 from report import PDFReport
 
 class NotesTab(QWidget):
@@ -206,6 +206,7 @@ class NotesEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newNote)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

@@ -10,7 +10,7 @@ from employee_overview_tab import MainTab
 from records import Employee, EmployeeTrainingDate, EmployeeTrainingDB
 from defaults import POINT_VALS
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class TrainingTab(QWidget):
     def __init__(self, mainTab: MainTab) -> None:
@@ -204,6 +204,7 @@ class TrainingEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newTraining)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

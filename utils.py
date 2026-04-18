@@ -91,6 +91,17 @@ def startfile(path):
     else:
         os.system(f"open {path}")
 
+def centerOnScreen(widget: QWidget):
+    widget.adjustSize()
+    screen = widget.screen()
+    if screen is None:
+        return
+    geom = screen.availableGeometry()
+    size = widget.size()
+    x = geom.center().x() - size.width() // 2
+    y = geom.center().y() - size.height() // 2
+    widget.move(x, y)
+
 def toQDate(date: datetime.date):
     return QDate(date.year, date.month, date.day)
 

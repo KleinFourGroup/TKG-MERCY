@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWid
 from PySide6.QtCore import Qt
 from records import Database, emptyDB, MaterialInventoryRecord, PartInventoryRecord
 from error import errorMessage
-from utils import newHLine, widgetFromList, checkInput, toQDate, fromQDate, getComboBox, startfile
+from utils import newHLine, widgetFromList, checkInput, toQDate, fromQDate, getComboBox, startfile, centerOnScreen
 
 from app import MainWindow
 from table import DBTable
@@ -149,6 +149,7 @@ class InventoryDateEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newInventory)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):
@@ -348,6 +349,7 @@ class MaterialInventoryEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newEntry)
+        centerOnScreen(self)
         self.show()
     
     def getCurrentCost(self):
@@ -590,6 +592,7 @@ class PartInventoryEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newEntry)
+        centerOnScreen(self)
         self.show()
     
     def getCurrentCost(self):

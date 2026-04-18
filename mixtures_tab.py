@@ -4,7 +4,7 @@ from table import DBTable
 from app import MainWindow
 from records import Mixture
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, startfile
+from utils import getComboBox, widgetFromList, checkInput, startfile, centerOnScreen
 
 from report import PDFReport
 import os
@@ -157,6 +157,7 @@ class MixturesDetailsWindow(QWidget):
         ])
 
         widgetFromList(self, labels) # type: ignore
+        centerOnScreen(self)
         self.show()
 
 class MixturesEditWindow(QWidget):
@@ -190,6 +191,7 @@ class MixturesEditWindow(QWidget):
         else:
             self.mainLayout[13][0].setEnabled(False)
         self.mainLayout[13][1].clicked.connect(self.newMixture)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

@@ -11,7 +11,7 @@ from employee_overview_tab import MainTab
 from records import Employee, EmployeePoint, EmployeePointsDB
 from defaults import POINT_VALS
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
 from report import PDFReport
 
 class PointsTab(QWidget):
@@ -227,6 +227,7 @@ class PointsEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newPoint)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

@@ -4,7 +4,7 @@ from table import DBTable
 from app import MainWindow
 from records import Package
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput
+from utils import getComboBox, widgetFromList, checkInput, centerOnScreen
 import logging
 
 class PackagingTab(QWidget):
@@ -121,6 +121,7 @@ class PackagingEditWindow(QWidget):
         else:
             self.mainLayout[2][0].setEnabled(False)
         self.mainLayout[2][1].clicked.connect(self.newPackaging)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

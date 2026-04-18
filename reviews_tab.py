@@ -9,7 +9,7 @@ from app import MainWindow
 from employee_overview_tab import MainTab
 from records import Employee, EmployeeReview, EmployeeReviewsDB
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class ReviewsTab(QWidget):
     def __init__(self, mainTab: MainTab) -> None:
@@ -179,6 +179,7 @@ class ReviewsEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newReview)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

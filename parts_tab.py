@@ -4,7 +4,7 @@ from table import DBTable
 from app import MainWindow
 from records import Part
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, startfile
+from utils import getComboBox, widgetFromList, checkInput, startfile, centerOnScreen
 
 from report import PDFReport
 import os, math
@@ -145,6 +145,7 @@ class PartsDetailsWindow(QWidget):
         ]
 
         widgetFromList(self, labels)
+        centerOnScreen(self)
         self.show()
 
 class PartsMarginsWindow(QWidget):
@@ -177,6 +178,7 @@ class PartsMarginsWindow(QWidget):
             ])
 
         widgetFromList(self, labels)
+        centerOnScreen(self)
         self.show()
 
 class PartsEditWindow(QWidget):

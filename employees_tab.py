@@ -9,7 +9,7 @@ from table import DBTable
 from app import MainWindow
 from records import Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
 from report import PDFReport
 import logging
 
@@ -245,6 +245,7 @@ class EmployeeEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newEmployee)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):

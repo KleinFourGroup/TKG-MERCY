@@ -9,7 +9,7 @@ from app import MainWindow
 from employee_overview_tab import MainTab
 from records import Database, ObservancesDB, HolidayObservance
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 from defaults import HOLIDAYS
 
@@ -181,6 +181,7 @@ class YearSelectWindow(QWidget):
 
         widgetFromList(self, self.mainLayout)
         self.mainLayout[-1][0].clicked.connect(self.readData)
+        centerOnScreen(self)
         self.show()
 
     def readData(self):
@@ -226,6 +227,7 @@ class ObservanceSelectWindow(QWidget):
 
         widgetFromList(self, self.mainLayout)
         self.mainLayout[-1][0].clicked.connect(self.readData)
+        centerOnScreen(self)
         self.show()
 
     def readData(self):
@@ -358,6 +360,7 @@ class HolidayEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newHoliday)
+        centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):
