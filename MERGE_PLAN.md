@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 7d**.
+**Status:** Implementation in progress — Steps 1–7 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 8**.
 
 ---
 
@@ -506,9 +506,9 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 complete; **Step 7d is next** (followed by 7e). Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-18. Steps 1–7 complete; **Step 8 is next**. Each step was committed separately on `main` with a message that names the step.*
 
-Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
+Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
 - **7a** — correctness / data-integrity fixes (done).
 - **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (done).
@@ -533,8 +533,8 @@ Step 7 has been split into sub-steps to keep each review surface small. The hygi
 | 7c-1 | ✅ Done | Merge plan Step 7c-1: assert → raise sweep |
 | 7c-2 | ✅ Done | Merge plan Step 7c-2: print → logging |
 | 7c-3 | ✅ Done | Merge plan Step 7c-3: polish sweep |
-| 7d | ⏳ Pending | Clean up 2 double-negation leftovers from 7c-1 (`if not (not isNone):` in `employees_tab.py:298`, `parts_tab.py:317`). |
-| 7e | ⏳ Pending | Restore window centering. 7c-3's parent-retention (`super().__init__(mainApp, Qt.WindowType.Window)`) regressed positioning: windows no longer open centered on screen. |
+| 7d | ✅ Done | Merge plan Step 7d: clean up double-negation leftovers |
+| 7e | ✅ Done | Merge plan Step 7e: restore window centering |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -603,10 +603,16 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification:** all 23 source files compile; `grep -rE 'not\s+.*==\s*None' *.py` returns one residual (the intentional compound at `records.py:698`); offscreen `MainWindow()` build passes; offscreen open-and-close test on a real window class confirmed parent-retention (survives GC while open) and close-destruction (`WA_DeleteOnClose` fires) both work as intended.
 
+**Step 7d — double-negation cleanup landed.** Two sites (`employees_tab.py:299` and `parts_tab.py:320`) went from `if not (not isNone): raise RuntimeError('not isNone')` to `if isNone: raise RuntimeError('isNone')`. Trivial. `grep -rn 'if not (not' *.py` now returns zero hits in MERCY source.
+
+**Step 7e — window centering restored.** Added `centerOnScreen(widget)` to `utils.py` — sizes the widget (`adjustSize()`), reads `widget.screen().availableGeometry()`, and `move()`s the widget so its size-hint rect is centered on the current screen. Called immediately before `self.show()` in all 21 top-level child window classes touched by 7c-3 (see §12.2 Step 7c-3 item 2 for the full list). `from utils import ... , centerOnScreen` was added to 12 tab files. Offscreen smoke test confirmed `centerOnScreen` positions a parented child widget at reasonable coordinates (e.g. `(190, 382)` on a simulated primary screen). Visual centering was manually verified on the user's machine before commit.
+
+- Chose **center on screen** (not center on parent) because it matches the pre-7c-3 user experience: BECKY/ANIKA's sub-windows were parentless and got their default top-level placement from the WM, which on Windows defaults to near screen-center for freshly-created top-level windows. Screen-centering restores that feel. The parent-center alternative was noted in §12.6 but would have been a UX deviation.
+- `adjustSize()` before reading `size()` is important — at `__init__` time the widget hasn't been laid out yet, so `size()` is the default `(640, 480)` or whatever and would mis-center. `adjustSize()` applies the layout's size hint without requiring a `show()` + re-center round-trip.
+- `screen is None` early-return guard handles the edge case where the widget has no screen (shouldn't happen after parenting to `mainApp`, but free insurance).
+
 ### 12.3 Known deferred issues visible in the current build
 
-- Two double-negation leftovers from the 7c-1 sweep (`if not (not isNone):` at `employees_tab.py:298` and `parts_tab.py:317`) — **Step 7d**.
-- Window centering regression introduced by 7c-3's parent-retention fix: edit/detail windows now open uncentered — **Step 7e**.
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
 - One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
 - Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
@@ -618,59 +624,35 @@ Testing has been manual in the real PySide6 GUI on the user's machine. Headless 
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 7d
+### 12.5 Pick-up notes for Step 8
 
-Cleanup of two double-negation leftovers from the 7c-1 `assert`→`raise` script. Both sites have identical structure and the same fix. Trivial — a handful of `Edit` calls.
+**Per §9, Step 8 is the ANIKA migration** — heavy lifting to bring legacy ANIKA `.db` files up to the normalized MERCY schema. Step 4 already lays empty BECKY-origin tables over an ANIKA DB and stamps `db_version=1`; Step 8 does the *in-place rewrite* of the ANIKA-origin tables themselves. Key references: §3.1 (base64-encoded compound fields), §3.2 (dead/inconsistent `parts` columns), §5.1 (target schema), §8.3 (migration steps 1–8).
 
-1. **`employees_tab.py:299`** — currently:
-   ```python
-   else:
-       if not (not isNone):
-           raise RuntimeError('not isNone')
-       self.mainApp.db.updateEmployee(self.employee.idNum, id)
-   ```
-   Should become:
-   ```python
-   else:
-       if isNone:
-           raise RuntimeError('isNone')
-       self.mainApp.db.updateEmployee(self.employee.idNum, id)
-   ```
-2. **`parts_tab.py:320`** — identical pattern with the same fix.
+**Scope recap from §8.3.** Eight in-order steps:
+1. Decode `mixtures.materials` and `mixtures.weights` (base64 `#`-delimited).
+2. Create `mixture_components`, insert decoded rows, drop `materials`/`weights` columns from `mixtures`.
+3. Decode `parts.pad`, `parts.padsPerBox`, `parts.misc` (same base64 `#`-delim encoding).
+4. Create `part_pads` and `part_misc`, insert decoded rows.
+5. Recreate `parts` without `pad`, `padsPerBox`, `misc`, `loading`, `unloading`, `inspection`, `greenScrap` (SQLite can't `DROP COLUMN` in its lightweight `ALTER TABLE` form pre-3.35; we've been using the recreate-and-copy pattern for portability anyway).
+6. Create empty BECKY-origin tables — **already done by Step 4's Case 4 ("Legacy ANIKA format detected") pathway in `file_manager.initFile()`**. No additional work here for an in-place migration; just don't double-create.
+7. Create `production` table — **also already done by Step 4's legacy ANIKA pathway.** Ditto on not double-creating.
+8. Set `globals.db_version = 1` — **done by Step 4.** Step 8 bumps it from 1 → 2 when the ANIKA normalization has actually run. (If we keep v1 as "everything present but ANIKA-shaped" and v2 as "ANIKA normalized", the in-Case-2 migration block described in §12.2 Step 4 is the right place to put the rewrite: `if dbVersion < 2: migrate_anika_v1_to_v2()`. Bump `MERCY_DB_VERSION` from 1 to 2 at the top of `file_manager.py`.)
 
-(Exact line numbers may drift if 7e lands first; grep `if not (not isNone)` to re-locate.)
+**Net new work for Step 8** — steps 1–5 above, plus the version-bump plumbing. Steps 6–7 are no-ops because Step 4 already handles them.
 
-Root cause: the 7c-1 script had explicit patterns for `not X == None` and `not X in Y` but not plain `not X`, so `assert(not isNone)` fell through to the generic `if not (COND): raise RuntimeError(COND)` wrapper and produced the double-negation. Not a bug — just ugly. After this step, `grep -rn 'if not (not' *.py` should return zero hits in MERCY source.
+**Base64 encoding to decode.** From ANIKA's `utils.listToString(xs)` / `stringToList(s)` — the encoding is: join the list members with `#`, UTF-8-encode, base64-encode, decode back to ASCII for storage. The reverse: b64-decode, UTF-8-decode, `split("#")`. Pad list (`parts.pad` / `parts.padsPerBox`) and misc list (`parts.misc`) are both `#`-joined strings inside the base64 wrapper. Mixtures the same — `materials` is `#`-joined material names, `weights` is `#`-joined float strings. **Empty lists:** check what ANIKA writes — historically, `listToString([])` in both apps produced an empty string (no base64 round-trip on an empty list); don't crash on that. (Also check: does `stringToList("")` return `[]`? If not, handle the empty-string case explicitly.)
 
-### 12.6 Pick-up notes for Step 7e
+**Key gotcha — column ordering after recreate.** When recreating `parts` without the 7 dropped columns, the `SELECT` that feeds the `INSERT INTO parts_new` must *not* use `SELECT *` — it needs to name the surviving columns explicitly, in the same order as the new table's column list. An `INSERT ... SELECT *` from the old `parts` will fail or — worse — silently misalign if the column order differs. Same hazard applies to the `mixtures` recreate (dropping `materials`/`weights`).
 
-Restore window centering. **Regression introduced by 7c-3** — when the 21 edit/detail window classes were migrated from parentless + `self.windows` retention to parented + `Qt.WindowType.Window` + `WA_DeleteOnClose` (see §12.2 Step 7c-3 item 2), they lost their default "center on screen" placement. The user reported that windows now open off-center; previously (parentless) Qt/Windows' window manager placed them automatically, and now with a parent in the Qt tree the default placement is different (typically relative to the parent's corner, not screen-centered).
+**Key gotcha — `part_pads` preserves order via `sort_order`.** The decoded list is ordered; when inserting rows, include a `sort_order INTEGER` value per row starting at 0 (or 1). Matches the §5.1 schema (`part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))`). Same for `part_misc.sort_order` and `mixture_components.sort_order`.
 
-**Target behavior:** each edit/detail window opens centered on the screen (or centered on the `mainApp` frame — pick one; screen-centered matches the pre-7c-3 behavior most users saw).
+**Atomicity.** Per §8.2, the whole migration must run in a single SQLite transaction, so a mid-migration crash leaves the file untouched. Use the `try / commit / except: rollback; raise` pattern already established in 7a's `saveFile`. The `.db.bak-YYYY-MM-DD` copy step from §8.2 is arguably a separate concern (filesystem, not SQL) — decide whether it lands in Step 8 or is deferred to Step 10's merge UI. The plan's §8.2 groups it with migrations generally; I'd include it here so ANIKA users are protected from day one.
 
-**Approach — likely simplest.** Add an explicit centering step inside each window's `__init__` after `super().__init__(...)` and `setAttribute(WA_DeleteOnClose)` but before `self.show()`. Two idiomatic options:
+**Where the migration code goes.** `file_manager.py`'s current `initFile()` has a Case 2 block for "Already unified MERCY format" with a `dbVersion` check — that's the natural home for `if dbVersion < 2: migrate_anika_v1_to_v2(conn)`. The `migrate_anika_v1_to_v2` function itself belongs in `file_manager.py` (alongside `initFile`) rather than a new file; it's tightly coupled to schema creation. After migration, the in-memory `Database` load path can stop touching `parts.pad` / etc. — but **don't remove the load-path fallback yet** — keep it until Step 9 lands, so a freshly migrated file is provably loadable by the current `loadFile`. (The load path currently calls `stringToList` on those columns; once the columns are gone it'll raise `KeyError` on the row-dict lookup. Update the load path to check `db_version >= 2` and read from `part_pads` / `part_misc` / `mixture_components` instead, with the old per-row decode reserved for pre-migration files.)
 
-  a. **Center on screen** (matches old behavior):
-     ```python
-     screen = self.screen().availableGeometry()  # or QApplication.primaryScreen().availableGeometry()
-     frame = self.frameGeometry()
-     frame.moveCenter(screen.center())
-     self.move(frame.topLeft())
-     ```
-     Tricky bit: `frameGeometry()` is only reliable *after* the widget has been shown once (Qt doesn't know the frame size pre-show on some platforms). The usual workaround is to call this after the first `show()`, or to use `sizeHint()` + manual arithmetic.
-  b. **Center on parent** (arguably nicer UX for modal-ish sub-windows):
-     ```python
-     geo = self.geometry()
-     geo.moveCenter(mainApp.geometry().center())
-     self.move(geo.topLeft())
-     ```
-     Uses the pre-show geometry, which is based on `sizeHint()` — usually close enough and doesn't require a post-show re-center.
+**Verification approach.** Prepare a small hand-crafted legacy ANIKA `.db` with known rows: 2 mixtures (one with 3 materials, one with 1), 3 parts (one with pads, one with misc, one with both). Open under MERCY; confirm migration ran (check `db_version=2`, check `mixture_components` / `part_pads` / `part_misc` populated, check `parts` has only the 12 surviving columns). Save-and-reload roundtrip: confirm values survive. Offscreen smoke test suffices for correctness; no GUI needed for the migration itself.
 
-**Where to apply.** 21 window classes touched by 7c-3 — same list as §12.2 Step 7c-3 item 2. A helper function `centerOnScreen(widget)` or `centerOnParent(widget, parent)` in `utils.py` would avoid repeating the boilerplate 21 times. Each window's `__init__` would then call `centerOnScreen(self)` (or `centerOnParent(self, mainApp)`) after `setAttribute(WA_DeleteOnClose)` and before `self.show()`.
-
-**Alternative — drop the `Qt.Window` flag route.** An option worth considering: revert the parent-retention mechanism to something else (e.g., a retained-but-cleaned-up `self.windows` list with a `destroyed`-signal cleanup hook) so windows stay parentless and get their original placement back. This undoes 7c-3's approach. Probably not worth it — explicit centering is straightforward and doesn't regress the leak fix.
-
-**Verification.** In a real (non-offscreen) session, open one window from each of the 12 tab files; confirm it opens centered. Offscreen tests can verify that `move()` was called with reasonable coordinates, but visual centering has to be eyeballed on the target display.
+**Follow-ups explicitly NOT in Step 8.** BECKY migration (shift split, base64 decode in reviews/notes details) is Step 9. DB merging (combining ANIKA+BECKY files) is Step 10. Production feature is Step 11. Keep Step 8 strictly about ANIKA normalization.
 
 ---
 
