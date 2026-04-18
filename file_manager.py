@@ -1,6 +1,8 @@
 import sqlite3
 import datetime
 import logging
+import os
+import shutil
 
 from app import MainWindow
 from records import (
@@ -8,12 +10,16 @@ from records import (
     Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB,
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance
 )
+from utils import stringToList
 
-# Bumped whenever the unified schema changes. Step 4 establishes v1:
-# the superset of the (still base64-encoded) ANIKA schema + the (still compound-shift) BECKY
-# schema + the new production table. Schema normalization (§3.1) happens in Steps 8-9, which
-# will bump this accordingly.
-MERCY_DB_VERSION = 1
+# Bumped whenever the unified schema changes.
+#   v1 — Step 4: superset schema with base64-encoded ANIKA compound columns and compound BECKY
+#        shift column still in place.
+#   v2 — Step 8: ANIKA schema normalized. `mixtures.materials`/`weights` replaced by
+#        `mixture_components`; `parts.pad`/`padsPerBox`/`misc` replaced by `part_pads`/`part_misc`;
+#        `parts.loading`/`unloading`/`inspection`/`greenScrap` dropped (§3.1, §3.2).
+#   v3+ — Step 9 will normalize BECKY (shift split, base64 decode of review/note details).
+MERCY_DB_VERSION = 2
 
 # Table-set fingerprints for format detection (§8.1 of MERGE_PLAN).
 ANIKA_TABLES = {"globals", "materials", "mixtures", "packaging", "parts",
@@ -32,16 +38,19 @@ class FileManager:
     # ---- schema creation helpers -----------------------------------------------------------
 
     def _createAnikaTables(self):
-        # Pre-normalization ANIKA schema (still uses base64-encoded compound fields). Step 8
-        # will migrate these to mixture_components / part_pads / part_misc and drop the dead
-        # columns from `parts`.
+        # v2 normalized ANIKA schema. Base64-encoded compound columns replaced by child
+        # tables (mixture_components, part_pads, part_misc); dead columns dropped from
+        # `parts` (§3.1, §3.2).
         if self.dbFile is None:
             raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS globals(name PRIMARY KEY, value)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS materials(name PRIMARY KEY, cost, freight, SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, LOI, Plus50, Sub50Plus100, Sub100Plus200, Sub200Plus325, Sub325, otherChem)")
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS mixtures(name PRIMARY KEY, materials, weights)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS mixtures(name PRIMARY KEY)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS mixture_components(mixture, material, weight REAL, sort_order INTEGER, UNIQUE(mixture, material))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS packaging(name PRIMARY KEY, kind, cost)")
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS parts(name PRIMARY KEY, weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc, price, sales)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS parts(name PRIMARY KEY, weight, mix, pressing, turning, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, price, sales)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_misc(part, item, sort_order INTEGER, UNIQUE(part, item))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS materialInventory(name, date, cost, amount, UNIQUE(name, date))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS partInventory(name, date, cost, amount40, amount60, amount80, amount100, UNIQUE(name, date))")
 
@@ -96,6 +105,113 @@ class FileManager:
         except (ValueError, TypeError):
             return None
 
+    def _backupDbFile(self):
+        # Make a sibling copy before running a destructive migration (§8.2). Timestamp
+        # down to the second so same-day re-runs don't overwrite each other.
+        # Deliberately not checkpointing the WAL first: (a) a checkpoint with an open
+        # write transaction raises "database table is locked", and (b) uncommitted
+        # writes are in the WAL, not the main .db file — so copying the main file
+        # captures exactly the last-committed state, which is what we want for
+        # rollback. If migration later fails, closing without commit leaves the .db
+        # file identical to this backup.
+        if self.filePath is None:
+            raise RuntimeError('self.filePath is None')
+        stamp = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        backupPath = f"{self.filePath}.bak-{stamp}"
+        shutil.copy2(self.filePath, backupPath)
+        logging.info(f" --> Backup written to {backupPath}")
+        return backupPath
+
+    def _migrateAnikaV1ToV2(self):
+        # ANIKA schema normalization (§3.1, §3.2). Decode base64 compound columns into
+        # mixture_components / part_pads / part_misc; drop dead columns from `parts`.
+        # Runs inside the outer initFile transaction, so a failure rolls back cleanly.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running ANIKA v1->v2 migration: normalize compound columns")
+        self._backupDbFile()
+
+        # --- mixtures ---
+        mixRows = self.dbFile.execute("SELECT name, materials, weights FROM mixtures").fetchall()
+        self.dbFile.execute(
+            "CREATE TABLE IF NOT EXISTS mixture_components("
+            "mixture, material, weight REAL, sort_order INTEGER, "
+            "UNIQUE(mixture, material))"
+        )
+        for (mixName, matsEnc, wtsEnc) in mixRows:
+            materials = stringToList(matsEnc, str) if matsEnc else []
+            weights = stringToList(wtsEnc, float) if wtsEnc else []
+            if len(materials) != len(weights):
+                raise RuntimeError(
+                    f"Mixture {mixName!r}: materials ({len(materials)}) / weights ({len(weights)}) length mismatch"
+                )
+            for i, (mat, wt) in enumerate(zip(materials, weights)):
+                self.dbFile.execute(
+                    "INSERT OR REPLACE INTO mixture_components VALUES (?, ?, ?, ?)",
+                    (mixName, mat, wt, i)
+                )
+
+        self.dbFile.execute("CREATE TABLE mixtures_new(name PRIMARY KEY)")
+        self.dbFile.execute("INSERT INTO mixtures_new (name) SELECT name FROM mixtures")
+        self.dbFile.execute("DROP TABLE mixtures")
+        self.dbFile.execute("ALTER TABLE mixtures_new RENAME TO mixtures")
+
+        # --- parts ---
+        partRows = self.dbFile.execute(
+            "SELECT name, pad, padsPerBox, misc FROM parts"
+        ).fetchall()
+        self.dbFile.execute(
+            "CREATE TABLE IF NOT EXISTS part_pads("
+            "part, pad, padsPerBox INTEGER, sort_order INTEGER, "
+            "UNIQUE(part, pad))"
+        )
+        self.dbFile.execute(
+            "CREATE TABLE IF NOT EXISTS part_misc("
+            "part, item, sort_order INTEGER, "
+            "UNIQUE(part, item))"
+        )
+        for (partName, padEnc, ppbEnc, miscEnc) in partRows:
+            pads = stringToList(padEnc, str) if padEnc else []
+            ppbs = stringToList(ppbEnc, int) if ppbEnc else []
+            miscs = stringToList(miscEnc, str) if miscEnc else []
+            if len(pads) != len(ppbs):
+                raise RuntimeError(
+                    f"Part {partName!r}: pad ({len(pads)}) / padsPerBox ({len(ppbs)}) length mismatch"
+                )
+            for i, (pad, ppb) in enumerate(zip(pads, ppbs)):
+                self.dbFile.execute(
+                    "INSERT OR REPLACE INTO part_pads VALUES (?, ?, ?, ?)",
+                    (partName, pad, ppb, i)
+                )
+            for i, item in enumerate(miscs):
+                self.dbFile.execute(
+                    "INSERT OR REPLACE INTO part_misc VALUES (?, ?, ?)",
+                    (partName, item, i)
+                )
+
+        # Recreate `parts` without pad/padsPerBox/misc (now in child tables) and without
+        # loading/unloading/inspection/greenScrap (dead per §3.2). Name columns explicitly —
+        # SELECT * across a shape change would silently misalign.
+        self.dbFile.execute(
+            "CREATE TABLE parts_new("
+            "name PRIMARY KEY, weight, mix, pressing, turning, "
+            "fireScrap, box, piecesPerBox, pallet, boxesPerPallet, "
+            "price, sales)"
+        )
+        self.dbFile.execute(
+            "INSERT INTO parts_new "
+            "(name, weight, mix, pressing, turning, fireScrap, "
+            "box, piecesPerBox, pallet, boxesPerPallet, price, sales) "
+            "SELECT name, weight, mix, pressing, turning, fireScrap, "
+            "box, piecesPerBox, pallet, boxesPerPallet, price, sales "
+            "FROM parts"
+        )
+        self.dbFile.execute("DROP TABLE parts")
+        self.dbFile.execute("ALTER TABLE parts_new RENAME TO parts")
+
+        self._setDbVersion(2)
+        logging.info(" --> ANIKA v1->v2 migration complete")
+
     # ---- initFile --------------------------------------------------------------------------
 
     def initFile(self):
@@ -128,21 +244,26 @@ class FileManager:
                 cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(materials)").fetchall()]
                 if 'otherChem' not in cols:
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
+                if dbVersion < 2:
+                    self._migrateAnikaV1ToV2()
                 self.dbFile.commit()
-                # Future: add dbVersion < MERCY_DB_VERSION migrations here (Steps 8-11).
                 return True
 
-            # Case 3: Legacy ANIKA DB. Add empty employee + production tables, stamp version.
-            # Schema normalization (mixture_components, part_pads, etc.) is deferred to Step 8.
+            # Case 3: Legacy ANIKA DB. Add empty employee + production tables, then run the
+            # ANIKA v1->v2 normalization on the existing ANIKA tables.
             if ("materials" in tables and "parts" in tables) and ("employees" not in tables):
                 logging.info(f" --> Detected legacy ANIKA format. Adding empty employee + production "
-                             f"tables. Full schema normalization will run in a later migration step.")
+                             f"tables, then normalizing ANIKA schema to v2.")
                 cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(materials)").fetchall()]
                 if 'otherChem' not in cols:
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
                 self._createBeckyTables()
                 self._createProductionTable()
-                self._setDbVersion(MERCY_DB_VERSION)
+                # Stamp v1 first so _migrateAnikaV1ToV2's version update from 1->2 is meaningful
+                # if the migration throws partway; the outer try/except will still close the
+                # connection without committing, leaving the original file untouched.
+                self._setDbVersion(1)
+                self._migrateAnikaV1ToV2()
                 self.dbFile.commit()
                 return True
 
@@ -225,11 +346,31 @@ class FileManager:
         for name in db.mixtures:
             vals = db.mixtures[name].getTuple()
             try:
-                self.dbFile.execute("INSERT OR REPLACE INTO mixtures VALUES (?, ?, ?)", vals)
+                self.dbFile.execute("INSERT OR REPLACE INTO mixtures VALUES (?)", vals)
                 logging.info(f" * Saving {vals}")
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("mixtures", db.mixtures)
+
+        logging.info(f"Saving mixture components to {self.filePath}")
+        # Strategy: for each in-memory mixture, wipe its child rows and re-insert. Then
+        # orphan-clean any child rows whose mixture parent no longer exists.
+        for name in db.mixtures:
+            self.dbFile.execute("DELETE FROM mixture_components WHERE mixture=?", (name,))
+            for vals in db.mixtures[name].getComponentTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO mixture_components VALUES (?, ?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT mixture, material FROM mixture_components")
+        orphans = [row for row in res.fetchall() if row[0] not in db.mixtures]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM mixture_components WHERE (mixture, material)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan components {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan components {orphans}: {repr(e)}")
 
         logging.info(f"Saving packaging to {self.filePath}")
         for name in db.packaging:
@@ -245,11 +386,47 @@ class FileManager:
         for name in db.parts:
             vals = db.parts[name].getTuple()
             try:
-                self.dbFile.execute("INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
+                self.dbFile.execute("INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
                 logging.info(f" * Saving {vals}")
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("parts", db.parts)
+
+        logging.info(f"Saving part pads to {self.filePath}")
+        for name in db.parts:
+            self.dbFile.execute("DELETE FROM part_pads WHERE part=?", (name,))
+            for vals in db.parts[name].getPadTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO part_pads VALUES (?, ?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT part, pad FROM part_pads")
+        orphans = [row for row in res.fetchall() if row[0] not in db.parts]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM part_pads WHERE (part, pad)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan part pads {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan part pads {orphans}: {repr(e)}")
+
+        logging.info(f"Saving part misc to {self.filePath}")
+        for name in db.parts:
+            self.dbFile.execute("DELETE FROM part_misc WHERE part=?", (name,))
+            for vals in db.parts[name].getMiscTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO part_misc VALUES (?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT part, item FROM part_misc")
+        orphans = [row for row in res.fetchall() if row[0] not in db.parts]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM part_misc WHERE (part, item)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan part misc {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan part misc {orphans}: {repr(e)}")
 
         logging.info(f"Saving materials inventories to {self.filePath}")
         for date in db.inventories:
@@ -483,6 +660,17 @@ class FileManager:
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded {mixture}")
 
+        logging.info(f"Loading mixture components from {self.filePath}")
+        res = self.dbFile.execute(
+            "SELECT mixture, material, weight, sort_order FROM mixture_components "
+            "ORDER BY mixture, sort_order"
+        )
+        for (mixtureName, material, weight, _sort) in res.fetchall():
+            if mixtureName not in db.mixtures:
+                raise RuntimeError(f'mixture_components row references missing mixture {mixtureName!r}')
+            db.mixtures[mixtureName].add(material, weight)
+            logging.info(f" * Loaded component ({mixtureName}, {material}, {weight})")
+
         logging.info(f"Loading packaging from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM packaging")
         for values in res.fetchall():
@@ -502,6 +690,33 @@ class FileManager:
             part.db = db
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded {part}")
+
+        logging.info(f"Loading part pads from {self.filePath}")
+        res = self.dbFile.execute(
+            "SELECT part, pad, padsPerBox, sort_order FROM part_pads "
+            "ORDER BY part, sort_order"
+        )
+        for (partName, pad, padsPerBox, _sort) in res.fetchall():
+            if partName not in db.parts:
+                raise RuntimeError(f'part_pads row references missing part {partName!r}')
+            if db.parts[partName].pad is None:
+                db.parts[partName].pad = []
+            if db.parts[partName].padsPerBox is None:
+                db.parts[partName].padsPerBox = []
+            db.parts[partName].pad.append(pad)
+            db.parts[partName].padsPerBox.append(padsPerBox)
+            logging.info(f" * Loaded pad ({partName}, {pad}, {padsPerBox})")
+
+        logging.info(f"Loading part misc from {self.filePath}")
+        res = self.dbFile.execute(
+            "SELECT part, item, sort_order FROM part_misc "
+            "ORDER BY part, sort_order"
+        )
+        for (partName, item, _sort) in res.fetchall():
+            if partName not in db.parts:
+                raise RuntimeError(f'part_misc row references missing part {partName!r}')
+            db.parts[partName].misc.append(item)
+            logging.info(f" * Loaded misc ({partName}, {item})")
 
         logging.info(f"Loading material inventories from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM materialInventory")

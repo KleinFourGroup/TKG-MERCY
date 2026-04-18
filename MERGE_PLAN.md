@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–7 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 8**.
+**Status:** Implementation in progress — Steps 1–8 of 13 complete as of 2026-04-18. Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 9**.
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-18. Steps 1–7 complete; **Step 8 is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-18. Steps 1–8 complete; **Step 9 is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -535,7 +535,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 7c-3 | ✅ Done | Merge plan Step 7c-3: polish sweep |
 | 7d | ✅ Done | Merge plan Step 7d: clean up double-negation leftovers |
 | 7e | ✅ Done | Merge plan Step 7e: restore window centering |
-| 8–13 | ⏳ Pending | Per §9. |
+| 8  | ✅ Done | Merge plan Step 8: ANIKA schema migration |
+| 9–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -611,54 +612,67 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 - `adjustSize()` before reading `size()` is important — at `__init__` time the widget hasn't been laid out yet, so `size()` is the default `(640, 480)` or whatever and would mis-center. `adjustSize()` applies the layout's size hint without requiring a `show()` + re-center round-trip.
 - `screen is None` early-return guard handles the edge case where the widget has no screen (shouldn't happen after parenting to `mainApp`, but free insurance).
 
+**Step 8 — ANIKA schema migration landed (v1 → v2).** `MERCY_DB_VERSION` bumped from 1 to 2. Four groups of changes:
+
+1. **Schema creation updated to v2 shape.** `_createAnikaTables()` now creates the normalized schema directly: `mixtures(name PRIMARY KEY)` (no more `materials`/`weights`), `parts(name, weight, mix, pressing, turning, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, price, sales)` — 12 cols, the 7 dead/compound cols dropped — plus new child tables `mixture_components(mixture, material, weight REAL, sort_order INTEGER, UNIQUE(mixture, material))`, `part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))`, `part_misc(part, item, sort_order INTEGER, UNIQUE(part, item))`. Brand-new MERCY DBs (Case 1) are born at v2. Case 4 (legacy BECKY, no ANIKA data) also creates the v2 shape on the ANIKA side — no migration needed there since there's no data to rewrite.
+
+2. **Migration function `_migrateAnikaV1ToV2()`.** Decodes the base64-encoded compound columns with `utils.stringToList(...)`, inserts rows into the new child tables (preserving list order via `sort_order`), then recreates `mixtures` and `parts` without the dropped columns via the create-new / insert-named-cols / drop-old / rename-new pattern. Wired into `initFile()`: Case 2 (unified MERCY, `dbVersion < 2`) runs the migration directly; Case 3 (legacy ANIKA) first adds empty BECKY/production tables, stamps v1, then runs the v1→v2 migration — net result is any legacy ANIKA file lands on v2 in one open. Length-mismatch guards raise on malformed input.
+
+3. **Backup strategy: `.db.bak-YYYY-MM-DD-HHMMSS` sibling file, written before the destructive DDL in the migration function.** **Deviation from §8.2:** originally I tried `PRAGMA wal_checkpoint(TRUNCATE)` before the copy so the backup would include WAL'd pages. That raises `OperationalError: database table is locked` whenever a write transaction is already open (which it always is by the time migration starts — the Case 3 path has already created empty BECKY tables and stamped `db_version=1`). Dropped the checkpoint: uncommitted writes live in the WAL, not the main `.db`, so a plain `shutil.copy2` of the main file captures exactly the last-committed state. This turns out to be **ideal for rollback**: if migration fails and the connection closes without commit, the on-disk file reverts to match the backup. Explicit comment on `_backupDbFile` documents this. No confirmation dialog on backup creation — the `§8.2` mention of a confirm dialog is GUI work for a later step.
+
+4. **Save/load paths updated for the v2 shape.** `Mixture.getTuple()`/`fromTuple()` now handle only `(name,)`; `Mixture.getComponentTuples()` returns `[(mixture, material, weight, sort_order), ...]` for `mixture_components`. `Part.getTuple()`/`fromTuple()` drop to 12 cols (the dropped attrs `loading`/`unloading`/`inspection`/`greenScrap` are set to `None` on load — kept as vestigial instance attributes so `setProduction()` and `__str__` still work, but they no longer round-trip through the DB; see §12.3 for follow-up). `Part.getPadTuples()` / `getMiscTuples()` for the child tables. `file_manager.saveFile`: each child table uses a **per-parent DELETE-then-reinsert** strategy (wipe a mixture's components, insert the current list) plus a final orphan sweep for rows whose parent is no longer in memory. `file_manager.loadFile`: load parents first, then populate children via `ORDER BY parent, sort_order`. `listToString`/`stringToList` imports were removed from `records.py` (no longer used); `stringToB64`/`stringFromB64` remain for Step 9's BECKY details decode.
+
+**Verification.** `smoke.py` gained a `legacy_anika_migration` check that hand-crafts a v1 ANIKA DB with 2 mixtures (one 3-material, one 1-material) and 3 parts (one with 2 pads, one with 2 misc, one with 1 pad + 1 misc), opens it with MERCY, and asserts: `db_version=2`, `mixtures` has just the `name` column, `parts` has the 12 expected cols, each child table has the expected rows in the expected order, the in-memory `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc` reconstruct correctly, a sibling `.db.bak-*` file was written, and a full save/reload roundtrip preserves the data. All three smoke checks (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`) pass. Case 1 (brand-new), Case 2 (v1 MERCY → v2), and Case 4 (legacy BECKY) were also spot-checked via throwaway scripts and verified manually in the GUI on the user's machine before commit.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
 - One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
-- Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
+- BECKY still pre-normalized: base64-wrapped `reviews.details` and `notes.details`, compound `employees.shift` — Step 9.
+- **Vestigial `Part` attributes.** `Part.loading`/`unloading`/`inspection`/`greenScrap` are still instance attributes, accepted by `setProduction()` and printed by `__str__`, but no longer persisted (Step 8 dropped the DB columns). UI forms in `parts_tab.py` may still collect values for them, which then vanish on save/reload — misleading but not breaking, because cost calcs already used the globals-table counterparts (§3.2). Polish pass post-Step-9 should drop the attrs + `setProduction` params + any UI widgets that feed them.
 - Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope; see Step 5 note above.
 
 ### 12.4 Test conventions used so far
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Two checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Step 8). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Three checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
+- `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v2 schema shape (`mixtures`=[`name`] only; `parts` = 12 expected cols), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. This is the template Step 9 should follow — a `legacy_becky_migration` function seeding a v1 BECKY-shape DB (with compound shift + base64 details) would verify the v2→v3 migration.
 
-Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable (e.g. Step 8 may want a `smoke_anika_roundtrip` that seeds a legacy ANIKA DB, opens it, verifies the v1→v2 migration fired).
+Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 8
+### 12.5 Pick-up notes for Step 9
 
-**Per §9, Step 8 is the ANIKA migration** — heavy lifting to bring legacy ANIKA `.db` files up to the normalized MERCY schema. Step 4 already lays empty BECKY-origin tables over an ANIKA DB and stamps `db_version=1`; Step 8 does the *in-place rewrite* of the ANIKA-origin tables themselves. Key references: §3.1 (base64-encoded compound fields), §3.2 (dead/inconsistent `parts` columns), §5.1 (target schema), §8.3 (migration steps 1–8).
+**Per §9, Step 9 is the BECKY migration** — the symmetric counterpart to Step 8's ANIKA work. Bring legacy BECKY `.db` files (and any post-Step-8 v2 MERCY file that still carries BECKY's pre-normalization shape) up to v3. Key references: §3.1 (base64-encoded `reviews.details` / `notes.details`), `employees.shift` compound field, §3.3 (the old incomplete `updateEmployee()` — already fixed in 7a, but Step 9 still has to handle orphans that may have slipped in before the fix), §5.1 target schema, §8.4 (migration steps 1–7).
 
-**Scope recap from §8.3.** Eight in-order steps:
-1. Decode `mixtures.materials` and `mixtures.weights` (base64 `#`-delimited).
-2. Create `mixture_components`, insert decoded rows, drop `materials`/`weights` columns from `mixtures`.
-3. Decode `parts.pad`, `parts.padsPerBox`, `parts.misc` (same base64 `#`-delim encoding).
-4. Create `part_pads` and `part_misc`, insert decoded rows.
-5. Recreate `parts` without `pad`, `padsPerBox`, `misc`, `loading`, `unloading`, `inspection`, `greenScrap` (SQLite can't `DROP COLUMN` in its lightweight `ALTER TABLE` form pre-3.35; we've been using the recreate-and-copy pattern for portability anyway).
-6. Create empty BECKY-origin tables — **already done by Step 4's Case 4 ("Legacy ANIKA format detected") pathway in `file_manager.initFile()`**. No additional work here for an in-place migration; just don't double-create.
-7. Create `production` table — **also already done by Step 4's legacy ANIKA pathway.** Ditto on not double-creating.
-8. Set `globals.db_version = 1` — **done by Step 4.** Step 8 bumps it from 1 → 2 when the ANIKA normalization has actually run. (If we keep v1 as "everything present but ANIKA-shaped" and v2 as "ANIKA normalized", the in-Case-2 migration block described in §12.2 Step 4 is the right place to put the rewrite: `if dbVersion < 2: migrate_anika_v1_to_v2()`. Bump `MERCY_DB_VERSION` from 1 to 2 at the top of `file_manager.py`.)
+**Scope from §8.4.** Three real pieces of work; the rest is already done by earlier steps:
+1. **Split `employees.shift`.** Currently stored as a single `"{shift}|{fullTime}"` string (e.g. `"2|1"`). Recreate `employees` with `shift INTEGER, fullTime INTEGER` columns; `SELECT` the old string, parse on `|`, insert into the new table. Same recreate-and-copy pattern Step 8 used for `parts` / `mixtures`. Name columns explicitly in the `INSERT INTO employees_new ... SELECT ... FROM employees`.
+2. **Decode `reviews.details` and `notes.details`.** Both fields store base64-wrapped plain text via `stringToB64`/`stringFromB64` (per `EmployeeReview.getTuple()` at `records.py:717` and `EmployeeNote.getTuple()` at `records.py:842`). SQLite TEXT handles newlines natively — the wrapping serves no purpose. Migration: `SELECT details, UPDATE details = <decoded>` for each row. No schema change for these two columns — just an in-place decode. Afterwards, drop the `stringToB64`/`stringFromB64` calls from the `getTuple`/`fromTuple` methods on both classes.
+3. **FK consistency sweep for `training` / `attendance` / `PTO`.** Step 7a fixed `Database.updateEmployee()` so it propagates ID changes to all six collections; legacy DBs written before that fix could still have dangling `idNum` references in those three tables. Step 9 should scan for rows whose `idNum` is absent from `employees` and log any orphans found (delete, or leave with a warning — Matthew's call; I'd log + delete in the migration, since orphaned rows will otherwise break the load path at `file_manager.py:582` / `:595` / `:608` where RuntimeError fires on unknown `idNum`).
 
-**Net new work for Step 8** — steps 1–5 above, plus the version-bump plumbing. Steps 6–7 are no-ops because Step 4 already handles them.
+**Already done by earlier steps** (don't redo): creating empty ANIKA-side tables (Step 4 Case 4 + Step 8 updates made `_createBeckyTables()`'s companion `_createAnikaTables()` v2-shape), creating `production` (Step 4), stamping an initial `db_version` (Step 4 and Step 8 combined).
 
-**Base64 encoding to decode.** From ANIKA's `utils.listToString(xs)` / `stringToList(s)` — the encoding is: join the list members with `#`, UTF-8-encode, base64-encode, decode back to ASCII for storage. The reverse: b64-decode, UTF-8-decode, `split("#")`. Pad list (`parts.pad` / `parts.padsPerBox`) and misc list (`parts.misc`) are both `#`-joined strings inside the base64 wrapper. Mixtures the same — `materials` is `#`-joined material names, `weights` is `#`-joined float strings. **Empty lists:** check what ANIKA writes — historically, `listToString([])` in both apps produced an empty string (no base64 round-trip on an empty list); don't crash on that. (Also check: does `stringToList("")` return `[]`? If not, handle the empty-string case explicitly.)
+**Version bump.** `MERCY_DB_VERSION = 2` → `3` at the top of `file_manager.py`. Wire into `initFile()` Case 2 as the second arm: `if dbVersion < 3: self._migrateBeckyV2ToV3()`. The existing Case 4 (legacy BECKY) should run the BECKY migration too — stamp v2 first, then run `_migrateBeckyV2ToV3`. Case 3 (legacy ANIKA) stamps v1 → migrates to v2 currently; after Step 9, legacy ANIKA files don't need the BECKY decode (their BECKY tables are created empty), but they should still be stamped at v3 (the current DB version) once migration finishes. Simplest: after `_migrateAnikaV1ToV2()` succeeds, bump to v3 unconditionally in Case 3, and let `_migrateBeckyV2ToV3` be a no-op when the BECKY tables are empty.
 
-**Key gotcha — column ordering after recreate.** When recreating `parts` without the 7 dropped columns, the `SELECT` that feeds the `INSERT INTO parts_new` must *not* use `SELECT *` — it needs to name the surviving columns explicitly, in the same order as the new table's column list. An `INSERT ... SELECT *` from the old `parts` will fail or — worse — silently misalign if the column order differs. Same hazard applies to the `mixtures` recreate (dropping `materials`/`weights`).
+Similarly update `_createBeckyTables()` to create the v3-shape schema directly (`shift INTEGER, fullTime INTEGER` split; `details` columns documented as plain TEXT) so Case 1 (brand-new) and Case 3 (legacy ANIKA) get empty v3 BECKY tables without migration.
 
-**Key gotcha — `part_pads` preserves order via `sort_order`.** The decoded list is ordered; when inserting rows, include a `sort_order INTEGER` value per row starting at 0 (or 1). Matches the §5.1 schema (`part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))`). Same for `part_misc.sort_order` and `mixture_components.sort_order`.
+**Backup.** Call `_backupDbFile()` at the top of `_migrateBeckyV2ToV3()` — same pattern Step 8 established. The helper already handles the WAL-lock gotcha (don't reintroduce the `wal_checkpoint` call).
 
-**Atomicity.** Per §8.2, the whole migration must run in a single SQLite transaction, so a mid-migration crash leaves the file untouched. Use the `try / commit / except: rollback; raise` pattern already established in 7a's `saveFile`. The `.db.bak-YYYY-MM-DD` copy step from §8.2 is arguably a separate concern (filesystem, not SQL) — decide whether it lands in Step 8 or is deferred to Step 10's merge UI. The plan's §8.2 groups it with migrations generally; I'd include it here so ANIKA users are protected from day one.
+**Key gotcha — column ordering when recreating `employees`.** The new table column order must match what `Employee.getTuple()` produces. Check `Employee.fromTuple` at `records.py:682` and `getTuple` at `records.py:662` — both currently encode `shift` as `f"{self.shift}|{self.fullTime}"`. Step 9 needs to: (a) update the model so `getTuple` emits `shift, fullTime` as two separate fields and `fromTuple` reads them as two separate fields, and (b) update the `INSERT OR REPLACE INTO employees VALUES (?, ?, ..., ?)` in `file_manager.saveFile` to match the new column count. §5.1's target schema lists the expected final column order.
 
-**Where the migration code goes.** `file_manager.py`'s current `initFile()` has a Case 2 block for "Already unified MERCY format" with a `dbVersion` check — that's the natural home for `if dbVersion < 2: migrate_anika_v1_to_v2(conn)`. The `migrate_anika_v1_to_v2` function itself belongs in `file_manager.py` (alongside `initFile`) rather than a new file; it's tightly coupled to schema creation. After migration, the in-memory `Database` load path can stop touching `parts.pad` / etc. — but **don't remove the load-path fallback yet** — keep it until Step 9 lands, so a freshly migrated file is provably loadable by the current `loadFile`. (The load path currently calls `stringToList` on those columns; once the columns are gone it'll raise `KeyError` on the row-dict lookup. Update the load path to check `db_version >= 2` and read from `part_pads` / `part_misc` / `mixture_components` instead, with the old per-row decode reserved for pre-migration files.)
+**Key gotcha — `Employee.shift` type coercion in tests.** Per §12.4 gotcha note: setting `e.shift = "1|1"` on an in-memory `Employee` object is currently wrong because `getTuple` re-appends `|{fullTime}`. After Step 9, `shift` is a plain int; test code should just set `e.shift = 1; e.fullTime = True` (already the correct idiom) or use `setJob()`.
 
-**Verification approach.** Prepare a small hand-crafted legacy ANIKA `.db` with known rows: 2 mixtures (one with 3 materials, one with 1), 3 parts (one with pads, one with misc, one with both). Open under MERCY; confirm migration ran (check `db_version=2`, check `mixture_components` / `part_pads` / `part_misc` populated, check `parts` has only the 12 surviving columns). Save-and-reload roundtrip: confirm values survive. Offscreen smoke test suffices for correctness; no GUI needed for the migration itself.
+**Atomicity.** Same single-transaction pattern as Step 8: migration is wired into `initFile()` which commits at the end; any raise aborts the whole thing via connection close. No special work needed beyond `try`/`commit`/`except`/`close`.
 
-**Follow-ups explicitly NOT in Step 8.** BECKY migration (shift split, base64 decode in reviews/notes details) is Step 9. DB merging (combining ANIKA+BECKY files) is Step 10. Production feature is Step 11. Keep Step 8 strictly about ANIKA normalization.
+**Smoke-test scaffolding.** Add a `legacy_becky_migration` function to `smoke.py` modeled on `legacy_anika_migration`. Seed a pre-v3 BECKY-shape DB with: at least one employee with a compound shift (e.g. `"2|1"`), one review with a base64-wrapped details string, one note with a base64-wrapped details string, and — to exercise the orphan sweep — one `training` or `attendance` row whose `idNum` doesn't match any employee. Open with MERCY; assert `db_version=3`, `employees.shift`/`fullTime` split correctly, `reviews.details`/`notes.details` are plain text, orphan rows were dropped (and logged), and a save/reload roundtrip preserves the real data.
+
+**Cleanup enabled by Step 9.** Once BECKY migration lands, `utils.listToString` / `stringToList` / `stringToB64` / `stringFromB64` are all unreferenced — remove them from `utils.py`, and clean up the corresponding imports in `records.py` (currently `from utils import stringToB64, stringFromB64`). Also the vestigial `Part` attributes noted in §12.3 can be dropped from the model + `setProduction` signature + any `parts_tab.py` UI that feeds them — reasonable to fold into the same commit or handle as a small Step 9.5 polish.
+
+**Follow-ups explicitly NOT in Step 9.** DB merging (importing an ANIKA `.db` into a BECKY `.db` or vice versa) is Step 10. Production feature is Step 11. Keep Step 9 focused on BECKY normalization.
 
 ---
 

@@ -1,6 +1,6 @@
 import sqlite3
 import datetime
-from utils import listToString, stringToList, stringToB64, stringFromB64
+from utils import stringToB64, stringFromB64
 import defaults
 import logging
 
@@ -162,16 +162,18 @@ class Mixture:
         return ret
     
     def getTuple(self):
-        return (
-            self.name,
-            listToString(self.materials, str),
-            listToString(self.weights, float)
-        )
-    
+        return (self.name,)
+
     def fromTuple(self, values):
         self.name = values[0]
-        self.materials = stringToList(values[1], str)
-        self.weights = stringToList(values[2], float)
+        self.materials = []
+        self.weights = []
+
+    def getComponentTuples(self):
+        return [
+            (self.name, self.materials[i], self.weights[i], i)
+            for i in range(len(self.materials))
+        ]
 
     def __str__(self) -> str:
         pairs = []
@@ -389,43 +391,41 @@ class Part:
         return self.weight * (1 - self.getScrap()) / self.getLaborHours()
     
     def getTuple(self):
-            return (
-                self.name,
-                self.weight,
-                self.mix,
-                self.pressing,
-                self.turning,
-                self.loading,
-                self.unloading,
-                self.inspection,
-                self.greenScrap,
-                self.fireScrap,
-                self.box,
-                self.piecesPerBox,
-                self.pallet,
-                self.boxesPerPallet,
-                listToString(self.pad, str),
-                listToString(self.padsPerBox, int),
-                listToString(self.misc, str),
-                self.price,
-                self.sales
-            )
-    
+        return (
+            self.name,
+            self.weight,
+            self.mix,
+            self.pressing,
+            self.turning,
+            self.fireScrap,
+            self.box,
+            self.piecesPerBox,
+            self.pallet,
+            self.boxesPerPallet,
+            self.price,
+            self.sales
+        )
+
     def fromTuple(self, values):
         self.name = values[0]
-        prod = list(values[1:10])
-        prod.append(values[17])
-        self.setProduction(*prod)
+        # loading/unloading/inspection/greenScrap dropped from the schema in v2 (§3.2);
+        # UI may still set them in memory but they are no longer persisted.
+        self.setProduction(values[1], values[2], values[3], values[4],
+                           None, None, None, None,
+                           values[5], values[10])
         self.setPackaging(
-            values[10],
-            values[11],
-            values[12],
-            values[13],
-            stringToList(values[14], str),
-            stringToList(values[15], int),
-            stringToList(values[16], str)
+            values[6], values[7], values[8], values[9],
+            [], [], []
         )
-        self.sales = values[18]
+        self.sales = values[11]
+
+    def getPadTuples(self):
+        pads = self.pad or []
+        ppb = self.padsPerBox or []
+        return [(self.name, pads[i], ppb[i], i) for i in range(len(pads))]
+
+    def getMiscTuples(self):
+        return [(self.name, self.misc[i], i) for i in range(len(self.misc))]
 
     def __str__(self) -> str:
         if self.fireScrap is None:
