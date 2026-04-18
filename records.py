@@ -2,6 +2,7 @@ import sqlite3
 import datetime
 from utils import listToString, stringToList, stringToB64, stringFromB64
 import defaults
+import logging
 
 class Material:
     def __init__(self, name) -> None:
@@ -975,7 +976,6 @@ class EmployeePointsDB:
                 sumPt += self.points[currDate].value
                 diff = (nextDate - currDate).days
                 credit = (diff - 1) // 90
-                print(f"{diff} days from {currDate.isoformat()} to {nextDate.isoformat()}, deducting {credit} points from a total of {sumPt}!")
                 sumPt = max(sumPt - credit, 0)
         return sumPt
 
@@ -1510,16 +1510,16 @@ class Database:
         for entry in self.materials:
             cost = self.materials[entry].getCostPerLb()
             if not cost == None:
-                print("{} {}".format(self.materials[entry].name, cost))
+                logging.info("{} {}".format(self.materials[entry].name, cost))
     
     def mixtureCosts(self):
         for entry in self.mixtures:
-            print("{} {}".format(self.mixtures[entry].name, self.mixtures[entry].getCost()))
+            logging.info("{} {}".format(self.mixtures[entry].name, self.mixtures[entry].getCost()))
     
     def partCosts(self):
         for entry in self.parts:
             part = self.parts[entry]
-            print("{} | {:.4f} {:.4f} -> {:.4f} {:.4f} {:.4f} -> {:.4f} {:.4f} -> {:.4f} | {:.4f} | {:.2f}% {:.2f}% {:.4f} | {:.4f}".format(part.name, part.getMatlCost(),  part.getLaborCost(),
+            logging.info("{} | {:.4f} {:.4f} -> {:.4f} {:.4f} {:.4f} -> {:.4f} {:.4f} -> {:.4f} | {:.4f} | {:.2f}% {:.2f}% {:.4f} | {:.4f}".format(part.name, part.getMatlCost(),  part.getLaborCost(),
                                           part.getGrossMatlLaborCost(), part.getPackagingCost(), part.getManufacturingOverhead(),
                                           part.getManufacturingCost(), part.getSGA(),
                                           part.getTotalCost(), part.price,

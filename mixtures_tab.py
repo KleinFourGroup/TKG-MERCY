@@ -7,6 +7,7 @@ from utils import getComboBox, widgetFromList, checkInput, startfile
 
 from report import PDFReport
 import os
+import logging
 
 class MixturesTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
@@ -75,12 +76,12 @@ class MixturesTab(QWidget):
             # self.error = ErrorWindow(["No mixtures selected."])
             errorMessage(self.mainApp, ["No mixtures selected."])
         for mixture in self.selection:
-            print(mixture)
+            logging.debug(mixture)
             self.windows.append(MixturesDetailsWindow(mixture, self.mainApp))
     
     def openEdits(self):
         for mixture in self.selection:
-            print(mixture)
+            logging.debug(mixture)
             self.windows.append(MixturesEditWindow(mixture, self.mainApp))
     
     def openNew(self):

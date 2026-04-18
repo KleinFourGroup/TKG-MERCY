@@ -11,6 +11,7 @@ from records import Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePoi
 from error import ErrorWindow, errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile
 from report import PDFReport
+import logging
 
 class EmployeeOverviewTab(QWidget):
     def __init__(self, mainApp: MainWindow):
@@ -100,7 +101,7 @@ class EmployeeTab(QWidget):
     
     def openEdits(self):
         for employee in self.selection:
-            print(employee)
+            logging.debug(employee)
             self.windows.append(EmployeeEditWindow(employee, self.mainApp, self.active))
     
     def openNew(self):
@@ -299,7 +300,7 @@ class EmployeeEditWindow(QWidget):
                     raise RuntimeError('not isNone')
                 self.mainApp.db.updateEmployee(self.employee.idNum, id)
             self.employee.setName(lastName, firstName)
-            print(self.calendar.selectedDate())
+            logging.debug(self.calendar.selectedDate())
             self.employee.setAnniversary(fromQDate(self.calendar.selectedDate()))
             self.employee.setStatus(self.active)
             self.employee.setJob(role, int(self.shift.currentText()), self.fullTime.currentText() == "True")

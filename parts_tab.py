@@ -8,6 +8,7 @@ from utils import getComboBox, widgetFromList, checkInput, startfile
 
 from report import PDFReport
 import os, math
+import logging
 
 class PartsTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
@@ -83,7 +84,7 @@ class PartsTab(QWidget):
             # self.error = ErrorWindow(["No parts selected."])
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
-            print(part)
+            logging.debug(part)
             self.windows.append(PartsDetailsWindow(part, self.mainApp))
     
     def openMargins(self):
@@ -91,12 +92,12 @@ class PartsTab(QWidget):
             # self.error = ErrorWindow(["No parts selected."])
             errorMessage(self.mainApp, ["No parts selected."])
         for part in self.selection:
-            print(part)
+            logging.debug(part)
             self.windows.append(PartsMarginsWindow(part, self.mainApp))
     
     def openEdits(self):
         for part in self.selection:
-            print(part)
+            logging.debug(part)
             self.windows.append(PartsEditWindow(part, self.mainApp))
 
     def deleteSelection(self):
@@ -268,10 +269,10 @@ class PartsEditWindow(QWidget):
     
     def quote(self, state):
         if state == Qt.CheckState.Checked.value:
-            print("Disable")
+            logging.debug("Disable")
             self.mainLayout[5][3].setEnabled(False)
         else:
-            print("Enable")
+            logging.debug("Enable")
             self.mainLayout[5][3].setEnabled(True)
 
     def readData(self, isNew):

@@ -4,6 +4,7 @@ from app import MainWindow
 from records import Package
 from error import ErrorWindow, errorMessage
 from utils import getComboBox, widgetFromList, checkInput
+import logging
 
 class PackagingTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
@@ -61,7 +62,7 @@ class PackagingTab(QWidget):
     
     def openEdits(self):
         for item in self.selection:
-            print(item)
+            logging.debug(item)
             self.windows.append(PackagingEditWindow(item, self.mainApp))
     
     def openNew(self):

@@ -4,6 +4,7 @@ from app import MainWindow
 from records import Material
 from error import ErrorWindow, errorMessage
 from utils import getComboBox, widgetFromList, checkInput
+import logging
 
 class MaterialsTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
@@ -69,12 +70,12 @@ class MaterialsTab(QWidget):
             # self.error = ErrorWindow(["No materials selected."])
             errorMessage(self.mainApp, ["No materials selected."])
         for material in self.selection:
-            print(material)
+            logging.debug(material)
             self.windows.append(MaterialsDetailsWindow(material, self.mainApp))
     
     def openEdits(self):
         for material in self.selection:
-            print(material)
+            logging.debug(material)
             self.windows.append(MaterialsEditWindow(material, self.mainApp))
     
     def openNew(self):

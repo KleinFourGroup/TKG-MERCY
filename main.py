@@ -1,8 +1,11 @@
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
+import logging
 import os
 
 from app import MainWindow
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 try:
     from ctypes import windll  # Only exists on Windows.

@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish); see §12 for current state, deviations, and deferred items before picking up **Step 7c-2**.
+**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation); see §12 for current state, deviations, and deferred items before picking up **Step 7c-3**.
 
 ---
 
@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 complete; **Step 7c-2 is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 complete; **Step 7c-3 is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three:
 
@@ -529,8 +529,9 @@ Step 7 has been split into sub-steps to keep each review surface small. The hygi
 | 7a | ✅ Done | Merge plan Step 7a: correctness fixes |
 | 7b | ✅ Done | Merge plan Step 7b: tighten Database signature |
 | 7c-1 | ✅ Done | Merge plan Step 7c-1: assert → raise sweep |
-| 7c-2 | ⏳ Next | `print()` → `logging` (136 sites) + drop BECKY debug print. |
+| 7c-2 | ✅ Done | Merge plan Step 7c-2: print → logging |
 | 7c-3 | ⏳ Pending | `not x == None` → `is not None`, window-close leak, `LBS_PER_TON`, `requirements.txt`. |
+| 7d | ⏳ Pending | Clean up 2 double-negation leftovers from 7c-1 (`if not (not isNone):` in `employees_tab.py:298`, `parts_tab.py:317`). |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -572,6 +573,18 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 - **The 7c-3 `not x == None` sweep now has fewer targets** because the `assert(not x == None)` variants got rewritten to `if x is None:` in this step. The 194-site count from the original survey is pre-7c-1; 7c-3 will see a reduced number.
 - **Line-count growth is real** — most asserts went from one line to two, so the diff is +482/-241 even though logic is unchanged. No functional change beyond the exception type flipping from `AssertionError` (disable-able via `-O`) to `RuntimeError`.
 - **Verification:** all 23 source files still compile; `grep -E '^\s*assert[\s(]'` returns zero hits in our source; offscreen `MainWindow()` build passes; smoke test confirmed converted `setID(-1)` / `setID(None)` now raise `RuntimeError` with the expected messages.
+- **Known double-negation leftovers (Step 7d).** `assert(not isNone)` at two sites (`employees_tab.py:298`, `parts_tab.py:317`) became `if not (not isNone):` because the script's `not X` pattern only caught `not X == None` and `not X in Y` — a plain `not X` fell through to the generic wrapper. Both should become `if isNone:`. Kept as a separate step since they're cosmetic and isolated.
+
+**Step 7c-2 — `print()` → `logging` landed.** All 136 source-file print calls were reclassified:
+
+- **`file_manager.py` (120 prints → 118 logging.info/error via script + 2 logging.info manual).** Default was `logging.info`; any print whose content began with `Error`/`error` within the first ~40 chars was routed to `logging.error` instead. Two multi-line `print(...)` calls (lines 138/151, `Detected legacy ANIKA/BECKY format` messages that spanned a string-continuation) didn't match the single-line regex and were converted with targeted Edits.
+- **`records.py` (4 prints → 3 logging.info + 1 deletion).** The debug print in `EmployeePointsDB.currentPoints` (`"{diff} days from {curr} to {next}, deducting {credit} points from a total of {sumPt}!"`) was **deleted** per §3.8. The three `Database.materialCosts()` / `mixtureCosts()` / `partCosts()` diagnostic dumpers were converted to `logging.info`. The big multi-line `partCosts` format string print was converted with a targeted Edit (didn't match the single-line regex).
+- **Tab files — 5 files, 14 prints → `logging.debug`.** `parts_tab.py` (5), `employees_tab.py` (2), `mixtures_tab.py` (2), `materials_tab.py` (2), `packaging_tab.py` (1). These are all dev-leftover diagnostic prints (`print(part)`, `print("Enable")`, `print(self.calendar.selectedDate())` etc.); routing them to `debug` silences them at the default `INFO` level but preserves them for anyone who flips the level.
+- **`main.py`.** Added `import logging` and `logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")` near startup. Simple two-field format — log level + message — since the save chatter already includes its own context.
+
+**Subtlety that cost time — and a script bug to know about:** the script's `add_logging_import()` helper that injected `import logging` after existing imports treated `from records import (` at `file_manager.py:5` as a single import line and inserted `import logging` *between* the opening paren and the import body, producing a `SyntaxError`. Caught by the compile check before commit; fixed by moving the import up to be a peer of `import sqlite3` / `import datetime`. If this throwaway pattern is ever reused, the helper needs to detect open-paren continuations and insert after the matching close-paren. For this step it wasn't worth generalizing — fixed manually and moved on.
+
+**Verification:** all 23 source files compile; `grep -E '^\s*print\('` returns zero hits in MERCY source (only deps remain); offscreen `MainWindow()` build passes; end-to-end save of an `emptyDB()` produced the expected `INFO Saving globals to ...` / `INFO  * Saving gasCost = 0.0523` / etc. chatter.
 
 ### 12.3 Known deferred issues visible in the current build
 

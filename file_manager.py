@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import logging
 
 from app import MainWindow
 from records import (
@@ -107,7 +108,7 @@ class FileManager:
 
             res = self.dbFile.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = set(row[0] for row in res.fetchall() if not row[0].startswith("sqlite_"))
-            print(f"Initialization: found {len(tables)} tables in {self.filePath}: {sorted(tables)}")
+            logging.info(f"Initialization: found {len(tables)} tables in {self.filePath}: {sorted(tables)}")
 
             # Case 1: Brand new (empty) DB -> create the full unified schema.
             if len(tables) == 0:
@@ -116,7 +117,7 @@ class FileManager:
                 self._createProductionTable()
                 self._setDbVersion(MERCY_DB_VERSION)
                 self.dbFile.commit()
-                print(f" --> Created unified MERCY schema (db_version={MERCY_DB_VERSION})")
+                logging.info(f" --> Created unified MERCY schema (db_version={MERCY_DB_VERSION})")
                 return True
 
             dbVersion = self._getDbVersion()
@@ -134,8 +135,8 @@ class FileManager:
             # Case 3: Legacy ANIKA DB. Add empty employee + production tables, stamp version.
             # Schema normalization (mixture_components, part_pads, etc.) is deferred to Step 8.
             if ("materials" in tables and "parts" in tables) and ("employees" not in tables):
-                print(f" --> Detected legacy ANIKA format. Adding empty employee + production "
-                      f"tables. Full schema normalization will run in a later migration step.")
+                logging.info(f" --> Detected legacy ANIKA format. Adding empty employee + production "
+                             f"tables. Full schema normalization will run in a later migration step.")
                 cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(materials)").fetchall()]
                 if 'otherChem' not in cols:
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
@@ -147,8 +148,8 @@ class FileManager:
 
             # Case 4: Legacy BECKY DB. Add empty product + production tables, stamp version.
             if ("employees" in tables and "PTO" in tables) and ("materials" not in tables):
-                print(f" --> Detected legacy BECKY format. Adding empty product + production "
-                      f"tables. Full schema normalization will run in a later migration step.")
+                logging.info(f" --> Detected legacy BECKY format. Adding empty product + production "
+                             f"tables. Full schema normalization will run in a later migration step.")
                 # Pre-notes BECKY DBs didn't have a `notes` table.
                 if "notes" not in tables:
                     self.dbFile.execute("CREATE TABLE notes(idNum, date, time, details, UNIQUE(idNum, date, time))")
@@ -159,12 +160,12 @@ class FileManager:
                 return True
 
             # Unknown format.
-            print(f"Initialization error: unrecognized DB format in {self.filePath}")
-            print(f" * Found tables: {sorted(tables)}")
+            logging.error(f"Initialization error: unrecognized DB format in {self.filePath}")
+            logging.info(f" * Found tables: {sorted(tables)}")
             self.dbFile.close()
             return False
         except Exception as e:
-            print(f"Initialization error: {repr(e)}")
+            logging.error(f"Initialization error: {repr(e)}")
             if self.dbFile is not None:
                 self.dbFile.close()
             return False
@@ -188,13 +189,13 @@ class FileManager:
         db = self.mainApp.db
 
         # --- globals (ANIKA cost parameters; db_version is preserved separately) ---
-        print(f"Saving globals to {self.filePath}")
+        logging.info(f"Saving globals to {self.filePath}")
         for name in db.globals.getGlobals():
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO globals VALUES (?, ?)", (name, getattr(db.globals, name)))
-                print(f" * Saving {name} = {getattr(db.globals, name)}")
+                logging.info(f" * Saving {name} = {getattr(db.globals, name)}")
             except Exception as e:
-                print(f" * Error saving {name} = {getattr(db.globals, name)}: {repr(e)}")
+                logging.error(f" * Error saving {name} = {getattr(db.globals, name)}: {repr(e)}")
 
         def clearOld(dbName, currDict):
             if self.dbFile is None:
@@ -204,229 +205,229 @@ class FileManager:
             if len(deleted) > 0:
                 try:
                     self.dbFile.executemany(f"DELETE FROM {dbName} WHERE name=?", deleted)
-                    print(f" * Deleting old entries {", ".join([f"{name[0]}" for name in deleted])}")
+                    logging.info(f" * Deleting old entries {", ".join([f"{name[0]}" for name in deleted])}")
                 except Exception as e:
-                    print(f" * Error deleting old entries {", ".join([f"{name[0]}" for name in deleted])}: {repr(e)}")
+                    logging.error(f" * Error deleting old entries {", ".join([f"{name[0]}" for name in deleted])}: {repr(e)}")
 
         # --- ANIKA: materials / mixtures / packaging / parts / inventories ---
 
-        print(f"Saving materials to {self.filePath}")
+        logging.info(f"Saving materials to {self.filePath}")
         for name in db.materials:
             vals = db.materials[name].getTuple()
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO materials VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("materials", db.materials)
 
-        print(f"Saving mixtures to {self.filePath}")
+        logging.info(f"Saving mixtures to {self.filePath}")
         for name in db.mixtures:
             vals = db.mixtures[name].getTuple()
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO mixtures VALUES (?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("mixtures", db.mixtures)
 
-        print(f"Saving packaging to {self.filePath}")
+        logging.info(f"Saving packaging to {self.filePath}")
         for name in db.packaging:
             vals = db.packaging[name].getTuple()
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO packaging VALUES (?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("packaging", db.packaging)
 
-        print(f"Saving parts to {self.filePath}")
+        logging.info(f"Saving parts to {self.filePath}")
         for name in db.parts:
             vals = db.parts[name].getTuple()
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("parts", db.parts)
 
-        print(f"Saving materials inventories to {self.filePath}")
+        logging.info(f"Saving materials inventories to {self.filePath}")
         for date in db.inventories:
             valsList = db.inventories[date].getMaterialTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO materialInventory VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT name, date FROM materialInventory")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[1]) in db.inventories or not vals[0] in db.inventories[datetime.date.fromisoformat(vals[1])].materials]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM materialInventory WHERE (name, date)=(?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving parts inventories to {self.filePath}")
+        logging.info(f"Saving parts inventories to {self.filePath}")
         for date in db.inventories:
             valsList = db.inventories[date].getPartTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO partInventory VALUES (?, ?, ?, ?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT name, date FROM partInventory")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[1]) in db.inventories or not vals[0] in db.inventories[datetime.date.fromisoformat(vals[1])].parts]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM partInventory WHERE (name, date)=(?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
         # --- BECKY: employees / reviews / training / attendance / PTO / notes / holidays / observances ---
 
-        print(f"Saving employees to {self.filePath}")
+        logging.info(f"Saving employees to {self.filePath}")
         for idNum in db.employees:
             vals = db.employees[idNum].getTuple()
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO employees VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum FROM employees")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.employees]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM employees WHERE idNum=?", deleted)
-                print(f" * Deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"{idNum[0]}" for idNum in deleted])}: {repr(e)}")
 
-        print(f"Saving reviews to {self.filePath}")
+        logging.info(f"Saving reviews to {self.filePath}")
         for idNum in db.reviews:
             valsList = db.reviews[idNum].getTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO reviews VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum, date FROM reviews")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.reviews or not datetime.date.fromisoformat(vals[1]) in db.reviews[vals[0]].reviews]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM reviews WHERE (idNum, date)=(?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving training to {self.filePath}")
+        logging.info(f"Saving training to {self.filePath}")
         for idNum in db.training:
             valsList = db.training[idNum].getTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO training VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum, training, date FROM training")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.training or not vals[1] in db.training[vals[0]].training or not datetime.date.fromisoformat(vals[2]) in db.training[vals[0]].training[vals[1]]]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM training WHERE (idNum, training, date)=(?, ?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving attendance to {self.filePath}")
+        logging.info(f"Saving attendance to {self.filePath}")
         for idNum in db.attendance:
             valsList = db.attendance[idNum].getTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO attendance VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum, date FROM attendance")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.attendance or not datetime.date.fromisoformat(vals[1]) in db.attendance[vals[0]].points]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM attendance WHERE (idNum, date)=(?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving PTO to {self.filePath}")
+        logging.info(f"Saving PTO to {self.filePath}")
         for idNum in db.PTO:
             valsList = db.PTO[idNum].getTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO PTO VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum, start, end FROM PTO")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.PTO or not (datetime.date.fromisoformat(vals[1]), vals[2] if vals[2] in ["CARRY", "CASH", "DROP"] else datetime.date.fromisoformat(vals[2])) in db.PTO[vals[0]].PTO]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM PTO WHERE (idNum, start, end)=(?, ?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[1]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving notes to {self.filePath}")
+        logging.info(f"Saving notes to {self.filePath}")
         for idNum in db.notes:
             valsList = db.notes[idNum].getTuples()
             for vals in valsList:
                 try:
                     self.dbFile.execute("INSERT OR REPLACE INTO notes VALUES (?, ?, ?, ?)", vals)
-                    print(f" * Saving {vals}")
+                    logging.info(f" * Saving {vals}")
                 except Exception as e:
-                    print(f" * Error saving {vals}: {repr(e)}")
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT idNum, date, time FROM notes")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.notes or not (datetime.date.fromisoformat(vals[1]), vals[2]) in db.notes[vals[0]].notes]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM notes WHERE (idNum, date, time)=(?, ?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({vals[0]}, {vals[1]}, {vals[2]})" for vals in deleted])}: {repr(e)}")
 
-        print(f"Saving holidays to {self.filePath}")
+        logging.info(f"Saving holidays to {self.filePath}")
         for vals in db.holidays.getDefaultTuples():
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO holidays VALUES (?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT holiday FROM holidays")
         deleted = [vals for vals in res.fetchall() if not vals[0] in db.holidays.defaults]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM holidays WHERE holiday=?", deleted)
-                print(f" * Deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"{holiday[0]}" for holiday in deleted])}: {repr(e)}")
 
-        print(f"Saving observances to {self.filePath}")
+        logging.info(f"Saving observances to {self.filePath}")
         for vals in db.holidays.getObservanceTuples():
             try:
                 self.dbFile.execute("INSERT OR REPLACE INTO observances VALUES (?, ?, ?)", vals)
-                print(f" * Saving {vals}")
+                logging.info(f" * Saving {vals}")
             except Exception as e:
-                print(f" * Error saving {vals}: {repr(e)}")
+                logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT holiday, shift, date FROM observances")
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[2]).year in db.holidays.observances or
@@ -436,9 +437,9 @@ class FileManager:
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM observances WHERE (holiday, shift, date)=(?, ?, ?)", deleted)
-                print(f" * Deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}")
+                logging.info(f" * Deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}")
             except Exception as e:
-                print(f" * Error deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}: {repr(e)}")
+                logging.error(f" * Error deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}: {repr(e)}")
 
     # ---- loadFile --------------------------------------------------------------------------
 
@@ -450,79 +451,79 @@ class FileManager:
         db = self.mainApp.db
 
         # --- globals (ANIKA cost parameters; ignore db_version on the load side) ---
-        print(f"Loading globals from {self.filePath}")
+        logging.info(f"Loading globals from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM globals")
         for pair in res.fetchall():
             name, val = pair
             if name == "db_version":
-                print(f" * (ignored on load) {name} = {val}")
+                logging.info(f" * (ignored on load) {name} = {val}")
                 continue
             setattr(db.globals, name, val)
-            print(f" * Loaded {name} = {val}")
+            logging.info(f" * Loaded {name} = {val}")
 
         # --- ANIKA data ---
 
-        print(f"Loading materials from {self.filePath}")
+        logging.info(f"Loading materials from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM materials")
         for values in res.fetchall():
             material = Material("ERROR")
             material.fromTuple(values)
             db.materials[material.name] = material
             material.db = db
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {material}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {material}")
 
-        print(f"Loading mixtures from {self.filePath}")
+        logging.info(f"Loading mixtures from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM mixtures")
         for values in res.fetchall():
             mixture = Mixture("ERROR")
             mixture.fromTuple(values)
             db.mixtures[mixture.name] = mixture
             mixture.db = db
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {mixture}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {mixture}")
 
-        print(f"Loading packaging from {self.filePath}")
+        logging.info(f"Loading packaging from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM packaging")
         for values in res.fetchall():
             package = Package("ERROR", None, None)
             package.fromTuple(values)
             db.packaging[package.name] = package
             package.db = db
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {package}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {package}")
 
-        print(f"Loading parts from {self.filePath}")
+        logging.info(f"Loading parts from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM parts")
         for values in res.fetchall():
             part = Part("ERROR")
             part.fromTuple(values)
             db.parts[part.name] = part
             part.db = db
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {part}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {part}")
 
-        print(f"Loading material inventories from {self.filePath}")
+        logging.info(f"Loading material inventories from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM materialInventory")
         for values in res.fetchall():
             rec = MaterialInventoryRecord()
             rec.fromTuple(values)
             db.addMaterialInventory(rec)
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {rec}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {rec}")
 
-        print(f"Loading part inventories from {self.filePath}")
+        logging.info(f"Loading part inventories from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM partInventory")
         for values in res.fetchall():
             rec = PartInventoryRecord()
             rec.fromTuple(values)
             db.addPartInventory(rec)
-            print(f" * Loaded {values}")
-            print(f" --> Loaded {rec}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded {rec}")
 
         # --- BECKY data ---
 
-        print(f"Loading employees from {self.filePath}")
+        logging.info(f"Loading employees from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM employees")
         for values in res.fetchall():
             employee = Employee()
@@ -540,10 +541,10 @@ class FileManager:
             notes = EmployeeNotesDB(employee.idNum)
             db.addEmployeeNotes(notes)
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded employee {employee.idNum}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded employee {employee.idNum}")
 
-        print(f"Loading reviews from {self.filePath}")
+        logging.info(f"Loading reviews from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM reviews")
         for values in res.fetchall():
             review = EmployeeReview()
@@ -553,10 +554,10 @@ class FileManager:
                 raise RuntimeError('review.idNum not in db.reviews')
             db.reviews[review.idNum].reviews[review.date] = review
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded review ({review.idNum}, {review.date})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded review ({review.idNum}, {review.date})")
 
-        print(f"Loading training from {self.filePath}")
+        logging.info(f"Loading training from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM training")
         for values in res.fetchall():
             training = EmployeeTrainingDate()
@@ -568,10 +569,10 @@ class FileManager:
                 db.training[training.idNum].training[training.training] = {}
             db.training[training.idNum].training[training.training][training.date] = training
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded training ({training.idNum}, {training.training}, {training.date})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded training ({training.idNum}, {training.training}, {training.date})")
 
-        print(f"Loading attendance from {self.filePath}")
+        logging.info(f"Loading attendance from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM attendance")
         for values in res.fetchall():
             point = EmployeePoint()
@@ -581,10 +582,10 @@ class FileManager:
                 raise RuntimeError('point.idNum not in db.attendance')
             db.attendance[point.idNum].points[point.date] = point
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded point ({point.idNum}, {point.date})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded point ({point.idNum}, {point.date})")
 
-        print(f"Loading PTO from {self.filePath}")
+        logging.info(f"Loading PTO from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM PTO")
         for values in res.fetchall():
             pto = EmployeePTORange()
@@ -594,10 +595,10 @@ class FileManager:
                 raise RuntimeError('pto.employee not in db.PTO')
             db.PTO[pto.employee].PTO[(pto.start, pto.end)] = pto
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded point ({pto.employee}, {pto.start}, {pto.end})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded point ({pto.employee}, {pto.start}, {pto.end})")
 
-        print(f"Loading notes from {self.filePath}")
+        logging.info(f"Loading notes from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM notes")
         for values in res.fetchall():
             note = EmployeeNote()
@@ -607,10 +608,10 @@ class FileManager:
                 raise RuntimeError('note.idNum not in db.notes')
             db.notes[note.idNum].notes[(note.date, note.time)] = note
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded note ({note.idNum}, {note.date}, {note.time})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded note ({note.idNum}, {note.date}, {note.time})")
 
-        print(f"Loading holidays from {self.filePath}")
+        logging.info(f"Loading holidays from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM holidays")
         for values in res.fetchall():
             holiday = values[0]
@@ -618,10 +619,10 @@ class FileManager:
 
             db.holidays.defaults[holiday] = month
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded holiday {holiday}")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded holiday {holiday}")
 
-        print(f"Loading observances from {self.filePath}")
+        logging.info(f"Loading observances from {self.filePath}")
         res = self.dbFile.execute("SELECT * FROM observances")
         for values in res.fetchall():
             observance = HolidayObservance()
@@ -629,8 +630,8 @@ class FileManager:
 
             db.holidays.setObservance(observance)
 
-            print(f" * Loaded {values}")
-            print(f" --> Loaded observance ({observance.holiday}, {observance.date.isoformat()}, {observance.shift})")
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded observance ({observance.holiday}, {observance.date.isoformat()}, {observance.shift})")
 
     # ---- setFile ---------------------------------------------------------------------------
 
@@ -643,7 +644,7 @@ class FileManager:
             if not oldConn == None:
                 oldConn.close()
         else:
-            print(f"Failed to initialize {filePath}")
+            logging.info(f"Failed to initialize {filePath}")
             self.filePath = oldPath
             self.dbFile = oldConn
         return success
