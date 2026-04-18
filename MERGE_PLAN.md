@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation); see §12 for current state, deviations, and deferred items before picking up **Step 7d**.
+**Status:** Implementation in progress — Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 of 13 complete as of 2026-04-17. Step 7 is being run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 7d**.
 
 ---
 
@@ -506,15 +506,17 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 complete; **Step 7d is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-17. Steps 1–6 + 7a + 7b + 7c-1 + 7c-2 + 7c-3 complete; **Step 7d is next** (followed by 7e). Each step was committed separately on `main` with a message that names the step.*
 
-Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three:
+Step 7 has been split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
 - **7a** — correctness / data-integrity fixes (done).
 - **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (done).
 - **7c-1** — `assert` → `raise` (237 sites across the repo; judgment calls between `RuntimeError` for internal invariants vs `ValueError` for method-boundary input).
 - **7c-2** — `print()` → `logging` (136 sites; 120 of them in `file_manager.py` save chatter) + drop the BECKY debug `print` in points logic.
-- **7c-3** — mechanical + polish: `not x == None` → `x is not None` (194 sites; per-file regex replace), window-close leak (`Qt.WA_DeleteOnClose`), `LBS_PER_TON` constant, `requirements.txt`.
+- **7c-3** — mechanical + polish: `not x == None` → `x is not None`, window-close leak (`Qt.WA_DeleteOnClose` + parent-retention), `LBS_PER_TON` constant, `requirements.txt`.
+- **7d** — clean up 2 double-negation leftovers from 7c-1.
+- **7e** — restore window centering regressed by 7c-3's parent-retention change.
 
 ### 12.1 Step status
 
@@ -532,6 +534,7 @@ Step 7 has been split into sub-steps to keep each review surface small. The hygi
 | 7c-2 | ✅ Done | Merge plan Step 7c-2: print → logging |
 | 7c-3 | ✅ Done | Merge plan Step 7c-3: polish sweep |
 | 7d | ⏳ Pending | Clean up 2 double-negation leftovers from 7c-1 (`if not (not isNone):` in `employees_tab.py:298`, `parts_tab.py:317`). |
+| 7e | ⏳ Pending | Restore window centering. 7c-3's parent-retention (`super().__init__(mainApp, Qt.WindowType.Window)`) regressed positioning: windows no longer open centered on screen. |
 | 8–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -603,6 +606,7 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 ### 12.3 Known deferred issues visible in the current build
 
 - Two double-negation leftovers from the 7c-1 sweep (`if not (not isNone):` at `employees_tab.py:298` and `parts_tab.py:317`) — **Step 7d**.
+- Window centering regression introduced by 7c-3's parent-retention fix: edit/detail windows now open uncentered — **Step 7e**.
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
 - One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
 - Base64 everywhere, compound `employees.shift`, dead `parts` columns (`loading`, `unloading`, `inspection`, `greenScrap`, plus the base64 compound columns `pad`/`padsPerBox`/`misc`) — Steps 8–9.
@@ -616,9 +620,9 @@ Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is
 
 ### 12.5 Pick-up notes for Step 7d
 
-Cleanup of two double-negation leftovers from the 7c-1 `assert`→`raise` script. Both sites have identical structure and the same fix. Trivial — can be batched into 7c-3's commit if desired, but called out separately so it isn't forgotten.
+Cleanup of two double-negation leftovers from the 7c-1 `assert`→`raise` script. Both sites have identical structure and the same fix. Trivial — a handful of `Edit` calls.
 
-1. **`employees_tab.py:298-300`** — currently:
+1. **`employees_tab.py:299`** — currently:
    ```python
    else:
        if not (not isNone):
@@ -632,9 +636,41 @@ Cleanup of two double-negation leftovers from the 7c-1 `assert`→`raise` script
            raise RuntimeError('isNone')
        self.mainApp.db.updateEmployee(self.employee.idNum, id)
    ```
-2. **`parts_tab.py:317-319`** — identical pattern with the same fix.
+2. **`parts_tab.py:320`** — identical pattern with the same fix.
 
-Root cause: the 7c-1 script had explicit patterns for `not X == None` and `not X in Y` but not plain `not X`, so `assert(not isNone)` fell through to the generic `if not (COND): raise RuntimeError(COND)` wrapper and produced the double-negation. Not a bug — just ugly. After this step, `grep -n 'if not (not' *.py` should return zero hits in MERCY source.
+(Exact line numbers may drift if 7e lands first; grep `if not (not isNone)` to re-locate.)
+
+Root cause: the 7c-1 script had explicit patterns for `not X == None` and `not X in Y` but not plain `not X`, so `assert(not isNone)` fell through to the generic `if not (COND): raise RuntimeError(COND)` wrapper and produced the double-negation. Not a bug — just ugly. After this step, `grep -rn 'if not (not' *.py` should return zero hits in MERCY source.
+
+### 12.6 Pick-up notes for Step 7e
+
+Restore window centering. **Regression introduced by 7c-3** — when the 21 edit/detail window classes were migrated from parentless + `self.windows` retention to parented + `Qt.WindowType.Window` + `WA_DeleteOnClose` (see §12.2 Step 7c-3 item 2), they lost their default "center on screen" placement. The user reported that windows now open off-center; previously (parentless) Qt/Windows' window manager placed them automatically, and now with a parent in the Qt tree the default placement is different (typically relative to the parent's corner, not screen-centered).
+
+**Target behavior:** each edit/detail window opens centered on the screen (or centered on the `mainApp` frame — pick one; screen-centered matches the pre-7c-3 behavior most users saw).
+
+**Approach — likely simplest.** Add an explicit centering step inside each window's `__init__` after `super().__init__(...)` and `setAttribute(WA_DeleteOnClose)` but before `self.show()`. Two idiomatic options:
+
+  a. **Center on screen** (matches old behavior):
+     ```python
+     screen = self.screen().availableGeometry()  # or QApplication.primaryScreen().availableGeometry()
+     frame = self.frameGeometry()
+     frame.moveCenter(screen.center())
+     self.move(frame.topLeft())
+     ```
+     Tricky bit: `frameGeometry()` is only reliable *after* the widget has been shown once (Qt doesn't know the frame size pre-show on some platforms). The usual workaround is to call this after the first `show()`, or to use `sizeHint()` + manual arithmetic.
+  b. **Center on parent** (arguably nicer UX for modal-ish sub-windows):
+     ```python
+     geo = self.geometry()
+     geo.moveCenter(mainApp.geometry().center())
+     self.move(geo.topLeft())
+     ```
+     Uses the pre-show geometry, which is based on `sizeHint()` — usually close enough and doesn't require a post-show re-center.
+
+**Where to apply.** 21 window classes touched by 7c-3 — same list as §12.2 Step 7c-3 item 2. A helper function `centerOnScreen(widget)` or `centerOnParent(widget, parent)` in `utils.py` would avoid repeating the boilerplate 21 times. Each window's `__init__` would then call `centerOnScreen(self)` (or `centerOnParent(self, mainApp)`) after `setAttribute(WA_DeleteOnClose)` and before `self.show()`.
+
+**Alternative — drop the `Qt.Window` flag route.** An option worth considering: revert the parent-retention mechanism to something else (e.g., a retained-but-cleaned-up `self.windows` list with a `destroyed`-signal cleanup hook) so windows stay parentless and get their original placement back. This undoes 7c-3's approach. Probably not worth it — explicit centering is straightforward and doesn't regress the leak fix.
+
+**Verification.** In a real (non-offscreen) session, open one window from each of the 12 tab files; confirm it opens centered. Offscreen tests can verify that `move()` was called with reasonable coordinates, but visual centering has to be eyeballed on the target display.
 
 ---
 
