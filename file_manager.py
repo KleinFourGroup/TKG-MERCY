@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import glob
 import logging
 import os
 import shutil
@@ -303,6 +304,24 @@ class FileManager:
 
     # ---- initFile --------------------------------------------------------------------------
 
+    def _detectDbFormat(self, tables: set[str]) -> str:
+        # Classify a .db by its table set. Shared between initFile and the importer so both
+        # agree on which of the four recognized shapes a given file is. Returns one of:
+        #   "empty"        — no tables; brand-new file.
+        #   "mercy"        — already unified MERCY (may still be an older db_version).
+        #   "legacy_anika" — ANIKA-only file; no BECKY tables.
+        #   "legacy_becky" — BECKY-only file; no ANIKA tables.
+        #   "unknown"      — none of the above.
+        if len(tables) == 0:
+            return "empty"
+        if UNIFIED_TABLES.issubset(tables):
+            return "mercy"
+        if ("materials" in tables and "parts" in tables) and ("employees" not in tables):
+            return "legacy_anika"
+        if ("employees" in tables and "PTO" in tables) and ("materials" not in tables):
+            return "legacy_becky"
+        return "unknown"
+
     def initFile(self):
         if self.filePath is None:
             raise RuntimeError('self.filePath is None')
@@ -315,8 +334,10 @@ class FileManager:
             tables = set(row[0] for row in res.fetchall() if not row[0].startswith("sqlite_"))
             logging.info(f"Initialization: found {len(tables)} tables in {self.filePath}: {sorted(tables)}")
 
+            fmt = self._detectDbFormat(tables)
+
             # Case 1: Brand new (empty) DB -> create the full unified schema.
-            if len(tables) == 0:
+            if fmt == "empty":
                 self._createAnikaTables()
                 self._createBeckyTables()
                 self._createProductionTable()
@@ -325,17 +346,16 @@ class FileManager:
                 logging.info(f" --> Created unified MERCY schema (db_version={MERCY_DB_VERSION})")
                 return True
 
-            dbVersion = self._getDbVersion()
-
             # Case 2: Already in unified MERCY format.
-            if dbVersion is not None and UNIFIED_TABLES.issubset(tables):
+            if fmt == "mercy":
+                dbVersion = self._getDbVersion()
                 # `otherChem` column was added post-v8.0 in ANIKA; ensure it's present.
                 cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(materials)").fetchall()]
                 if 'otherChem' not in cols:
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
-                if dbVersion < 2:
+                if dbVersion is not None and dbVersion < 2:
                     self._migrateAnikaV1ToV2()
-                if dbVersion < 3:
+                if dbVersion is not None and dbVersion < 3:
                     self._migrateBeckyV2ToV3()
                 self.dbFile.commit()
                 return True
@@ -343,7 +363,7 @@ class FileManager:
             # Case 3: Legacy ANIKA DB. Add empty employee + production tables (at v3 shape
             # since they're empty — no BECKY migration needed), then run the ANIKA v1->v2
             # normalization on the existing ANIKA tables, then stamp v3.
-            if ("materials" in tables and "parts" in tables) and ("employees" not in tables):
+            if fmt == "legacy_anika":
                 logging.info(f" --> Detected legacy ANIKA format. Adding empty employee + production "
                              f"tables, then normalizing ANIKA schema to v2.")
                 cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(materials)").fetchall()]
@@ -364,7 +384,7 @@ class FileManager:
             # Case 4: Legacy BECKY DB. Add empty product + production tables (at v2-equivalent
             # ANIKA shape since Step 8 normalized the create path), then run the BECKY v2->v3
             # normalization on the existing BECKY tables.
-            if ("employees" in tables and "PTO" in tables) and ("materials" not in tables):
+            if fmt == "legacy_becky":
                 logging.info(f" --> Detected legacy BECKY format. Adding empty product + production "
                              f"tables, then normalizing BECKY schema to v3.")
                 # Pre-notes BECKY DBs didn't have a `notes` table. Create with v2 shape (plain
@@ -725,7 +745,14 @@ class FileManager:
             raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
         from records import emptyDB
         self.mainApp.db = emptyDB()
-        db = self.mainApp.db
+        self._loadIntoDb(self.mainApp.db)
+
+    def _loadIntoDb(self, db):
+        # Read every table from self.dbFile into the provided Database. Split out from
+        # loadFile so the importer can populate a throwaway `emptyDB()` without
+        # clobbering self.mainApp.db.
+        if not ((self.filePath is not None) and (self.dbFile is not None)):
+            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
 
         # --- globals (ANIKA cost parameters; ignore db_version on the load side) ---
         logging.info(f"Loading globals from {self.filePath}")
@@ -963,3 +990,65 @@ class FileManager:
             self.filePath = oldPath
             self.dbFile = oldConn
         return success
+
+    # ---- importOtherDb ---------------------------------------------------------------------
+
+    def importOtherDb(self, srcPath: str):
+        # Read a second .db (legacy ANIKA, legacy BECKY, or unified MERCY) into a fresh
+        # throwaway Database without touching the currently-open DB or the source file.
+        # Returns (otherDb, fmt) on success or (None, "unknown" | "error") on failure.
+        #
+        # The source file is copied to a temp path first so any migration writes land on
+        # the copy; the user's second .db is never mutated (§12.5(c)). The temp copy and
+        # its WAL sidecars are cleaned up before returning.
+        import tempfile
+        from records import emptyDB
+
+        tmpFd, tmpPath = tempfile.mkstemp(suffix=".db")
+        os.close(tmpFd)
+        try:
+            shutil.copy2(srcPath, tmpPath)
+        except OSError as e:
+            logging.error(f"Import error: could not copy {srcPath} to temp: {repr(e)}")
+            try:
+                os.unlink(tmpPath)
+            except OSError:
+                pass
+            return None, "error"
+
+        # Use a separate FileManager for the temp copy so its own backup-before-migration
+        # logic runs against the copy, and any state on `self` is untouched.
+        tmpFM = FileManager(self.mainApp)
+        success = tmpFM.setFile(tmpPath)
+        if not success:
+            logging.error(f"Import error: unrecognized DB format in {srcPath}")
+            _cleanupTempDb(tmpPath)
+            return None, "unknown"
+
+        otherDb = emptyDB()
+        try:
+            tmpFM._loadIntoDb(otherDb)
+        finally:
+            if tmpFM.dbFile is not None:
+                tmpFM.dbFile.close()
+            _cleanupTempDb(tmpPath)
+
+        return otherDb, "ok"
+
+
+def _cleanupTempDb(tmpPath: str):
+    # Remove the temp DB file plus its WAL/SHM sidecars. Best-effort — a leftover temp
+    # file is non-fatal, and Windows may hold the handle briefly after close().
+    for suffix in ("", "-wal", "-shm"):
+        p = tmpPath + suffix
+        if os.path.exists(p):
+            try:
+                os.unlink(p)
+            except OSError as e:
+                logging.info(f"Import cleanup: could not remove {p}: {repr(e)}")
+    # Also sweep any `.bak-*` sibling files the temp migration produced.
+    for p in glob.glob(f"{tmpPath}.bak-*"):
+        try:
+            os.unlink(p)
+        except OSError:
+            pass

@@ -506,7 +506,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-18. Steps 1–9 complete plus the Step 9.5 polish; **Step 10 (DB merge) is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-19. Steps 1–10 complete plus the Step 9.5 polish; **Step 11 (production tracking) is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -538,7 +538,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 8  | ✅ Done | Merge plan Step 8: ANIKA schema migration |
 | 9  | ✅ Done | Merge plan Step 9: BECKY schema migration |
 | 9.5 | ✅ Done | Merge plan Step 9.5: drop vestigial Part attributes |
-| 10–13 | ⏳ Pending | Per §9. |
+| 10 | ✅ Done | Merge plan Step 10: DB merge / import |
+| 11–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -653,6 +654,23 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** All four smoke checks still pass. A `Part.setProduction` call from `Part.fromTuple` initially crashed the `legacy_anika_migration` smoke check with `TypeError: takes 7 positional arguments but 11 were given` — easy fix (update `fromTuple` to match the new signature), caught immediately by the existing test. No other sites needed changes — grep for `part.(loading|unloading|inspection|greenScrap)` across the repo returned zero hits in source.
 
+**Step 10 — DB merge / import landed.** New "Import Database…" button + flow that reads a second legacy or unified `.db` and merges its non-overlapping contents into the currently-open in-memory DB. Four groups of changes:
+
+1. **`file_manager.py` refactor.** Extracted `_detectDbFormat(tables) -> "empty" | "mercy" | "legacy_anika" | "legacy_becky" | "unknown"` from the chained `if`s inside `initFile`; `initFile` now calls it. Extracted `_loadIntoDb(db)` from `loadFile` so any `Database` (not just `self.mainApp.db`) can be populated; `loadFile` became a 3-line wrapper that builds an `emptyDB()` and calls `_loadIntoDb`. Behavior-preserving — all four pre-existing smoke checks still pass.
+
+2. **`FileManager.importOtherDb(srcPath) -> (otherDb, fmt)`.** Copies the source file to a `tempfile.mkstemp(suffix='.db')` path (so any migration writes land on the copy — the user's second `.db` is never mutated per §12.5(c)), instantiates a **second** `FileManager(self.mainApp)` for the temp path, runs `setFile()` (which chains through `initFile` → full v1/v2/v3 migration as needed), builds a fresh `emptyDB()`, and populates it via `tmpFM._loadIntoDb(otherDb)`. Closes the temp connection, removes the temp `.db` + its WAL/SHM sidecars + any `.bak-*` files the migration produced. Returns `(None, "unknown")` on unrecognized format, `(None, "error")` on copy failure, `(otherDb, "ok")` on success. Module-level `_cleanupTempDb(tmpPath)` helper next to the class encapsulates the sweep (best-effort; logs but doesn't raise on `OSError` since Windows sometimes holds handles briefly).
+
+3. **`records.py` — `Database.planMergeFrom(other)` + `Database.mergeFrom(other)`.** Split deliberately so the UI can show a summary before mutating. `planMergeFrom` returns `{"incoming": {...}, "collisions": {...}}` with keys materials / mixtures / packaging / parts / materialInventory / partInventory / employees / holidays / observances. Inventory collisions are checked at the (date, name) grain; observances at (year, holiday, shift); employees at idNum; everything else at name. `mergeFrom` calls `planMergeFrom` internally and **raises `RuntimeError` on any collision** — no silent overwrites. Successful merge reparents each product object's `.db` to the receiving DB, copies all five per-employee sub-DBs for each imported idNum (reviews / training / attendance / PTO / notes), and unions `holidays.defaults` + `holidays.observances`. `globals` and `production` are intentionally skipped per §8.5 (open-file's ANIKA cost params win; production is always empty in legacy files).
+
+4. **`app.py` — new "Import Database…" button.** Added as a 4th peer next to Open / Save / Save As (plan §12.5 said "File → menu action" but the app uses buttons, not menus; stayed consistent with existing UI). Handler flow: picker → `importOtherDb` → on `fmt == "unknown"`/`"error"` show warning + return; otherwise call `planMergeFrom` → if any collision, show a `QMessageBox.warning` listing up to the first 3 entries per colliding type and abort without mutation; otherwise show a `QMessageBox.question` summary ("importing N materials, M employees, …; source file not modified; click Save to persist") and call `mergeFrom` + `_refreshAllTabs()` on confirm. No auto-save — user must explicitly Save (or Save As) per §12.5(d).
+
+**Scope deviations from §12.5.**
+- **Button, not menu** (noted above). The app has no menu bar.
+- **"Single transaction" framing is in-memory.** §12.5 item 7 suggested "inside a single transaction; any failure rolls back both DBs." The actual implementation mutates only the in-memory `Database` dicts (no writes to the first file on disk until the user clicks Save). Collision detection runs before any mutation, so a partial merge can't happen. Functionally equivalent to a transaction but without the sqlite plumbing — the current-file `saveFile` already has atomic write semantics from Step 7a, so the eventual disk write is already all-or-nothing.
+- **Backup of the source file is not run.** §12.5(b) suggested "the second file's `_backupDbFile` should still run before its in-memory migration." Since the migration now runs against a temp copy (not the source), there's nothing for a backup to protect — the source file is never opened for writing. The temp copy's `_backupDbFile` still runs as a side effect of Case 3/4 `initFile` paths, but its `.bak-*` sibling is cleaned up alongside the temp copy.
+
+**Verification.** New `legacy_merge` smoke check seeds a legacy ANIKA + a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), hashes the BECKY file, runs `importOtherDb` + `mergeFrom`, and asserts: all ANIKA entities still present; all BECKY entities imported with correct shift/fullTime split and decoded review/note details; BECKY source file is byte-identical (sha256 before == after); save/reload roundtrip on the ANIKA file preserves the merged contents. All five smoke checks (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`) pass. Manually verified in the GUI: happy path on a real legacy ANIKA + legacy BECKY pair, import-a-non-DB-file warning path, and double-import collision-abort path.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -663,34 +681,57 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8 and 9). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Four checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, and 10). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Five checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
 - `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v3 schema (`mixtures`=[`name`] only; `parts` = 12 expected cols; `db_version=3` after chained v1→v3 migration), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. Updated in Step 9 to assert v3 (the BECKY v2→v3 migration is a no-op version-bump in Case 3 since the employee tables are empty).
 - `legacy_becky_migration` (Step 9) — hand-crafts a v2 BECKY-shape DB with 3 employees covering both compound-shift shapes (`"1|1"`, `"2|0"`, `"3|1"`), 2 base64-wrapped reviews (one multi-line), 2 base64-wrapped notes, and deliberately-orphaned `training`/`attendance`/`PTO` rows alongside valid ones. Opens with MERCY to trigger Case 4, then asserts `db_version=3`, the 15-col v3 `employees` shape, correct shift/fullTime split per row, plain-text `reviews.details`/`notes.details` (newlines preserved), orphan sweep removed only the dangling rows, backup sibling file exists, in-memory `Employee.shift`/`fullTime` reconstruct as `int`/`bool`, and save/reload roundtrip fidelity.
+- `legacy_merge` (Step 10) — seeds a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), sha256-hashes the BECKY file, calls `FileManager.importOtherDb(beckyPath)` + `Database.mergeFrom(tmpDb)`, then asserts: products from ANIKA + employees + reviews + notes from BECKY are all present in-memory with correct shift/fullTime split; the BECKY source file is byte-identical to what was seeded (hash before == after — the import must never mutate the source); and save/reload roundtrip on the ANIKA file preserves the merged contents.
 
 Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 10 (DB merge)
+### 12.5 Pick-up notes for Step 11 (production tracking)
 
-**Step 10 — DB merge (importing one legacy file into another).** Per §8.5. Supports the team's real-world migration from two separate `.db` files (one ANIKA, one BECKY) into a single MERCY DB.
+**Step 11 — production tracking feature.** Per §6 and §10. First net-new-functionality step; all prior steps were merge/migrate/cleanup. Adds an employee-by-shift production log that references both parts and mixes. The `production` table already exists on disk (created in Step 4, declared unchanged through Steps 8–10) — schema is:
 
-**Scope.** Add a menu action (File → *Import from BECKY database…* or similarly named) that:
-1. Opens a file picker for a second `.db`.
-2. Detects its format (Case 3 or Case 4 logic from `initFile`, lifted into a reusable helper).
-3. Runs the full migration chain on the second file in memory (reuse `_migrateAnikaV1ToV2` / `_migrateBeckyV2ToV3`).
-4. Copies the non-overlapping tables into the currently-open DB. For an ANIKA-side import: materials, mixtures, mixture_components, packaging, parts, part_pads, part_misc, materialInventory, partInventory. For a BECKY-side import: employees, reviews, training, attendance, PTO, notes, holidays, observances. `production` is always empty in the legacy files.
-5. Conflict resolution on `globals`: use the already-open file's cost parameters (ANIKA side); the second file's `db_version` is ignored — the already-open file's version wins.
-6. Prompts the user with a summary ("X materials, Y parts, Z employees will be imported") and requires confirmation before the copy.
-7. Runs inside a single transaction; any failure rolls back both DBs.
+```
+production(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employeeId INTEGER,
+    date TEXT,
+    shift INTEGER,
+    targetType TEXT,    -- "part" or "mix"
+    targetName TEXT,    -- name into `parts` or `mixtures`
+    action TEXT,        -- one of PRODUCTION_ACTIONS
+    quantity REAL,
+    scrapQuantity REAL DEFAULT 0,
+    UNIQUE(employeeId, date, shift, targetType, targetName, action)
+)
+```
 
-**Key gotchas.** (a) `idNum` collisions between two BECKY files are unlikely in practice but the code should detect and warn. (b) The second file's backup (`_backupDbFile`) should still run before its in-memory migration, same as opening it standalone. (c) Be explicit about read-only vs. write — the second file only needs to be read from; don't mutate it. (d) After the import, save the merged result to the already-open file (the user's *first* DB).
+Schema is frozen — **no `MERCY_DB_VERSION` bump for Step 11** since the on-disk shape doesn't change.
 
-**Smoke-test scaffolding.** Add `legacy_merge` to `smoke.py` that creates both a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one, runs the import action on the BECKY one, and asserts all the expected tables are populated. Existing per-side migration checks continue to cover the individual migration paths.
+**Scope.**
+1. **`defaults.py`** — add `PRODUCTION_ACTIONS: list[str] = ["Batching", "Pressing", "Finishing"]` per §6.2 / §10 decision 1.
+2. **`records.py`** — add a `ProductionRecord` class with `employeeId`, `date` (datetime.date), `shift` (int), `targetType` (Literal["part", "mix"]), `targetName` (str), `action` (one of `PRODUCTION_ACTIONS`), `quantity` (float, pieces for parts / lbs for mixes per §6.3), `scrapQuantity` (float, defaults 0). Mirror the `getTuple`/`fromTuple` pattern of the other record classes. Also add a `production` container on `Database` — shape TBD: either `list[ProductionRecord]` (append-only log, simple) or `dict[(employeeId, date, shift, targetType, targetName, action), ProductionRecord]` keyed on the UNIQUE columns (matches the employee-indexed dicts' pattern and makes collision detection free on save). Recommend **dict keyed on the UNIQUE tuple** for consistency with existing `db.reviews[idNum].reviews[date]` style. Update `emptyDB()` to pass an empty dict for the new container.
+3. **`file_manager.py` — saveFile + loadFile.** New "Saving production / Loading production" sections following the pattern of employees/reviews. 9-placeholder INSERT (AUTOINCREMENT `id` → `NULL` on insert; sqlite will assign). Load: reconstruct `ProductionRecord` and drop into `db.production[key]`.
+4. **`production_tab.py` — new tab file.** Per §7.1 the Production top-level tab has nested "Daily Entry | Reports". Scope Step 11 to Daily Entry only — **reports are Step 12**. Daily Entry pattern: a form with fields employee (dropdown populated from `db.employees`), date (QDateEdit), shift (spinbox or dropdown), target-type radio (part/mix), target-name (cascaded dropdown from `db.parts` or `db.mixtures` depending on radio), action (dropdown from `PRODUCTION_ACTIONS`), quantity (QDoubleSpinBox), scrap quantity (QDoubleSpinBox, default 0). Plus a table of existing entries, filterable by employee and date range. Follow the 21-window retention pattern from §12.2 Step 7c-3 item 2 — any pop-up edit window must be parented to `mainApp`, have `Qt.WA_DeleteOnClose`, and call `centerOnScreen(self)` before `self.show()`.
+5. **`app.py`** — wire `ProductionTab` as a new top-level tab between "Employees" and "Inventory" per §7.1. Current layout is 4 tabs (Products | Employees | Inventory | Settings); after Step 11 it should be 5 (Products | Employees | Production | Inventory | Settings). Add `self.productionTab` to `_refreshAllTabs()`.
 
-**Follow-ups explicitly NOT in Step 10.** Production feature is Step 11; keep Step 10 limited to the import path.
+**Key decisions already made (§10).** (1) Fixed list of actions, not free-text. (2) `scrapQuantity REAL DEFAULT 0` is in the schema. (3) Saving a production record does **not** auto-update part WIP inventory — the two systems are independent. (4) Parts use `globals.greenScrap`, not a per-part rate (the old per-part `greenScrap` column was already dropped in Step 8). Don't re-litigate these.
+
+**Likely gotchas.**
+- **Target-type polymorphism in the UI.** When `targetType == "part"`, the target-name dropdown lists `db.parts.keys()`; when `targetType == "mix"`, it lists `db.mixtures.keys()`. Switching the radio should clear + repopulate the dropdown. Units label alongside the quantity field should flip between "pieces" and "lbs" based on radio state per §6.3.
+- **Referential integrity is not enforced by the schema** — no FK constraint on `(targetType, targetName)` into the parts/mixtures tables. The UI can enforce valid selections via dropdowns, but a direct SQL edit could leave dangling references. For now, trust the UI. If a future cleanup pass wants to sweep orphans, model it after the §12.2 Step 9's `sweepOrphans` helper in `_migrateBeckyV2ToV3`.
+- **Large production datasets.** A busy plant could produce hundreds of records per day — the filter-by-date-range UI should be built in from the start (don't ship a table that tries to show all history unfiltered).
+
+**Smoke-test scaffolding.** Add a `production_roundtrip` check to `smoke.py`: populate a fresh `emptyDB()` with one employee and one part/mix, create a `ProductionRecord`, save to a tmp file, reload, and assert the record round-trips correctly (including `scrapQuantity=0` default preservation and both `targetType` values).
+
+**Follow-ups explicitly NOT in Step 11.** (a) Production *reports* (§12 of §9) — separate step. (b) Upcoming-actions dashboards — explicitly deferred in §10 decision 5. (c) WIP inventory integration — explicitly rejected in §10 decision 3. (d) Any UI polish to the pre-existing tabs; stay scoped to the new one.
+
+**Touchpoints from Step 10 worth reusing.** `_refreshAllTabs()` in `app.py` needs the new `self.productionTab.refresh()` (or equivalent) call. `_loadIntoDb(db)` is where the new "Loading production" section goes (not `loadFile`, which is now just a 3-line wrapper). The atomic-save contract in `saveFile` / `_saveFileBody` means the new production save block can just add rows; any exception rolls everything back.
 
 ---
 

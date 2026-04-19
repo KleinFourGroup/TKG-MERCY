@@ -84,11 +84,14 @@ class MainWindow(QWidget):
         self.saveButton.clicked.connect(self.save)
         self.saveAsButton = QPushButton("Save Database As")
         self.saveAsButton.clicked.connect(self.saveAs)
+        self.importButton = QPushButton("Import Database...")
+        self.importButton.clicked.connect(self.importOther)
 
         hlayout = QHBoxLayout()
         hlayout.addWidget(self.openButton)
         hlayout.addWidget(self.saveButton)
         hlayout.addWidget(self.saveAsButton)
+        hlayout.addWidget(self.importButton)
 
         hline = newHLine(1)
 
@@ -155,3 +158,73 @@ class MainWindow(QWidget):
         self.openButton.setEnabled(True)
         self.saveButton.setEnabled(self.fileManager.filePath is not None)
         self.saveAsButton.setEnabled(True)
+
+    def importOther(self):
+        # Pick a second .db and merge its non-overlapping contents into the currently-open
+        # in-memory DB. Does not write to disk — the user must click Save (or Save As) to
+        # persist the merged result (§12.5(d)). The source file is never mutated.
+        self.openButton.setEnabled(False)
+        self.saveButton.setEnabled(False)
+        self.saveAsButton.setEnabled(False)
+        self.importButton.setEnabled(False)
+        try:
+            dbFile = QFileDialog.getOpenFileName(self, "Import Database", os.path.expanduser("~"), "Database (*.db)")
+            if dbFile[0] == "":
+                return
+
+            otherDb, fmt = self.fileManager.importOtherDb(dbFile[0])
+            if otherDb is None:
+                if fmt == "unknown":
+                    QMessageBox.warning(self, "Import failed",
+                                        f"{dbFile[0]} is not a recognized ANIKA, BECKY, or MERCY database.")
+                else:
+                    QMessageBox.warning(self, "Import failed",
+                                        f"Could not read {dbFile[0]}. See logs for details.")
+                return
+
+            plan = self.db.planMergeFrom(otherDb)
+            incoming = plan["incoming"]
+            collisions = plan["collisions"]
+
+            if any(collisions[k] for k in collisions):
+                lines = ["The following entries already exist in the open database "
+                         "and would conflict with the import:", ""]
+                for key, vals in collisions.items():
+                    if vals:
+                        lines.append(f"  {key}: {len(vals)}  (e.g. {vals[:3]})")
+                lines.append("")
+                lines.append("Nothing was imported. Resolve the conflicts (or close the "
+                             "current database) and try again.")
+                QMessageBox.warning(self, "Import aborted: conflicts", "\n".join(lines))
+                return
+
+            summaryLines = [f"Importing from: {dbFile[0]}", ""]
+            for key in ("materials", "mixtures", "packaging", "parts",
+                        "materialInventory", "partInventory",
+                        "employees", "holidays", "observances"):
+                n = len(incoming[key])
+                if n > 0:
+                    summaryLines.append(f"  {key}: {n}")
+            if len(summaryLines) == 2:
+                summaryLines.append("  (nothing — source DB is empty)")
+            summaryLines.append("")
+            summaryLines.append("The merged result will live in memory until you Save "
+                                "the current database. The source file will not be modified.")
+            summaryLines.append("")
+            summaryLines.append("Proceed?")
+
+            reply = QMessageBox.question(self, "Confirm import", "\n".join(summaryLines),
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            self.db.mergeFrom(otherDb)
+            self._refreshAllTabs()
+            QMessageBox.information(self, "Import complete",
+                                    "Import succeeded. Click Save to persist the merged "
+                                    "database to the open file.")
+        finally:
+            self.openButton.setEnabled(True)
+            self.saveButton.setEnabled(self.fileManager.filePath is not None)
+            self.saveAsButton.setEnabled(True)
+            self.importButton.setEnabled(True)

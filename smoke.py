@@ -461,12 +461,196 @@ def legacy_becky_migration() -> list[str]:
     return errors
 
 
+def legacy_merge() -> list[str]:
+    """Open a legacy ANIKA DB with MERCY, import a legacy BECKY DB on top.
+
+    Exercises the Step-10 import path end-to-end:
+      - Seeds one legacy ANIKA file (materials / mixtures / parts / inventory bits)
+        and one legacy BECKY file (employees + per-employee collections).
+      - Opens the ANIKA file with MERCY (triggers Case 3, v1->v3 migration).
+      - Calls FileManager.importOtherDb(beckyPath), then Database.mergeFrom(tmpDb).
+      - Asserts the merged in-memory state contains both sides' data.
+      - Asserts the BECKY source file is byte-identical to what was seeded
+        (hash before vs. after the import).
+      - Save/reload roundtrip on the ANIKA file preserves the merged data.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import hashlib
+    import sqlite3
+    import glob
+
+    from utils import listToString, stringToB64
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    anikaFd = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    anikaFd.close()
+    beckyFd = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    beckyFd.close()
+    anikaBackupGlob = f"{anikaFd.name}.bak-*"
+    beckyBackupGlob = f"{beckyFd.name}.bak-*"
+    w = None
+    w2 = None
+    try:
+        # --- seed legacy ANIKA DB ---
+        conn = sqlite3.connect(anikaFd.name)
+        conn.execute("CREATE TABLE globals(name PRIMARY KEY, value)")
+        conn.execute("CREATE TABLE materials(name PRIMARY KEY, cost, freight, SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, LOI, Plus50, Sub50Plus100, Sub100Plus200, Sub200Plus325, Sub325, otherChem)")
+        conn.execute("CREATE TABLE mixtures(name PRIMARY KEY, materials, weights)")
+        conn.execute("CREATE TABLE packaging(name PRIMARY KEY, kind, cost)")
+        conn.execute("CREATE TABLE parts(name PRIMARY KEY, weight, mix, pressing, turning, loading, unloading, inspection, greenScrap, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc, price, sales)")
+        conn.execute("CREATE TABLE materialInventory(name, date, cost, amount, UNIQUE(name, date))")
+        conn.execute("CREATE TABLE partInventory(name, date, cost, amount40, amount60, amount80, amount100, UNIQUE(name, date))")
+        for m in ("MatA", "MatB"):
+            conn.execute("INSERT INTO materials(name) VALUES (?)", (m,))
+        for p in ("BoxA", "PadA", "PalletA"):
+            conn.execute("INSERT INTO packaging VALUES (?, ?, ?)", (p, "kind", 1.0))
+        conn.execute(
+            "INSERT INTO mixtures VALUES (?, ?, ?)",
+            ("MixA", listToString(["MatA", "MatB"], str), listToString([100.0, 50.0], float))
+        )
+        conn.execute(
+            "INSERT INTO parts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("PartA", 1.0, "MixA", 100.0, 100.0, 1.0, 1.0, 1.0, 1.0, 0.05,
+             "BoxA", 10, "PalletA", 40,
+             listToString(["PadA"], str), listToString([2], int),
+             listToString([], str),
+             9.99, 0)
+        )
+        conn.commit()
+        conn.close()
+
+        # --- seed legacy BECKY DB ---
+        conn = sqlite3.connect(beckyFd.name)
+        conn.execute("CREATE TABLE globals(name PRIMARY KEY, value)")
+        conn.execute("INSERT INTO globals VALUES ('db_version', 2)")
+        conn.execute("CREATE TABLE employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
+        conn.execute("CREATE TABLE reviews(idNum, date, nextReview, details, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE training(idNum, training, date, comment, UNIQUE(idNum, training, date))")
+        conn.execute("CREATE TABLE attendance(idNum, date, reason, value, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE PTO(idNum, start, end, hours, UNIQUE(idNum, start, end))")
+        conn.execute("CREATE TABLE notes(idNum, date, time, details, UNIQUE(idNum, date, time))")
+        conn.execute("CREATE TABLE holidays(holiday PRIMARY KEY, month)")
+        conn.execute("CREATE TABLE observances(holiday, shift, date, UNIQUE(holiday, shift, date))")
+        conn.execute("INSERT INTO employees VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (1, "Smith", "Alice", "2020-01-15", "Operator", "1|1",
+                      "123 Main", "", "Townsville", "OH", "44000", "555-1234", "a@x.com", 1))
+        conn.execute("INSERT INTO employees VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (2, "Jones", "Bob", "2021-06-01", "Presser", "2|0",
+                      "456 Oak", "Apt 3", "Townsville", "OH", "44000", "555-5678", "b@x.com", 1))
+        conn.execute("INSERT INTO reviews VALUES (?, ?, ?, ?)",
+                     (1, "2024-01-10", "2025-01-10", stringToB64("Good review.")))
+        conn.execute("INSERT INTO notes VALUES (?, ?, ?, ?)",
+                     (1, "2024-03-05", "14:30", stringToB64("Late arrival.")))
+        conn.execute("INSERT INTO training VALUES (?, ?, ?, ?)", (1, "Forklift", "2023-05-01", ""))
+        conn.commit()
+        conn.close()
+
+        # Hash the BECKY file *after* WAL is released so it reflects the steady on-disk state.
+        def fileHash(path: str) -> str:
+            with open(path, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+
+        beckyHashBefore = fileHash(beckyFd.name)
+
+        # --- open ANIKA with MERCY (Case 3 migration) ---
+        w = MainWindow()
+        if not w.fileManager.setFile(anikaFd.name):
+            errors.append("setFile returned False on legacy ANIKA DB")
+            return errors
+        w.fileManager.loadFile()
+
+        if "PartA" not in w.db.parts:
+            errors.append(f"pre-import: expected PartA in db.parts, got {sorted(w.db.parts.keys())}")
+        if len(w.db.employees) != 0:
+            errors.append(f"pre-import: expected 0 employees, got {len(w.db.employees)}")
+
+        # --- import BECKY ---
+        otherDb, fmt = w.fileManager.importOtherDb(beckyFd.name)
+        if fmt != "ok" or otherDb is None:
+            errors.append(f"importOtherDb failed: fmt={fmt}")
+            return errors
+
+        plan = w.db.planMergeFrom(otherDb)
+        for key, vals in plan["collisions"].items():
+            if vals:
+                errors.append(f"unexpected collision on {key}: {vals}")
+        if plan["incoming"]["employees"] != [1, 2]:
+            errors.append(f"expected employees [1, 2], got {plan['incoming']['employees']}")
+
+        w.db.mergeFrom(otherDb)
+
+        # --- post-merge in-memory assertions ---
+        db = w.db
+        if "PartA" not in db.parts:
+            errors.append("post-merge: PartA missing from db.parts")
+        if "MixA" not in db.mixtures or db.mixtures["MixA"].materials != ["MatA", "MatB"]:
+            errors.append(f"post-merge: MixA.materials={db.mixtures.get('MixA') and db.mixtures['MixA'].materials}")
+        if 1 not in db.employees or db.employees[1].shift != 1 or db.employees[1].fullTime is not True:
+            e = db.employees.get(1)
+            errors.append(f"post-merge: employee 1 shift={e and e.shift} fullTime={e and e.fullTime}")
+        if 2 not in db.employees or db.employees[2].shift != 2 or db.employees[2].fullTime is not False:
+            e = db.employees.get(2)
+            errors.append(f"post-merge: employee 2 shift={e and e.shift} fullTime={e and e.fullTime}")
+        if 1 not in db.reviews or datetime_date(2024, 1, 10) not in db.reviews[1].reviews:
+            errors.append("post-merge: employee 1's review missing")
+        if 1 not in db.notes or (datetime_date(2024, 3, 5), "14:30") not in db.notes[1].notes:
+            errors.append("post-merge: employee 1's note missing")
+
+        # --- BECKY source file untouched ---
+        beckyHashAfter = fileHash(beckyFd.name)
+        if beckyHashBefore != beckyHashAfter:
+            errors.append(f"BECKY source file was mutated: {beckyHashBefore} -> {beckyHashAfter}")
+
+        # --- save+reload roundtrip of the merged ANIKA file ---
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(anikaFd.name):
+            errors.append("setFile returned False when reloading merged DB")
+        else:
+            w2.fileManager.loadFile()
+            db2 = w2.db
+            if "PartA" not in db2.parts:
+                errors.append("post-roundtrip: PartA missing")
+            if 1 not in db2.employees or db2.employees[1].shift != 1:
+                e = db2.employees.get(1)
+                errors.append(f"post-roundtrip: employee 1 shift={e and e.shift}")
+            if 1 in db2.reviews:
+                rev = db2.reviews[1].reviews.get(datetime_date(2024, 1, 10))
+                if rev is None or rev.details != "Good review.":
+                    errors.append(f"post-roundtrip: review details={rev and rev.details}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for bglob in (anikaBackupGlob, beckyBackupGlob):
+            for p in glob.glob(bglob):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        for base in (anikaFd.name, beckyFd.name):
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(base + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
                      ("empty_roundtrip", empty_roundtrip),
                      ("legacy_anika_migration", legacy_anika_migration),
-                     ("legacy_becky_migration", legacy_becky_migration)]:
+                     ("legacy_becky_migration", legacy_becky_migration),
+                     ("legacy_merge", legacy_merge)]:
         errors = fn()
         if errors:
             failed = True
