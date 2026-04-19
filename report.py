@@ -6,8 +6,11 @@ from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
-from records import Database
-from defaults import PTO_ELIGIBILITY
+from records import Database, ProductionRecord
+from defaults import (
+    PTO_ELIGIBILITY,
+    PRODUCTION_ACTIONS, PRODUCTION_ACTION_TARGET, PRODUCTION_TARGET_UNIT,
+)
 
 class PDFReport:
     def __init__(self, db: Database, path: str, margin: float = inch) -> None:
@@ -643,4 +646,271 @@ class PDFReport:
 
             data = data[drawn:]
             self.nextPage()
+        self.pdf.save()
+
+    def _filterProduction(self, startDate: datetime.date, endDate: datetime.date,
+                          action: str | None = None,
+                          employeeId: int | None = None,
+                          targetType: str | None = None,
+                          targetName: str | None = None) -> list[ProductionRecord]:
+        out = []
+        for rec in self.db.production.values():
+            if rec.date is None:
+                continue
+            if rec.date < startDate or rec.date > endDate:
+                continue
+            if action is not None and rec.action != action:
+                continue
+            if employeeId is not None and rec.employeeId != employeeId:
+                continue
+            if targetType is not None and rec.targetType != targetType:
+                continue
+            if targetName is not None and rec.targetName != targetName:
+                continue
+            out.append(rec)
+        return out
+
+    def _employeeName(self, employeeId) -> str:
+        emp = self.db.employees.get(employeeId)
+        if emp is None:
+            return f"(missing #{employeeId})"
+        last = (emp.lastName or "").upper()
+        first = emp.firstName or ""
+        return f"{last} {first} ({employeeId})"
+
+    def productionSummaryReport(self, startDate: datetime.date, endDate: datetime.date):
+        recs = self._filterProduction(startDate, endDate)
+
+        grid: dict[tuple[int | None, str | None], tuple[float, float]] = {}
+        empIds: set = set()
+        for r in recs:
+            key = (r.employeeId, r.action)
+            q, s = grid.get(key, (0.0, 0.0))
+            grid[key] = (q + (r.quantity or 0), s + r.scrapQuantity)
+            empIds.add(r.employeeId)
+
+        def empSortKey(eid):
+            emp = self.db.employees.get(eid)
+            if emp is None:
+                return (1, "", "", eid if eid is not None else 0)
+            return (0, (emp.lastName or "").lower(), (emp.firstName or "").lower(), eid or 0)
+
+        sortedIds = sorted(empIds, key=empSortKey)
+
+        headers = ["Employee"] + [
+            f"{a} ({PRODUCTION_TARGET_UNIT[PRODUCTION_ACTION_TARGET[a]]})"
+            for a in PRODUCTION_ACTIONS
+        ]
+
+        def cell(eid, action) -> str:
+            q, s = grid.get((eid, action), (0.0, 0.0))
+            if q == 0 and s == 0:
+                return "—"
+            return f"{q:g} (scrap: {s:g})" if s > 0 else f"{q:g}"
+
+        data = [[self._employeeName(eid)] + [cell(eid, a) for a in PRODUCTION_ACTIONS]
+                for eid in sortedIds]
+
+        totalsRow = ["Total"]
+        for a in PRODUCTION_ACTIONS:
+            tq = sum(grid.get((eid, a), (0.0, 0.0))[0] for eid in empIds)
+            ts = sum(grid.get((eid, a), (0.0, 0.0))[1] for eid in empIds)
+            totalsRow.append(f"{tq:g} (scrap: {ts:g})" if ts > 0 else f"{tq:g}")
+
+        olen = len(data)
+        rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
+
+        if olen == 0:
+            self.setupPage()
+            self.drawTitle("TKG Production Summary")
+            self.drawSubtitle(rangeText)
+            self.skipLines(2)
+            self.drawSection("Production by Employee")
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+        else:
+            while len(data) > 0:
+                self.setupPage()
+                self.drawTitle("TKG Production Summary")
+                self.drawSubtitle(rangeText)
+                self.skipLines(2)
+                self.drawSection("Production by Employee" if len(data) == olen
+                                 else "Production by Employee -- Continued")
+                drawn = self.drawTable(data, headers)
+                if drawn == len(data):
+                    self.drawTable([], totalsRow)
+                data = data[drawn:]
+                self.nextPage()
+        self.pdf.save()
+
+    def productionActionReport(self, action: str, startDate: datetime.date, endDate: datetime.date):
+        if action not in PRODUCTION_ACTIONS:
+            raise RuntimeError(f'unknown action {action!r}')
+
+        recs = self._filterProduction(startDate, endDate, action=action)
+        recs.sort(key=lambda r: (r.date, r.shift if r.shift is not None else 0,
+                                 r.targetName or "",
+                                 r.employeeId if r.employeeId is not None else 0))
+
+        targetType = PRODUCTION_ACTION_TARGET[action]
+        unit = PRODUCTION_TARGET_UNIT[targetType]
+        targetLabel = "Mixture" if targetType == "mix" else "Part"
+
+        headers = ["Date", "Shift", "Employee", targetLabel,
+                   f"Quantity ({unit})", f"Scrap ({unit})"]
+        data = [[
+            r.date.isoformat() if r.date else "",
+            str(r.shift) if r.shift is not None else "",
+            self._employeeName(r.employeeId),
+            r.targetName or "",
+            f"{r.quantity:g}" if r.quantity is not None else "",
+            f"{r.scrapQuantity:g}",
+        ] for r in recs]
+        olen = len(data)
+
+        totalQ = sum((r.quantity or 0) for r in recs)
+        totalS = sum(r.scrapQuantity for r in recs)
+        rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
+
+        if olen == 0:
+            self.setupPage()
+            self.drawTitle(f"TKG {action} Report")
+            self.drawSubtitle(rangeText)
+            self.skipLines(2)
+            self.drawSection(f"{action} Records")
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+        else:
+            while len(data) > 0:
+                self.setupPage()
+                self.drawTitle(f"TKG {action} Report")
+                self.drawSubtitle(rangeText)
+                self.skipLines(2)
+                self.drawSection(f"{action} Records" if len(data) == olen
+                                 else f"{action} Records -- Continued")
+                drawn = self.drawTable(data, headers)
+                if drawn == len(data):
+                    self.drawTable([], ["", "", "", "Total", f"{totalQ:g}", f"{totalS:g}"])
+                data = data[drawn:]
+                self.nextPage()
+        self.pdf.save()
+
+    def productionTargetReport(self, targetType: str, targetName: str,
+                               startDate: datetime.date, endDate: datetime.date):
+        if targetType not in PRODUCTION_TARGET_UNIT:
+            raise RuntimeError(f'unknown targetType {targetType!r}')
+
+        recs = self._filterProduction(startDate, endDate,
+                                      targetType=targetType, targetName=targetName)
+        recs.sort(key=lambda r: (r.date, r.shift if r.shift is not None else 0,
+                                 r.action or "",
+                                 r.employeeId if r.employeeId is not None else 0))
+
+        unit = PRODUCTION_TARGET_UNIT[targetType]
+        targetLabel = "Mixture" if targetType == "mix" else "Part"
+
+        headers = ["Date", "Shift", "Employee", "Action",
+                   f"Quantity ({unit})", f"Scrap ({unit})"]
+        data = [[
+            r.date.isoformat() if r.date else "",
+            str(r.shift) if r.shift is not None else "",
+            self._employeeName(r.employeeId),
+            r.action or "",
+            f"{r.quantity:g}" if r.quantity is not None else "",
+            f"{r.scrapQuantity:g}",
+        ] for r in recs]
+        olen = len(data)
+
+        perAction: dict[str, tuple[float, float]] = {}
+        for r in recs:
+            q, s = perAction.get(r.action or "", (0.0, 0.0))
+            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity)
+
+        rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
+
+        if olen == 0:
+            self.setupPage()
+            self.drawTitle(f"TKG Production Report: {targetName}")
+            self.drawSubtitle(f"{targetLabel} ({rangeText})")
+            self.skipLines(2)
+            self.drawSection("Production Records")
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+        else:
+            while len(data) > 0:
+                self.setupPage()
+                self.drawTitle(f"TKG Production Report: {targetName}")
+                self.drawSubtitle(f"{targetLabel} ({rangeText})")
+                self.skipLines(2)
+                self.drawSection("Production Records" if len(data) == olen
+                                 else "Production Records -- Continued")
+                drawn = self.drawTable(data, headers)
+                if drawn == len(data):
+                    for a in PRODUCTION_ACTIONS:
+                        if a in perAction:
+                            q, s = perAction[a]
+                            self.drawTable([], ["", "", "", f"Total {a}", f"{q:g}", f"{s:g}"])
+                data = data[drawn:]
+                self.nextPage()
+        self.pdf.save()
+
+    def productionEmployeeReport(self, employeeId: int,
+                                 startDate: datetime.date, endDate: datetime.date):
+        if employeeId not in self.db.employees:
+            raise RuntimeError(f'employeeId {employeeId} not in self.db.employees')
+
+        recs = self._filterProduction(startDate, endDate, employeeId=employeeId)
+        recs.sort(key=lambda r: (r.date, r.shift if r.shift is not None else 0,
+                                 r.action or "", r.targetName or ""))
+
+        headers = ["Date", "Shift", "Action", "Target", "Quantity", "Unit", "Scrap"]
+        data = [[
+            r.date.isoformat() if r.date else "",
+            str(r.shift) if r.shift is not None else "",
+            r.action or "",
+            r.targetName or "",
+            f"{r.quantity:g}" if r.quantity is not None else "",
+            PRODUCTION_TARGET_UNIT.get(r.targetType or "", ""),
+            f"{r.scrapQuantity:g}",
+        ] for r in recs]
+        olen = len(data)
+
+        perAction: dict[str, tuple[float, float]] = {}
+        for r in recs:
+            q, s = perAction.get(r.action or "", (0.0, 0.0))
+            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity)
+
+        empName = self._employeeName(employeeId)
+        rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
+
+        if olen == 0:
+            self.setupPage()
+            self.drawTitle("TKG Production Report")
+            self.drawSubtitle(empName)
+            self.skipLines(1)
+            self.drawText(rangeText)
+            self.skipLines(1)
+            self.drawSection("Production Records")
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+        else:
+            while len(data) > 0:
+                self.setupPage()
+                self.drawTitle("TKG Production Report")
+                self.drawSubtitle(empName)
+                self.skipLines(1)
+                self.drawText(rangeText)
+                self.skipLines(1)
+                self.drawSection("Production Records" if len(data) == olen
+                                 else "Production Records -- Continued")
+                drawn = self.drawTable(data, headers)
+                if drawn == len(data):
+                    for a in PRODUCTION_ACTIONS:
+                        if a in perAction:
+                            q, s = perAction[a]
+                            unit = PRODUCTION_TARGET_UNIT[PRODUCTION_ACTION_TARGET[a]]
+                            self.drawTable([], ["", "", f"Total {a}", "",
+                                                f"{q:g}", unit, f"{s:g}"])
+                data = data[drawn:]
+                self.nextPage()
         self.pdf.save()

@@ -1,7 +1,8 @@
 import datetime
+import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QMessageBox, QCalendarWidget, QComboBox, QDateEdit,
+    QMessageBox, QCalendarWidget, QComboBox, QDateEdit, QFileDialog,
 )
 from PySide6.QtCore import Qt
 
@@ -12,8 +13,9 @@ from defaults import (
     PRODUCTION_ACTIONS, PRODUCTION_ACTION_TARGET, PRODUCTION_TARGET_UNIT,
 )
 from error import errorMessage
+from report import PDFReport
 from utils import (
-    widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen,
+    widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen,
 )
 
 
@@ -77,11 +79,14 @@ class ProductionTab(QWidget):
         self.editB.clicked.connect(self.openEdits)
         self.deleteB = QPushButton("Delete Production")
         self.deleteB.clicked.connect(self.deleteProduction)
+        self.reportB = QPushButton("Generate Report")
+        self.reportB.clicked.connect(self.openReport)
 
         barLayout = QHBoxLayout()
         barLayout.addWidget(self.newB)
         barLayout.addWidget(self.editB)
         barLayout.addWidget(self.deleteB)
+        barLayout.addWidget(self.reportB)
 
         layout = QVBoxLayout()
         layout.addLayout(filterLayout)
@@ -202,6 +207,10 @@ class ProductionTab(QWidget):
                 errorMessage(self.mainApp, [f"Production record {key} no longer exists."])
                 continue
             ProductionEditWindow(self, self.mainApp.db.production[key], self.mainApp)
+
+    def openReport(self):
+        ProductionReportWindow(self, self.mainApp,
+                               self.filterEmployeeId, self.filterStart, self.filterEnd)
 
     def deleteProduction(self):
         if len(self.selection) == 0:
@@ -433,3 +442,170 @@ class ProductionEditWindow(QWidget):
         if self.readData(False):
             QMessageBox.information(self, "Success", "Production record updated!")
             self.close()
+
+
+class ProductionReportWindow(QWidget):
+    # Single dialog for all four production reports. Conditional fields are
+    # shown/hidden based on the selected report type so the user only sees the
+    # inputs that report needs.
+    REPORT_TYPES = [
+        "Production Summary",
+        "Per Action",
+        "Per Target",
+        "Per Employee",
+    ]
+
+    def __init__(self, parentTab: ProductionTab, mainApp: MainWindow,
+                 initialEmployeeId: int | None,
+                 initialStart: datetime.date, initialEnd: datetime.date):
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.mainApp = mainApp
+        self.parentTab = parentTab
+        self.setWindowTitle("Production Report")
+
+        self.typeBox = QComboBox()
+        self.typeBox.setEditable(False)
+        self.typeBox.addItems(self.REPORT_TYPES)
+        self.typeBox.currentTextChanged.connect(self._onTypeChanged)
+
+        self.startDateEdit = QDateEdit()
+        self.startDateEdit.setCalendarPopup(True)
+        self.startDateEdit.setDisplayFormat("yyyy-MM-dd")
+        self.startDateEdit.setDate(toQDate(initialStart))
+
+        self.endDateEdit = QDateEdit()
+        self.endDateEdit.setCalendarPopup(True)
+        self.endDateEdit.setDisplayFormat("yyyy-MM-dd")
+        self.endDateEdit.setDate(toQDate(initialEnd))
+
+        self.actionBox = QComboBox()
+        self.actionBox.setEditable(False)
+        self.actionBox.addItems(PRODUCTION_ACTIONS)
+
+        self.targetTypeBox = QComboBox()
+        self.targetTypeBox.setEditable(False)
+        self.targetTypeBox.addItem("Mixture", userData="mix")
+        self.targetTypeBox.addItem("Part", userData="part")
+        self.targetTypeBox.currentIndexChanged.connect(self._onTargetTypeChanged)
+
+        self.targetNameBox = QComboBox()
+        self.targetNameBox.setEditable(False)
+
+        self.employeeBox = QComboBox()
+        self.employeeBox.setEditable(False)
+        emps = list(self.mainApp.db.employees.values())
+        emps.sort(key=lambda e: (0 if e.status else 1,
+                                 (e.lastName or "").lower(),
+                                 (e.firstName or "").lower()))
+        for emp in emps:
+            suffix = "" if emp.status else " [inactive]"
+            self.employeeBox.addItem(_employeeLabel(emp) + suffix, userData=emp.idNum)
+        if initialEmployeeId is not None:
+            for i in range(self.employeeBox.count()):
+                if self.employeeBox.itemData(i) == initialEmployeeId:
+                    self.employeeBox.setCurrentIndex(i)
+                    break
+
+        self.actionLabel = QLabel("Action:")
+        self.targetTypeLabel = QLabel("Target type:")
+        self.targetNameLabel = QLabel("Target:")
+        self.employeeLabel = QLabel("Employee:")
+
+        self.generateB = QPushButton("Generate")
+        self.generateB.clicked.connect(self.generate)
+
+        self.mainLayout = [
+            [QLabel("Report type:"), self.typeBox],
+            [QLabel("From:"), self.startDateEdit],
+            [QLabel("To:"), self.endDateEdit],
+            [self.actionLabel, self.actionBox],
+            [self.targetTypeLabel, self.targetTypeBox],
+            [self.targetNameLabel, self.targetNameBox],
+            [self.employeeLabel, self.employeeBox],
+            [self.generateB],
+        ]
+        widgetFromList(self, self.mainLayout)
+
+        self._onTargetTypeChanged(self.targetTypeBox.currentIndex())
+        self._onTypeChanged(self.typeBox.currentText())
+
+        centerOnScreen(self)
+        self.show()
+
+    def _onTargetTypeChanged(self, _idx: int):
+        targetType = self.targetTypeBox.currentData()
+        self.targetNameBox.clear()
+        if targetType == "mix":
+            self.targetNameBox.addItems(sorted(self.mainApp.db.mixtures.keys()))
+        elif targetType == "part":
+            self.targetNameBox.addItems(sorted(self.mainApp.db.parts.keys()))
+
+    def _onTypeChanged(self, t: str):
+        showAction = (t == "Per Action")
+        showTarget = (t == "Per Target")
+        showEmployee = (t == "Per Employee")
+        for w in (self.actionLabel, self.actionBox):
+            w.setVisible(showAction)
+        for w in (self.targetTypeLabel, self.targetTypeBox,
+                  self.targetNameLabel, self.targetNameBox):
+            w.setVisible(showTarget)
+        for w in (self.employeeLabel, self.employeeBox):
+            w.setVisible(showEmployee)
+
+    def generate(self):
+        startDate = fromQDate(self.startDateEdit.date())
+        endDate = fromQDate(self.endDateEdit.date())
+        if startDate > endDate:
+            errorMessage(self, ["Start date must be on or before end date."])
+            return
+
+        reportType = self.typeBox.currentText()
+        action = self.actionBox.currentText()
+        targetType = self.targetTypeBox.currentData()
+        targetName = self.targetNameBox.currentText()
+        employeeId = self.employeeBox.currentData()
+
+        if reportType == "Per Target" and not targetName:
+            label = "mixtures" if targetType == "mix" else "parts"
+            errorMessage(self, [f"No {label} available to report on."])
+            return
+        if reportType == "Per Employee" and employeeId is None:
+            errorMessage(self, ["No employee selected."])
+            return
+
+        defaultName = self._defaultName(reportType, action, targetName, employeeId)
+        savePath, _ = QFileDialog.getSaveFileName(
+            self, "Save Production Report As",
+            os.path.join(os.path.expanduser("~"), defaultName),
+            "Portable Document Format (*.pdf)"
+        )
+        if not savePath:
+            return
+
+        pdf = PDFReport(self.mainApp.db, savePath)
+        if reportType == "Production Summary":
+            pdf.productionSummaryReport(startDate, endDate)
+        elif reportType == "Per Action":
+            pdf.productionActionReport(action, startDate, endDate)
+        elif reportType == "Per Target":
+            pdf.productionTargetReport(targetType, targetName, startDate, endDate)
+        elif reportType == "Per Employee":
+            pdf.productionEmployeeReport(employeeId, startDate, endDate)
+        else:
+            raise RuntimeError(f'unknown reportType {reportType!r}')
+
+        startfile(savePath)
+        self.close()
+
+    def _defaultName(self, reportType, action, targetName, employeeId) -> str:
+        if reportType == "Production Summary":
+            return "production-summary.pdf"
+        if reportType == "Per Action":
+            return f"production-{action.lower()}.pdf"
+        if reportType == "Per Target":
+            safe = (targetName or "target").replace("/", "_").replace("\\", "_")
+            return f"production-{safe}.pdf"
+        if reportType == "Per Employee":
+            return f"production-employee-{employeeId}.pdf"
+        return "production-report.pdf"

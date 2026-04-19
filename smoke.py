@@ -768,6 +768,93 @@ def production_roundtrip() -> list[str]:
     return errors
 
 
+def production_report() -> list[str]:
+    """Step 12: generate each production report and assert files are non-empty.
+
+    Seeds one employee + three records (one per action), then exercises:
+      - productionSummaryReport (multi-employee grid path with the totals row)
+      - productionActionReport  (single-action filter)
+      - productionTargetReport  (single-part filter, both totals + per-action)
+      - productionEmployeeReport (single-employee, mixed-action totals)
+      - empty-range path (no records in window) — should still render a page.
+    Doesn't parse PDF content; success is generation without exception + non-empty file.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord, Employee
+    from report import PDFReport
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        emp = Employee()
+        emp.idNum = 101
+        emp.lastName = "Smith"
+        emp.firstName = "Alice"
+        emp.shift = 1
+        emp.fullTime = True
+        emp.status = True
+        emp.anniversary = datetime_date(2020, 1, 1)
+        w.db.employees[emp.idNum] = emp
+
+        d = datetime_date(2026, 4, 15)
+        for spec in [(d, 1, "Batching", "MixA", 7.5, 0),
+                     (d, 2, "Pressing", "PartA", 250.0, 3),
+                     (d, 3, "Finishing", "PartB", 125.5, 0)]:
+            r = ProductionRecord()
+            r.setRecord(emp.idNum, *spec)
+            w.db.production[r.key()] = r
+
+        start = datetime_date(2026, 4, 1)
+        end = datetime_date(2026, 4, 30)
+        emptyStart = datetime_date(2030, 1, 1)
+        emptyEnd = datetime_date(2030, 1, 31)
+
+        reports = [
+            ("summary", lambda p: p.productionSummaryReport(start, end)),
+            ("action",  lambda p: p.productionActionReport("Pressing", start, end)),
+            ("target",  lambda p: p.productionTargetReport("part", "PartA", start, end)),
+            ("employee", lambda p: p.productionEmployeeReport(emp.idNum, start, end)),
+            ("empty",   lambda p: p.productionSummaryReport(emptyStart, emptyEnd)),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
@@ -775,7 +862,8 @@ def main() -> int:
                      ("legacy_anika_migration", legacy_anika_migration),
                      ("legacy_becky_migration", legacy_becky_migration),
                      ("legacy_merge", legacy_merge),
-                     ("production_roundtrip", production_roundtrip)]:
+                     ("production_roundtrip", production_roundtrip),
+                     ("production_report", production_report)]:
         errors = fn()
         if errors:
             failed = True
