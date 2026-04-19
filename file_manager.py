@@ -9,7 +9,8 @@ from app import MainWindow
 from records import (
     Material, Mixture, Package, Part, MaterialInventoryRecord, PartInventoryRecord,
     Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB,
-    EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance
+    EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
+    ProductionRecord
 )
 from utils import stringToList, stringFromB64
 
@@ -738,6 +739,44 @@ class FileManager:
             except Exception as e:
                 logging.error(f" * Error deleting old entries {", ".join([f"({observance[0]}, {observance[1]}, {observance[2]})" for observance in deleted])}: {repr(e)}")
 
+        # --- MERCY: production ---
+        # The `id` column is an AUTOINCREMENT surrogate key — don't try to supply it from
+        # in-memory state. Insert on the UNIQUE(employeeId, date, shift, targetType,
+        # targetName, action) natural key; SQLite will keep or assign `id` as needed.
+        logging.info(f"Saving production to {self.filePath}")
+        for key, rec in db.production.items():
+            vals = rec.getTuple()
+            try:
+                self.dbFile.execute(
+                    "INSERT OR REPLACE INTO production"
+                    "(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    vals
+                )
+                logging.info(f" * Saving {vals}")
+            except Exception as e:
+                logging.error(f" * Error saving {vals}: {repr(e)}")
+
+        res = self.dbFile.execute(
+            "SELECT employeeId, date, shift, targetType, targetName, action FROM production"
+        )
+        deleted = []
+        for row in res.fetchall():
+            emp, dateStr, shift, tType, tName, action = row
+            memKey = (emp, datetime.date.fromisoformat(dateStr), shift, tType, tName, action)
+            if memKey not in db.production:
+                deleted.append(row)
+        if len(deleted) > 0:
+            try:
+                self.dbFile.executemany(
+                    "DELETE FROM production WHERE "
+                    "(employeeId, date, shift, targetType, targetName, action)=(?, ?, ?, ?, ?, ?)",
+                    deleted
+                )
+                logging.info(f" * Deleting old entries {deleted}")
+            except Exception as e:
+                logging.error(f" * Error deleting old entries {deleted}: {repr(e)}")
+
     # ---- loadFile --------------------------------------------------------------------------
 
     def loadFile(self):
@@ -974,6 +1013,19 @@ class FileManager:
 
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded observance ({observance.holiday}, {observance.date.isoformat()}, {observance.shift})")
+
+        # --- MERCY: production ---
+        logging.info(f"Loading production from {self.filePath}")
+        res = self.dbFile.execute(
+            "SELECT employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity "
+            "FROM production"
+        )
+        for values in res.fetchall():
+            rec = ProductionRecord()
+            rec.fromTuple(values)
+            db.production[rec.key()] = rec
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded production {rec}")
 
     # ---- setFile ---------------------------------------------------------------------------
 

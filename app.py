@@ -20,8 +20,7 @@ class MainWindow(QWidget):
 
         self.resize(1280, 720)
 
-        # Top-level tabs: Products | Employees | Inventory | Settings
-        # (Production tab will be added in Step 11 of MERGE_PLAN.)
+        # Top-level tabs: Products | Employees | Production | Inventory | Settings
         self.tab_widget = QTabWidget()
 
         # ---- Products top-level tab (nested: Parts | Mixtures | Materials | Packaging) ----
@@ -61,6 +60,11 @@ class MainWindow(QWidget):
         self.employeesTopTab.addTab(self.holidaysTab, "Holiday Observances")
 
         self.tab_widget.addTab(self.employeesTopTab, "Employees")
+
+        # ---- Production top-level tab (MERCY-native, Step 11) ----
+        from production_tab import ProductionTab
+        self.productionTab = ProductionTab(self)
+        self.tab_widget.addTab(self.productionTab, "Production")
 
         # ---- Inventory top-level tab (ANIKA's existing InventoryTab has its own nested Materials|Parts) ----
         from inventory_tab import InventoryTab
@@ -125,6 +129,8 @@ class MainWindow(QWidget):
         self.employeesTab.inactiveEmployeesTab.refreshTable()
         self.overviewTab.refresh()
         self.holidaysTab.refresh()
+        # Production domain
+        self.productionTab.refresh()
 
     def open(self):
         self.openButton.setEnabled(False)

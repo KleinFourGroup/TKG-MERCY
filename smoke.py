@@ -644,13 +644,138 @@ def legacy_merge() -> list[str]:
     return errors
 
 
+def production_roundtrip() -> list[str]:
+    """Seed ProductionRecords in-memory, save, reload, assert state is preserved.
+
+    Exercises Step 11 persistence end-to-end without touching the UI:
+      - All three actions (Batching -> mix, Pressing -> part, Finishing -> part).
+      - scrapQuantity default (0) vs. explicit non-zero.
+      - UNIQUE composite-key roundtrip.
+      - Delete-then-save sweeps a removed record out of the on-disk table.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w1 = w2 = None
+    try:
+        w1 = MainWindow()
+        if not w1.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        d = datetime_date(2026, 4, 15)
+
+        # Batching -> mix, default scrap.
+        r1 = ProductionRecord()
+        r1.setRecord(101, d, 1, "Batching", "MixA", 7.5)
+        if r1.targetType != "mix":
+            errors.append(f"r1.targetType: expected 'mix', got {r1.targetType!r}")
+        if r1.scrapQuantity != 0:
+            errors.append(f"r1.scrapQuantity default: expected 0, got {r1.scrapQuantity!r}")
+        w1.db.production[r1.key()] = r1
+
+        # Pressing -> part, explicit scrap.
+        r2 = ProductionRecord()
+        r2.setRecord(102, d, 2, "Pressing", "PartA", 250.0, scrapQuantity=3)
+        if r2.targetType != "part":
+            errors.append(f"r2.targetType: expected 'part', got {r2.targetType!r}")
+        w1.db.production[r2.key()] = r2
+
+        # Finishing -> part, different shift/date/target to avoid UNIQUE overlap with r2.
+        r3 = ProductionRecord()
+        r3.setRecord(102, d, 3, "Finishing", "PartB", 125.5)
+        if r3.targetType != "part":
+            errors.append(f"r3.targetType: expected 'part', got {r3.targetType!r}")
+        w1.db.production[r3.key()] = r3
+
+        w1.fileManager.saveFile()
+        if w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+
+        # --- reload and verify ---
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading production DB")
+            return errors
+        w2.fileManager.loadFile()
+
+        db = w2.db
+        if len(db.production) != 3:
+            errors.append(f"expected 3 production records after reload, got {len(db.production)}")
+
+        if r1.key() not in db.production:
+            errors.append(f"r1 key missing after reload: {r1.key()}")
+        else:
+            got = db.production[r1.key()]
+            if got.action != "Batching" or got.targetType != "mix" or got.targetName != "MixA":
+                errors.append(f"r1 post-reload: action={got.action!r} targetType={got.targetType!r} targetName={got.targetName!r}")
+            if got.quantity != 7.5:
+                errors.append(f"r1 post-reload quantity: got {got.quantity!r}")
+            if got.scrapQuantity != 0:
+                errors.append(f"r1 post-reload scrap: got {got.scrapQuantity!r}")
+
+        if r2.key() not in db.production:
+            errors.append(f"r2 key missing after reload: {r2.key()}")
+        else:
+            got = db.production[r2.key()]
+            if got.action != "Pressing" or got.targetType != "part":
+                errors.append(f"r2 post-reload: action={got.action!r} targetType={got.targetType!r}")
+            if got.scrapQuantity != 3:
+                errors.append(f"r2 post-reload scrap: got {got.scrapQuantity!r}")
+
+        if r3.key() not in db.production:
+            errors.append(f"r3 key missing after reload: {r3.key()}")
+        else:
+            got = db.production[r3.key()]
+            if got.action != "Finishing" or got.targetType != "part":
+                errors.append(f"r3 post-reload: action={got.action!r} targetType={got.targetType!r}")
+
+        # --- delete one, save, reload: confirm sweep removes it ---
+        del db.production[r2.key()]
+        w2.fileManager.saveFile()
+        if w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+
+        w3 = MainWindow()
+        try:
+            if not w3.fileManager.setFile(tmp.name):
+                errors.append("setFile returned False when reloading after delete")
+            else:
+                w3.fileManager.loadFile()
+                if len(w3.db.production) != 2:
+                    errors.append(f"after delete+save+reload: expected 2 records, got {len(w3.db.production)}")
+                if r2.key() in w3.db.production:
+                    errors.append("after delete+save+reload: r2 still present")
+        finally:
+            if w3.fileManager.dbFile is not None:
+                w3.fileManager.dbFile.close()
+    finally:
+        if w1 is not None and w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
                      ("empty_roundtrip", empty_roundtrip),
                      ("legacy_anika_migration", legacy_anika_migration),
                      ("legacy_becky_migration", legacy_becky_migration),
-                     ("legacy_merge", legacy_merge)]:
+                     ("legacy_merge", legacy_merge),
+                     ("production_roundtrip", production_roundtrip)]:
         errors = fn()
         if errors:
             failed = True

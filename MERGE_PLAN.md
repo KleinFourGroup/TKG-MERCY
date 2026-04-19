@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–9 of 13 complete as of 2026-04-18, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 10** (DB merge).
+**Status:** Implementation in progress — Steps 1–11 of 13 complete as of 2026-04-19, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 12** (production reports).
 
 ---
 
@@ -317,10 +317,13 @@ The UI will present these as a dropdown, not a free-text field.
 
 ### 6.3 Quantity units
 
-- For parts (`targetType = "part"`): **pieces** (can be fractional for partial batches if needed)
-- For mixes (`targetType = "mix"`): **lbs**
+Per team clarification at Step 11 kickoff (2026-04-19), actions map 1:1 to target types, and units are expressed in terms of the action's natural work unit rather than the generic part/mix unit originally sketched:
 
-Units are implied by `targetType` and documented in code. No separate units column is needed.
+- `Batching` is always against a **mix**; unit is **drops** (pressing drops).
+- `Pressing` is always against a **part**; unit is **parts**.
+- `Finishing` is always against a **part**; unit is **parts**.
+
+The mapping lives in `defaults.py` as `PRODUCTION_ACTION_TARGET: dict[str, str]` (action → `"mix"`/`"part"`) and `PRODUCTION_TARGET_UNIT: dict[str, str]` (`"mix"` → `"drops"`, `"part"` → `"parts"`). `ProductionRecord.setRecord(action, targetName, …)` takes the action and derives `targetType` from the first dict; the UI uses the second dict to label the quantity field. No separate units column is needed on disk.
 
 ### 6.4 Scrap tracking
 
@@ -506,7 +509,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-19. Steps 1–10 complete plus the Step 9.5 polish; **Step 11 (production tracking) is next**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-19. Steps 1–11 complete plus the Step 9.5 polish; **Step 12 (production reports) is next**. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -539,7 +542,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 9  | ✅ Done | Merge plan Step 9: BECKY schema migration |
 | 9.5 | ✅ Done | Merge plan Step 9.5: drop vestigial Part attributes |
 | 10 | ✅ Done | Merge plan Step 10: DB merge / import |
-| 11–13 | ⏳ Pending | Per §9. |
+| 11 | ✅ Done | Merge plan Step 11: production tracking UI |
+| 12–13 | ⏳ Pending | Per §9. |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -671,6 +675,25 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** New `legacy_merge` smoke check seeds a legacy ANIKA + a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), hashes the BECKY file, runs `importOtherDb` + `mergeFrom`, and asserts: all ANIKA entities still present; all BECKY entities imported with correct shift/fullTime split and decoded review/note details; BECKY source file is byte-identical (sha256 before == after); save/reload roundtrip on the ANIKA file preserves the merged contents. All five smoke checks (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`) pass. Manually verified in the GUI: happy path on a real legacy ANIKA + legacy BECKY pair, import-a-non-DB-file warning path, and double-import collision-abort path.
 
+**Step 11 — production tracking UI landed.** First net-new-functionality step; everything prior was merge/migrate/cleanup. Adds the shift-level production log end-to-end (schema → records → file_manager → tab → app wiring → smoke). Five groups of changes:
+
+1. **Team clarification baked into the design (§6.3 rewrite).** At kickoff the team narrowed the original "any action × any target" model: `Batching` is always against a mix (unit: **drops**), `Pressing` and `Finishing` are always against a part (unit: **parts**). Encoded as two lookup dicts in `defaults.py` — `PRODUCTION_ACTION_TARGET: dict[str, str]` (action → `"mix"`/`"part"`) and `PRODUCTION_TARGET_UNIT: dict[str, str]` (target type → display unit). `ProductionRecord.setRecord(action, targetName, …)` derives `targetType` from the action via the first dict; the second dict drives the UI's unit label. `PRODUCTION_ACTIONS` lives in `defaults.py` per §6.2 / §10-1.
+
+2. **`records.py` — `ProductionRecord` class + `Database.production` container.** Fields: `employeeId`, `date` (`datetime.date`), `shift` (int), `targetType` (`"part"`/`"mix"`, derived — not set directly), `targetName`, `action`, `quantity` (float, unit per §6.3), `scrapQuantity` (float, defaults 0 per §10-2). Methods mirror the other record classes: `setRecord`, `key()` → the 6-tuple UNIQUE composite, `getTuple`/`fromTuple`, `__str__`. `fromTuple` validates the stored `targetType` matches `PRODUCTION_ACTION_TARGET[action]` and raises if not (guards against hand-edited DBs). `Database.__init__` now takes a required `production: dict[tuple, ProductionRecord]` as the final positional arg; `emptyDB()` updated to pass `{}`.
+
+3. **`file_manager.py` — save + load blocks.** Added `ProductionRecord` to the records import. Save block uses a named-column `INSERT OR REPLACE INTO production(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity) VALUES (…)` — the AUTOINCREMENT `id` is deliberately omitted so sqlite assigns/keeps it. The delete-sweep converts each on-disk row's date string back to `datetime.date` and checks membership against `db.production`'s tuple keys. Load block selects all eight real columns (ignores `id`), builds a `ProductionRecord`, and stores it at `db.production[rec.key()]`.
+
+4. **`production_tab.py` (new).** Single top-level tab (not nested — §7.1's "Daily Entry | Reports" split is deferred: reports are Step 12, so Daily Entry doesn't need its own sub-tab yet). Filter bar across the top: employee dropdown (with `(All employees)` default) + `QDateEdit` from/to range (default last 30 days). Table below with columns `#` (synthetic row-id, used as the DBTable selection key), Employee, Date, Shift, Action, Target, Quantity, Unit, Scrap; composite 6-tuple keys live in a parallel `self._keyByRowId: dict[str, tuple]` rebuilt on every `genTableData()`. `ProductionEditWindow` follows the 21-window retention pattern (parent = `mainApp`, `Qt.WA_DeleteOnClose`, `centerOnScreen(self)` before `show()`). Action dropdown `currentTextChanged` cascade clears + repopulates the target dropdown (from `db.mixtures` or `db.parts` depending on `PRODUCTION_ACTION_TARGET[action]`) and updates the `Unit:` label. UNIQUE-key collision is caught pre-mutation with a readable `QMessageBox` rather than letting `INSERT OR REPLACE` silently clobber a neighbor.
+
+5. **`app.py` wiring + smoke.** New `Production` top-level tab between `Employees` and `Inventory` per §7.1 (layout now 5 tabs: Products | Employees | Production | Inventory | Settings). `self.productionTab.refresh()` added to `_refreshAllTabs()`. New `production_roundtrip` smoke check seeds three records (one Batching→mix with default scrap, one Pressing→part with explicit scrap=3, one Finishing→part), saves, reloads, verifies all three round-trip with correct `targetType`/`targetName`/`quantity`/`scrapQuantity`, then deletes one and re-roundtrips to confirm the save-side sweep removes the absent key.
+
+**Scope deviations from §12.5.**
+- **No nested `Daily Entry | Reports` sub-tabs.** Step 12 (reports) will add the Reports sub-tab; introducing a `QTabWidget` with a single child now would be pure scaffolding. When Step 12 lands, wrap the current `ProductionTab` as the `Daily Entry` child inside a new outer `QTabWidget`.
+- **Selection identity via synthetic row-id.** `DBTable.onSelect` reports only column-0 values. Since production records have a 6-tuple composite key, column 0 is a `1..N` row-id (rebuilt per refresh) and `_keyByRowId` maps it back. Cleaner than overloading a composite-string as the visible first column.
+- **Edit/delete button enablement.** Initial draft only toggled button state in `__init__`/`refresh`; user-side manual test caught that selection changes didn't re-evaluate. Fix: `setSelection` calls `_setButtonsEnabled()` at the end. Worth remembering for any future DBTable-backed tab — the selection callback is where button state should be kept coherent.
+
+**Verification.** New `production_roundtrip` smoke check (above) plus all five prior checks pass (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `production_roundtrip`). Manually verified in the real GUI: create/edit/delete a record of each of the three actions; action-change correctly cascades the target dropdown and unit label; UNIQUE-conflict path shows a readable error; filter by employee and by date range both narrow the table as expected; buttons enable/disable correctly on selection change and when the DB lacks employees-or-products.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -681,57 +704,56 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, and 10). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Five checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, 10, and 11). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Six checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
 - `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v3 schema (`mixtures`=[`name`] only; `parts` = 12 expected cols; `db_version=3` after chained v1→v3 migration), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. Updated in Step 9 to assert v3 (the BECKY v2→v3 migration is a no-op version-bump in Case 3 since the employee tables are empty).
 - `legacy_becky_migration` (Step 9) — hand-crafts a v2 BECKY-shape DB with 3 employees covering both compound-shift shapes (`"1|1"`, `"2|0"`, `"3|1"`), 2 base64-wrapped reviews (one multi-line), 2 base64-wrapped notes, and deliberately-orphaned `training`/`attendance`/`PTO` rows alongside valid ones. Opens with MERCY to trigger Case 4, then asserts `db_version=3`, the 15-col v3 `employees` shape, correct shift/fullTime split per row, plain-text `reviews.details`/`notes.details` (newlines preserved), orphan sweep removed only the dangling rows, backup sibling file exists, in-memory `Employee.shift`/`fullTime` reconstruct as `int`/`bool`, and save/reload roundtrip fidelity.
 - `legacy_merge` (Step 10) — seeds a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), sha256-hashes the BECKY file, calls `FileManager.importOtherDb(beckyPath)` + `Database.mergeFrom(tmpDb)`, then asserts: products from ANIKA + employees + reviews + notes from BECKY are all present in-memory with correct shift/fullTime split; the BECKY source file is byte-identical to what was seeded (hash before == after — the import must never mutate the source); and save/reload roundtrip on the ANIKA file preserves the merged contents.
+- `production_roundtrip` (Step 11) — builds a fresh `MainWindow` against an empty DB, inserts three `ProductionRecord`s directly into `db.production` covering all three actions (`Batching`→mix with default scrap, `Pressing`→part with explicit `scrapQuantity=3`, `Finishing`→part), saves, reloads into a second `MainWindow`, asserts each record round-trips with correct `action` / `targetType` / `targetName` / `quantity` / `scrapQuantity` (including the default-0 case), then deletes one record, re-saves, and reloads into a third `MainWindow` to confirm the save-side sweep in `_saveFileBody` removes the on-disk row when the in-memory key is gone. Does not populate `db.employees` / `db.parts` / `db.mixtures` — the persistence layer doesn't cross-validate those, so keeping the fixture minimal keeps the test focused.
 
 Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 11 (production tracking)
+### 12.5 Pick-up notes for Step 12 (production reports)
 
-**Step 11 — production tracking feature.** Per §6 and §10. First net-new-functionality step; all prior steps were merge/migrate/cleanup. Adds an employee-by-shift production log that references both parts and mixes. The `production` table already exists on disk (created in Step 4, declared unchanged through Steps 8–10) — schema is:
-
-```
-production(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    employeeId INTEGER,
-    date TEXT,
-    shift INTEGER,
-    targetType TEXT,    -- "part" or "mix"
-    targetName TEXT,    -- name into `parts` or `mixtures`
-    action TEXT,        -- one of PRODUCTION_ACTIONS
-    quantity REAL,
-    scrapQuantity REAL DEFAULT 0,
-    UNIQUE(employeeId, date, shift, targetType, targetName, action)
-)
-```
-
-Schema is frozen — **no `MERCY_DB_VERSION` bump for Step 11** since the on-disk shape doesn't change.
+**Step 12 — production reports.** Data side is done (Step 11 landed the schema, records, persistence, and UI). Step 12 adds PDF report generation over `db.production` via new methods on `PDFReport` in `report.py`, plus the UI surface to trigger them. Low risk per §9 — the report infrastructure (headers, tables, pagination, signature lines) is already battle-tested by ANIKA's `mixReport` / `salesReport` / `inventoryReport` and BECKY's `employeePointsReport` / `employeePTOReport` / `employeeNotesReport` / `employeeActiveReport`.
 
 **Scope.**
-1. **`defaults.py`** — add `PRODUCTION_ACTIONS: list[str] = ["Batching", "Pressing", "Finishing"]` per §6.2 / §10 decision 1.
-2. **`records.py`** — add a `ProductionRecord` class with `employeeId`, `date` (datetime.date), `shift` (int), `targetType` (Literal["part", "mix"]), `targetName` (str), `action` (one of `PRODUCTION_ACTIONS`), `quantity` (float, pieces for parts / lbs for mixes per §6.3), `scrapQuantity` (float, defaults 0). Mirror the `getTuple`/`fromTuple` pattern of the other record classes. Also add a `production` container on `Database` — shape TBD: either `list[ProductionRecord]` (append-only log, simple) or `dict[(employeeId, date, shift, targetType, targetName, action), ProductionRecord]` keyed on the UNIQUE columns (matches the employee-indexed dicts' pattern and makes collision detection free on save). Recommend **dict keyed on the UNIQUE tuple** for consistency with existing `db.reviews[idNum].reviews[date]` style. Update `emptyDB()` to pass an empty dict for the new container.
-3. **`file_manager.py` — saveFile + loadFile.** New "Saving production / Loading production" sections following the pattern of employees/reviews. 9-placeholder INSERT (AUTOINCREMENT `id` → `NULL` on insert; sqlite will assign). Load: reconstruct `ProductionRecord` and drop into `db.production[key]`.
-4. **`production_tab.py` — new tab file.** Per §7.1 the Production top-level tab has nested "Daily Entry | Reports". Scope Step 11 to Daily Entry only — **reports are Step 12**. Daily Entry pattern: a form with fields employee (dropdown populated from `db.employees`), date (QDateEdit), shift (spinbox or dropdown), target-type radio (part/mix), target-name (cascaded dropdown from `db.parts` or `db.mixtures` depending on radio), action (dropdown from `PRODUCTION_ACTIONS`), quantity (QDoubleSpinBox), scrap quantity (QDoubleSpinBox, default 0). Plus a table of existing entries, filterable by employee and date range. Follow the 21-window retention pattern from §12.2 Step 7c-3 item 2 — any pop-up edit window must be parented to `mainApp`, have `Qt.WA_DeleteOnClose`, and call `centerOnScreen(self)` before `self.show()`.
-5. **`app.py`** — wire `ProductionTab` as a new top-level tab between "Employees" and "Inventory" per §7.1. Current layout is 4 tabs (Products | Employees | Inventory | Settings); after Step 11 it should be 5 (Products | Employees | Production | Inventory | Settings). Add `self.productionTab` to `_refreshAllTabs()`.
+1. **`report.py` — new `PDFReport` methods.** The natural cuts (confirm with team before committing to all three):
+   - `productionSummaryReport(startDate, endDate)` — employee-by-action grid: rows = employees who produced in the window, columns = the three actions; cells = total quantity (unit per `PRODUCTION_TARGET_UNIT`) with a small "scrap: X" subscript when scrap > 0. Good for shift-lead weekly review.
+   - `productionEmployeeReport(employeeId, startDate, endDate)` — per-employee roll-up: one row per `(date, shift, action, targetName)` tuple, totals at the bottom per action. Analogous to `employeePointsReport(id)` in structure.
+   - `productionTargetReport(targetType, targetName, startDate, endDate)` — per-part/per-mix production history: rows per `(date, shift, employee, action)` producing that target. Useful for cost-of-goods / yield analysis.
+   Each method should use `drawTitle` / `drawSection` / `drawTable` following the existing BECKY report patterns — they're the closest stylistic match since they also filter by a person and a date range.
+2. **`production_tab.py` — "Generate Report" button + dialog.** Current `ProductionTab` already has the filter bar (employee + date range). Add a "Generate Report" button next to New/Edit/Delete. When no employee is selected → offers Summary or Target. When an employee is selected → offers Employee (pre-filled with the current employee + filter range) or Summary. On click, open a `QFileDialog.getSaveFileName(..., "*.pdf")`, instantiate `PDFReport`, call the matching method, and `startfile(path)` per the pattern in `points_tab.py`'s `report()` method.
+3. **(Optional) Nest the `ProductionTab` under a `QTabWidget` with `Daily Entry` and `Reports` children** per §7.1's original sketch. Only worth doing if the "Reports" surface grows beyond a single button; otherwise leave the button inline in the existing single-tab layout. §12.2's Step 11 note flagged this as a deliberate deferral — revisit when the report actions are defined.
 
-**Key decisions already made (§10).** (1) Fixed list of actions, not free-text. (2) `scrapQuantity REAL DEFAULT 0` is in the schema. (3) Saving a production record does **not** auto-update part WIP inventory — the two systems are independent. (4) Parts use `globals.greenScrap`, not a per-part rate (the old per-part `greenScrap` column was already dropped in Step 8). Don't re-litigate these.
+**Existing helpers worth reusing.**
+- `PDFReport.drawTable(data, headers, widths)` already handles pagination, wrapping, and column widths — all three new reports should be expressible as `drawTable` calls over filtered data extracted into list-of-lists format.
+- `PDFReport.drawSignatureLine(label)` exists if any of the reports need a shift-lead or supervisor signoff (check with team).
+- `defaults.PRODUCTION_TARGET_UNIT` gives the display unit for column labels (`"drops"` for Batching, `"parts"` for Pressing/Finishing) — drive off this rather than hardcoding, so if the team adds a fourth action later the unit label follows automatically.
+- `defaults.PRODUCTION_ACTIONS` is the canonical action order for grid-style reports — iterate over it directly rather than `sorted(db.production[...].action)` so the column order is stable across reports.
+
+**Data-access notes.** `db.production` is a `dict[tuple, ProductionRecord]` keyed on `(employeeId, date, shift, targetType, targetName, action)`. For report generation:
+- Filter by date range: `[r for r in db.production.values() if startDate <= r.date <= endDate]`.
+- Group by employee / by target / by action: straightforward dict aggregation.
+- Unit labels: `PRODUCTION_TARGET_UNIT[r.targetType]` (never interpolate free strings).
+- Employee name: `db.employees.get(r.employeeId)` may return `None` if an employee was deleted while keeping orphan production rows — have a fallback label (`f"(missing #{id})"`, already used in the tab).
 
 **Likely gotchas.**
-- **Target-type polymorphism in the UI.** When `targetType == "part"`, the target-name dropdown lists `db.parts.keys()`; when `targetType == "mix"`, it lists `db.mixtures.keys()`. Switching the radio should clear + repopulate the dropdown. Units label alongside the quantity field should flip between "pieces" and "lbs" based on radio state per §6.3.
-- **Referential integrity is not enforced by the schema** — no FK constraint on `(targetType, targetName)` into the parts/mixtures tables. The UI can enforce valid selections via dropdowns, but a direct SQL edit could leave dangling references. For now, trust the UI. If a future cleanup pass wants to sweep orphans, model it after the §12.2 Step 9's `sweepOrphans` helper in `_migrateBeckyV2ToV3`.
-- **Large production datasets.** A busy plant could produce hundreds of records per day — the filter-by-date-range UI should be built in from the start (don't ship a table that tries to show all history unfiltered).
+- **Action-unit homogeneity within a table column.** In `productionSummaryReport`'s employee×action grid, the Batching column is `"drops"` while Pressing/Finishing are `"parts"` — label the header accordingly (e.g. `"Batching (drops)"` / `"Pressing (parts)"` / `"Finishing (parts)"`) rather than trying to unify units.
+- **Empty date ranges.** If no records in the window, the report should still render a title page + "No production recorded in this range." — not crash or skip entirely. `employeePointsReport` handles the analogous empty case; mirror that.
+- **Sort order.** For employee / target reports, sort records by `(date, shift, action)` for readability. For the summary grid, sort employees by `(lastName, firstName)`.
 
-**Smoke-test scaffolding.** Add a `production_roundtrip` check to `smoke.py`: populate a fresh `emptyDB()` with one employee and one part/mix, create a `ProductionRecord`, save to a tmp file, reload, and assert the record round-trips correctly (including `scrapQuantity=0` default preservation and both `targetType` values).
+**Follow-ups explicitly NOT in Step 12.** (a) Anything interactive on the report (drill-through, hyperlinks) — keep to static PDF. (b) Charts/graphs — out of scope; `reportlab`'s basic primitives don't make them easy, and the team hasn't asked for any. (c) Cross-referencing with costing (linking production volume back to `parts.price` for a revenue report) — that's a nice-to-have that could become Step 14+ if the team wants it. (d) Editing pre-existing reports to match the new style; stay scoped to the three new methods.
 
-**Follow-ups explicitly NOT in Step 11.** (a) Production *reports* (§12 of §9) — separate step. (b) Upcoming-actions dashboards — explicitly deferred in §10 decision 5. (c) WIP inventory integration — explicitly rejected in §10 decision 3. (d) Any UI polish to the pre-existing tabs; stay scoped to the new one.
+**Smoke-test scaffolding.** Extend `smoke.py` with a `production_report` check: reuse the same three-record seeding from `production_roundtrip`, also add one employee via `addEmployee()` so the report has a name to render, write to a tmp `.pdf`, and assert the file exists and is non-empty. Don't try to parse PDF content — the generation succeeding without exceptions is the bar. Model after the way `empty_roundtrip` closes sqlite handles before `os.unlink` on Windows.
 
-**Touchpoints from Step 10 worth reusing.** `_refreshAllTabs()` in `app.py` needs the new `self.productionTab.refresh()` (or equivalent) call. `_loadIntoDb(db)` is where the new "Loading production" section goes (not `loadFile`, which is now just a 3-line wrapper). The atomic-save contract in `saveFile` / `_saveFileBody` means the new production save block can just add rows; any exception rolls everything back.
+**Touchpoints from Step 11 worth remembering.**
+- **Action→target mapping** (`defaults.PRODUCTION_ACTION_TARGET`) and **target→unit mapping** (`defaults.PRODUCTION_TARGET_UNIT`) are the canonical lookups — never hand-write `"drops"` / `"parts"` in report code.
+- **Selection-driven button state** lesson from the mid-session bug: whenever a new widget's behavior depends on a selection or filter state, `_setButtonsEnabled()` (or equivalent) needs to be called from the selection callback, not just from `refresh()`. If Step 12 adds any new buttons whose enablement depends on the employee/date filters, wire them into `_onEmployeeFilterChanged` / `_onDateFilterChanged` too.
+- **Schema is still frozen.** No `MERCY_DB_VERSION` bump needed for Step 12 — reports read, they don't write.
 
 ---
 
