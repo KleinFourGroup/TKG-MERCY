@@ -509,7 +509,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-20. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13; Step 14 has now landed. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-20. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13; Steps 14 and 15 have now landed. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -546,6 +546,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 12 | ✅ Done | Merge plan Step 12: production reports |
 | 13 | ✅ Done | Merge plan Step 13: end-to-end verification on real data |
 | 14 | ✅ Done | Merge plan Step 14: reports skip save dialog, open via temp file |
+| 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -723,6 +724,16 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** All 7 prior smoke checks pass unchanged (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `production_roundtrip`, `production_report`); no new smoke check was added because the persistence layer is untouched and §13.1's verification plan explicitly said the existing checks suffice. `grep` for `QFileDialog` / `os.path.expanduser` / `reportFile` returns zero hits in the touched tab files. Manually spot-checked by Matthew in the real GUI before commit — report buttons open the PDF in the OS viewer immediately with no save dialog.
 
+**Step 15 — production tab refresh when an employee is deleted.** Second post-release feature item from §13. One-line fix plus a regression check:
+
+1. **`employees_tab.py::deleteSelection` adds a fourth tab refresh.** After the existing `overviewTab.refresh()` / `activeEmployeesTab.refreshTable()` / `inactiveEmployeesTab.refreshTable()` calls on the delete-confirmed branch, I appended `self.mainApp.productionTab.refresh()`. `MainWindow` already holds `productionTab` as a direct attribute (set at `app.py:66` and referenced from `app.py:133`), so no plumbing was needed. `ProductionTab.refresh` → `_populateEmployeeFilter` already self-corrects when the previously-selected employee is gone (the for/else at `production_tab.py:113–119` falls back to "(All employees)"), so the fix is a single line at the call-site level.
+
+2. **Orphans are kept, not cascaded.** §13.2 was explicit: "deleted employees disappear from selectable pickers, but existing production records referencing them are kept." `records.py::delEmployee` already declines to touch `db.production`; the orphan-display path at `production_tab.py:158` ("`(missing #id)`") handles the render. Both confirmed by the new smoke check — the record's `employeeId` is not mutated post-delete.
+
+3. **New smoke check `production_refresh_on_delete` (8th).** Mirrors the `production_report` fixture style (one `Employee` plus all shadow collections seeded via `addEmployeeReviews` / `addEmployeeTraining` / `addEmployeePoints` / `addEmployeePTO` / `addEmployeeNotes`, because `delEmployee` `raise`s if any of them is absent). Seeds one `ProductionRecord` against the employee, calls `db.delEmployee(emp.idNum)`, then asserts (a) the record still exists with `employeeId` unchanged, (b) `productionTab.refresh()` doesn't raise when iterating over an orphan, and (c) the employee's `idNum` is no longer in `employeeFilter`'s `itemData` after refresh. Gotcha surfaced while writing: the fixture style from `production_report` (bare `db.employees[id] = emp`) is not enough for Step 15's test because it doesn't populate the shadow collections that `delEmployee` asserts on — use the full 6-call sequence from `employees_tab.py::_submit` instead.
+
+**Verification.** All 8 smoke checks pass (the 7 prior plus the new `production_refresh_on_delete`). Nothing else was touched — Step 15 deliberately does not sweep for other cross-tab staleness (per §13.2 resolved decisions). The pre-existing `updateEmployee`-on-rename orphan issue (rekeying an employee's idNum does not rewrite `production.employeeId` rows that reference the old id) is **out of scope** and not fixed — it's a separate latent issue that nobody has reported yet, tracked only implicitly via the "keep orphans visible as `(missing #id)`" fallback. Manually verified by Matthew in the real GUI on a real DB before commit.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -733,7 +744,7 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, 10, 11, and 12). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Seven checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, 10, 11, 12, and 15). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Eight checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
 - `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v3 schema (`mixtures`=[`name`] only; `parts` = 12 expected cols; `db_version=3` after chained v1→v3 migration), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. Updated in Step 9 to assert v3 (the BECKY v2→v3 migration is a no-op version-bump in Case 3 since the employee tables are empty).
@@ -741,6 +752,7 @@ Testing has been manual in the real PySide6 GUI on the user's machine. Headless 
 - `legacy_merge` (Step 10) — seeds a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), sha256-hashes the BECKY file, calls `FileManager.importOtherDb(beckyPath)` + `Database.mergeFrom(tmpDb)`, then asserts: products from ANIKA + employees + reviews + notes from BECKY are all present in-memory with correct shift/fullTime split; the BECKY source file is byte-identical to what was seeded (hash before == after — the import must never mutate the source); and save/reload roundtrip on the ANIKA file preserves the merged contents.
 - `production_roundtrip` (Step 11) — builds a fresh `MainWindow` against an empty DB, inserts three `ProductionRecord`s directly into `db.production` covering all three actions (`Batching`→mix with default scrap, `Pressing`→part with explicit `scrapQuantity=3`, `Finishing`→part), saves, reloads into a second `MainWindow`, asserts each record round-trips with correct `action` / `targetType` / `targetName` / `quantity` / `scrapQuantity` (including the default-0 case), then deletes one record, re-saves, and reloads into a third `MainWindow` to confirm the save-side sweep in `_saveFileBody` removes the on-disk row when the in-memory key is gone. Does not populate `db.employees` / `db.parts` / `db.mixtures` — the persistence layer doesn't cross-validate those, so keeping the fixture minimal keeps the test focused.
 - `production_report` (Step 12) — seeds one `Employee` (id 101, `lastName="Smith"`, `firstName="Alice"`, `fullTime=True`, anniversary 2020-01-01) plus the same three-record fixture as `production_roundtrip` (one record per action, mix and parts), then generates each of the four reports — `productionSummaryReport`, `productionActionReport("Pressing")`, `productionTargetReport("part", "PartA")`, `productionEmployeeReport(101)` — over a 2026-04 window plus an empty 2030 window for the empty-range path. Asserts every PDF file exists and is non-empty; does not parse PDF content (per §12.4 convention — generation succeeding without exception is the bar). Cleans up tmp `.pdf` paths and the `.db`/`-wal`/`-shm` triple in the `finally` block.
+- `production_refresh_on_delete` (Step 15) — builds `MainWindow` against an empty DB, seeds one `Employee` plus all five shadow collections (`EmployeeReviewsDB` / `EmployeeTrainingDB` / `EmployeePointsDB` / `EmployeePTODB` / `EmployeeNotesDB` — required because `delEmployee` asserts each is populated), seeds one `ProductionRecord` against the employee, primes `productionTab.refresh()` once and confirms the employee shows up in `employeeFilter`, then calls `db.delEmployee(emp.idNum)`. Asserts (a) the production record still exists in `db.production` with its `employeeId` unchanged (orphan retention — see §13.2), (b) a second `productionTab.refresh()` doesn't raise when the record's `employeeId` is no longer a key in `db.employees`, and (c) the deleted employee's id is gone from `employeeFilter`'s `itemData` after the refresh. Closes the sqlite handle before `os.unlink` in `finally` per the Windows file-lock convention.
 
 Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
@@ -787,26 +799,9 @@ Requests from the team after their first look at MERCY. Each item is small enoug
 
 Landed 2026-04-20. See §12.2 Step 14 for implementation notes and deviations.
 
-### 13.2 Step 15 — production tab refresh when an employee is deleted
+### 13.2 Step 15 — production tab refresh when an employee is deleted ✅ Done
 
-**Motivation.** Team reported that after deleting an employee, the production tab's employee filter dropdown still lists the deleted employee. Desired behavior: deleted employees disappear from selectable pickers, but existing production records referencing them are **kept** (may be useful later for part-level analysis — deletion of a person is not deletion of their history).
-
-**Where things already work.**
-- **Editor dialog:** `ProductionTab`'s entry dialog rebuilds its employee combo in `__init__` (around `production_tab.py:262`), so a freshly-opened editor already omits deleted employees. No fix needed here.
-- **Orphan display:** existing records referencing a deleted employee render as `"(missing #{id})"` at `production_tab.py:158`. No fix needed here.
-
-**What's stale.**
-- The main-tab **employee filter dropdown** (`ProductionTab._rebuildEmployeeFilter`, around `production_tab.py:101`) is built once and only rebuilt when `ProductionTab.refresh()` is called (around line 231). Employee deletion from `employees_tab.py` doesn't currently call `productionTab.refresh()`.
-
-**Implementation sketch.**
-1. Locate the delete-path in `employees_tab.py` (the deletion itself lands at `records.py:1527` via `del self.employees[employeeID]`; find the UI trigger that calls into that).
-2. After the delete succeeds, add `self.mainApp.productionTab.refresh()` (or equivalent — follow whatever `mainApp`-held reference already exists; if the production tab isn't held on `mainApp`, pipe it through the same way other cross-tab refreshes are wired).
-3. If the filter dropdown's currently-selected employee is the one being deleted, the rebuild should fall back to "(All employees)". Verify `_rebuildEmployeeFilter` already handles this case (it preserves `filterEmployeeId` only if it still exists in the employees dict — spot-read confirms it does, but verify against current code before relying on it).
-
-**Resolved decisions.**
-- **Scope:** this fix only. Not sweeping for other cross-tab staleness (inventory on packaging changes, etc.) — YAGNI until the team flags them.
-
-**Verification.** Add a regression check to `smoke.py` (e.g. `production_refresh_on_delete`) that seeds an employee, adds a production record against them, deletes the employee, verifies the orphan record still exists in-memory (as "(missing #id)"-renderable) AND that calling `productionTab.refresh()` doesn't choke on the orphan. Manual test: create two employees, one with production records; delete the non-production one, confirm the filter drops it.
+Landed 2026-04-20. See §12.2 Step 15 for implementation notes and the scope decisions.
 
 ### 13.3 Step 16 — production tab: batch entry
 

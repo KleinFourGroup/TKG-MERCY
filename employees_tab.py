@@ -128,8 +128,9 @@ class EmployeeTab(QWidget):
                 self.mainApp.overviewTab.refresh()
                 self.mainTab.activeEmployeesTab.refreshTable()
                 self.mainTab.inactiveEmployeesTab.refreshTable()
+                self.mainApp.productionTab.refresh()
                 QMessageBox.information(self, "Success", "Update successful!")
-    
+
     def reportAll(self):
         path = tempReportPath("active-employees")
         pdf = PDFReport(self.mainApp.db, path)

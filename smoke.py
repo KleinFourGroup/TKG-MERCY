@@ -855,6 +855,98 @@ def production_report() -> list[str]:
     return errors
 
 
+def production_refresh_on_delete() -> list[str]:
+    """Step 15: deleting an employee must not leave the production tab stale.
+
+    Seeds one employee + one production record referencing them, calls
+    ``db.delEmployee`` (same path the Employees tab hits), then:
+      - asserts the orphan production record still exists in-memory (Step 15
+        keeps orphans rather than cascading the delete).
+      - asserts ``productionTab.refresh()`` does not raise when iterating
+        over a record whose ``employeeId`` is no longer a key in
+        ``db.employees`` (orphan renders as "(missing #id)").
+      - asserts the employee-filter dropdown drops the deleted employee
+        after refresh, so the user cannot re-select them.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import (Employee, ProductionRecord,
+                         EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB,
+                         EmployeePTODB, EmployeeNotesDB)
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        emp = Employee()
+        emp.idNum = 101
+        emp.lastName = "Smith"
+        emp.firstName = "Alice"
+        emp.shift = 1
+        emp.fullTime = True
+        emp.status = True
+        emp.anniversary = datetime_date(2020, 1, 1)
+        # delEmployee requires all the shadow collections to exist, so mirror
+        # the real new-employee path from employees_tab.py.
+        w.db.addEmployee(emp)
+        w.db.addEmployeeReviews(EmployeeReviewsDB(emp.idNum))
+        w.db.addEmployeeTraining(EmployeeTrainingDB(emp.idNum))
+        w.db.addEmployeePoints(EmployeePointsDB(emp.idNum))
+        w.db.addEmployeePTO(EmployeePTODB(emp.idNum))
+        w.db.addEmployeeNotes(EmployeeNotesDB(emp.idNum))
+
+        r = ProductionRecord()
+        r.setRecord(emp.idNum, datetime_date(2026, 4, 15), 1, "Batching", "MixA", 7.5)
+        w.db.production[r.key()] = r
+
+        # Prime the production tab so the filter reflects the seeded employee.
+        w.productionTab.refresh()
+        filterIds = [w.productionTab.employeeFilter.itemData(i)
+                     for i in range(w.productionTab.employeeFilter.count())]
+        if emp.idNum not in filterIds:
+            errors.append(f"pre-delete: employee {emp.idNum} missing from filter {filterIds}")
+
+        # Delete via the same entry point the Employees tab uses.
+        w.db.delEmployee(emp.idNum)
+
+        if r.key() not in w.db.production:
+            errors.append("post-delete: production record was cascaded away (should be kept as orphan)")
+        else:
+            got = w.db.production[r.key()]
+            if got.employeeId != 101:
+                errors.append(f"post-delete: orphan employeeId mutated to {got.employeeId!r}")
+
+        # The actual regression: refresh() used to iterate stale data and,
+        # separately, the filter kept the deleted employee as a selectable row.
+        try:
+            w.productionTab.refresh()
+        except Exception as e:
+            errors.append(f"productionTab.refresh() raised after delete: {e!r}")
+            return errors
+
+        filterIds = [w.productionTab.employeeFilter.itemData(i)
+                     for i in range(w.productionTab.employeeFilter.count())]
+        if emp.idNum in filterIds:
+            errors.append(f"post-delete: deleted employee still in filter {filterIds}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
@@ -863,7 +955,8 @@ def main() -> int:
                      ("legacy_becky_migration", legacy_becky_migration),
                      ("legacy_merge", legacy_merge),
                      ("production_roundtrip", production_roundtrip),
-                     ("production_report", production_report)]:
+                     ("production_report", production_report),
+                     ("production_refresh_on_delete", production_refresh_on_delete)]:
         errors = fn()
         if errors:
             failed = True
