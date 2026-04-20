@@ -1,7 +1,8 @@
 # Custom
 
-Chemistry and Sizing Worksheet.xlsx
-Product Costing 2024A.xlsx
+*.xlsx
+*.db
+
 scripts/
 .claude/
 

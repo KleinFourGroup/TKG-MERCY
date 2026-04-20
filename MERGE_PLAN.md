@@ -3,7 +3,7 @@
 
 **Date:** 2026-04-16  
 **Author:** Matthew Kilgore  
-**Status:** Implementation in progress — Steps 1–11 of 13 complete as of 2026-04-19, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); see §12 for current state, deviations, and deferred items before picking up **Step 12** (production reports).
+**Status:** Implementation complete — all 13 planned steps landed as of 2026-04-19, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); Step 13 verified the build end-to-end against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog requested by the team during Step 13 is tracked in §13.
 
 ---
 
@@ -509,7 +509,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-19. Steps 1–12 complete plus the Step 9.5 polish; **Step 13 (end-to-end testing on real data) is the only remaining step**. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-19. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -544,7 +544,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 10 | ✅ Done | Merge plan Step 10: DB merge / import |
 | 11 | ✅ Done | Merge plan Step 11: production tracking UI |
 | 12 | ✅ Done | Merge plan Step 12: production reports |
-| 13 | ⏳ Pending | Per §9. |
+| 13 | ✅ Done | Merge plan Step 13: end-to-end verification on real data |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -735,36 +735,129 @@ Run `smoke.py` as the always-on baseline at the start and end of any invasive st
 
 Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is an `int` and `Employee.fullTime` is a separate `bool` — setting `e.shift = "1|1"` (trying to pre-format the compound string) produces a triple-piped `"1|1|1"` out of `getTuple()` because `getTuple` itself re-appends `|{fullTime}`. Set `e.shift = 1; e.fullTime = True` instead, or use the `setJob(role, shift, fullTime)` method.
 
-### 12.5 Pick-up notes for Step 13 (end-to-end testing on real data)
+### 12.5 Step 13 — end-to-end verification on real data (findings)
 
-**Step 13 — end-to-end testing with real data + backup/restore verification.** Last step on the plan. Per §9 this is process-heavy rather than code-heavy — the bar is "ready to ship" rather than "feature complete." All Steps 1–12 functionality is in place; the goal is to find and fix anything that the synthetic smoke fixtures or developer-machine manual testing missed when run against the actual production ANIKA + BECKY databases on the team's hardware.
+**What ran.** A throwaway driver (`step13_real_data.py`, not committed) executed five drills offscreen against copies of two real legacy files the team handed over — `legancyanika.db` (v1 ANIKA, no `db_version` stamp, detected via table shape) and `legacybecky.db` (v2 BECKY). Sources were hashed before and after; both were byte-identical afterward. All five drills passed; the summary below is retained so future regressions can be compared against known-good numbers.
 
-**Scope.** No fixed code deliverable; the deliverable is *confidence*. Concrete checks to run, in roughly the order they should fail least → most expensively:
+**Check 1a — legacy ANIKA migration.**
+- Pre: 7 tables, version `None`, counts `{materials:49, mixtures:10, parts:141, packaging:51, materialInventory:31, partInventory:57, globals:8}`.
+- Post: 19 tables, `db_version=3`, all MERCY tables present. Base64 compound decode produced `mixture_components=71, part_pads=148, part_misc=281`. Row counts for `mixtures` and `parts` unchanged (10/10, 141/141). One `.db.bak-*` sibling written, matching §8 expectation. Save/reload roundtrip preserved counts.
 
-1. **Migrate the team's actual ANIKA `.db` and BECKY `.db` files** — separately first, then the merge — and compare migrated output against a hand-spot-check of representative records (a few employees, a few mixtures with multi-material recipes, a few parts with pads + misc). The `_backupDbFile` sibling-file should appear in each case (Steps 8, 9, 10). Note that the import path runs migrations against a temp copy (Step 10's deviation), so the team's real second file should be byte-identical before/after — worth diffing with `sha256sum` to confirm.
+**Check 1b — legacy BECKY migration.**
+- Pre: 9 tables, `db_version=2`, counts `{employees:29, training:188, attendance:135, PTO:85, reviews:1, notes:3, holidays:10, observances:30}`.
+- Post: 19 tables, `db_version=3`. `employees` columns split into `shift` + `fullTime` per §3.3. Base64 decode applied to `reviews.details` / `notes.details`. **Orphan sweep found zero orphans** in this file — the `updateEmployee` pre-7a bug evidently never corrupted it. Good for the release, bad for code coverage: the orphan-sweep code path is exercised only by synthetic fixtures in `smoke.py::legacy_becky_migration`. If a later BECKY file does have orphans, watch for the correct count drop and the info-level log line.
+- One `.bak` sibling written. Save/reload roundtrip preserved employee count (29/29). Source byte-identical.
 
-2. **Backup/restore drill.** Per §9 step 13's "backup/restore verification" line: rename the live MERCY `.db` to simulate corruption, restore from the most recent `.db.bak-*` sibling, confirm the app reopens it cleanly. Then deliberately interrupt a save (Ctrl+C mid-`saveFile`) and confirm the atomic-save guarantee from Step 7a holds — the on-disk file should reflect either the pre-save state or the post-save state, never a partial.
+**Check 1c — merge.**
+- ANIKA copy opened first (141 parts), then BECKY copy imported via `importOtherDb`. Merge plan reported **zero collisions** (the two real files share no keys — ANIKA identifies by string name, BECKY by `idNum`). Post-merge: 141 parts + 29 employees + 29 review-collections carried through. Save/reload preserved everything. BECKY temp copy SHA-256 identical before and after `importOtherDb` — **Step 10's "source file untouched" guarantee holds on real data**.
 
-3. **Production tracking + reports against real production data** once the team's been logging shifts for a few days. Watch for: large date-range Per Target reports paginating correctly across many pages; the "(missing #id)" fallback firing if anyone deletes an employee with existing production records; UNIQUE-conflict messages being intelligible to the floor when they hit one.
+**Check 2a — backup/restore drill.**
+- Migrated a real ANIKA copy to MERCY format, truncated the live file to 0 bytes, copied the `.bak-*` sibling back into place, reopened in a fresh `MainWindow`. The restored file is pre-migration, so MERCY re-ran the ANIKA v1→v3 migration on it (creating a second `.bak`), and loaded successfully with `parts=141` intact. Recovery path works end-to-end.
 
-4. **Report sanity-check loop with the team.** §12.2 Step 12's framing was "they don't know what they want yet — give them four reports and see what sticks." Step 13 is when they tell us which ones they actually use and what's missing. Likely candidates for Step 14+ if asked: charts (currently flagged as out-of-scope in §12.5 follow-ups), cross-referencing production with `parts.price` for revenue, or shift-lead signoff lines via `drawSignatureLine` (helper exists, unused so far).
+**Check 2b — atomic-save drill.**
+- Opened a fully-migrated file, deleted an in-memory part (`1046-FS4`), monkey-patched `_saveFileBody` to run the real body and then raise `RuntimeError` before `saveFile`'s outer `commit()`. On-disk row counts (`parts`, `mixtures`, `materials`, `mixture_components`, `part_pads`) were byte-identical before and after the attempted save — Step 7a's try/rollback/commit wrapper is rolling back correctly against a real-file connection, not just the hand-crafted fixtures.
 
-5. **Cross-platform sanity** if anyone ever runs MERCY on macOS/Linux — `os.startfile` is Windows-only; the `utils.startfile` shim handles other platforms but it hasn't been exercised. Low priority unless the team needs it.
+**What Step 13 did NOT cover.** Three items from the original Step 13 pick-up notes didn't fire and are left for future steps or dropped as low priority:
+- **Production tracking + reports against real production data** (original check 3). Deferred — the team hasn't started logging production yet. Covered in practice once they do; no code work needed now.
+- **Report sanity-check loop with the team** (original check 4). The team's first-look feedback instead surfaced three feature asks, now tracked as §13.
+- **Cross-platform sanity** (original check 5). Windows-only shop; dropped.
 
-**Likely findings to expect.** Not predictions, just things experience says to watch for:
-- **Performance on large legacy DBs.** All migrations have been tested on hand-crafted 2-3 record fixtures. Real BECKY files probably have hundreds of employees with years of attendance/PTO/notes; the v2→v3 migration's per-row UPDATE on `reviews.details`/`notes.details` could be slow. If it is, batching into a single `UPDATE` with a `CASE` expression is a faster swap.
-- **Report column widths on real part/mixture names.** `drawTable` handles text wrapping via `_wrapText`, but if the team's part names are unusually long (>40 chars) the auto-computed equal column widths in the Summary report could look unbalanced. Custom `widths` lists are easy to add per-report if needed.
-- **Date-range default of 30 days** on the production tab might not match the team's actual usage pattern (e.g. they may want to default to "current week" or "current pay period"). Trivial to change in `ProductionTab.__init__`.
-- **`Database.toWrite` was retired in Step 7a** but `file_manager.saveFile` still iterates the dicts directly. Save performance on a fully-populated unified DB hasn't been measured against the original ANIKA/BECKY split-file performance — worth a back-of-envelope check.
+**Performance notes.** The v2→v3 BECKY migration's per-row `UPDATE` on `reviews.details` / `notes.details` ran instantaneously on the real 29-employee file (1 review, 3 notes). The §12.5-original-hypothesis about large-file slowness did not materialize at this file size — but the drill didn't push into hundreds of reviews/notes either, so the "swap to a `CASE`-expression single `UPDATE`" fallback remains a live option if the team's next snapshot is substantially bigger.
 
-**What's NOT in Step 13.** (a) Any new features — those are Step 14+ if the team requests them. (b) Style polish on existing reports unless the team flags something as unreadable. (c) The deferred items in §12.3 (bare `x == None` residuals, the DeMorgan-able compound at `file_manager.py:176`/`:447`, the `MainTab` class rename) — all explicitly out of scope and noted there.
-
-**Touchpoints from prior steps worth remembering.**
-- **Atomic save semantics** (Step 7a): `saveFile()` wraps `_saveFileBody()` in try/rollback/commit. Mid-save crash = on-disk file unchanged. Tested offscreen but not in anger against a real corruption scenario — Step 13's drill above is the place.
-- **Migration backup files** (Step 8): `.db.bak-YYYY-MM-DD-HHMMSS` siblings are written before destructive DDL in `_migrateAnikaV1ToV2` / `_migrateBeckyV2ToV3`. They accumulate; nothing prunes them. If Step 13 surfaces concern about `.bak` clutter, an "older than N days" cleanup at startup is a reasonable Step 14 follow-up but explicitly not Step 13's job.
-- **Import-merge keeps the source file untouched** (Step 10): `importOtherDb` runs migrations against a temp copy, then cleans up. The team's second `.db` is byte-identical before/after — confirm this against their real files via `sha256sum` as part of Step 13's check 1 above.
-- **Smoke harness is the regression net.** All 7 checks pass at Step 12 commit. If Step 13 surfaces a fix, add a regression check to `smoke.py` (or extend an existing one) so future sessions can't regress it. The checks compose well — they all use the same `tempfile` / `MainWindow` / cleanup pattern.
+**Regression hooks for future sessions.** The synthetic `smoke.py` checks (`legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, production roundtrip + report) cover the same code paths as the drills above on fixture data — they are the durable safety net. The throwaway driver was deliberately not promoted to `smoke.py` because it depends on files that are gitignored and specific to Matthew's machine; committing it would either break for anyone else running `smoke.py` or force those files into the tree.
 
 ---
 
-*This document was prepared with Claude Code (claude-opus-4-6 / claude-sonnet-4-6) as a planning artifact; §12 is being maintained as implementation proceeds.*
+## 13. Post-release feature backlog
+
+Requests from the team after their first look at MERCY. Each item is small enough to be one step and one commit in the §12 style; open questions resolved in-session on 2026-04-19 are recorded inline. Order is deliberate: smallest / lowest-risk first, so tomorrow's session can ship increments rather than gating the whole backlog behind the biggest item.
+
+### 13.1 Step 14 — reports: skip save dialog, open via temp file
+
+**Motivation.** Team reported that reports are printed on paper rather than emailed around, so the `QFileDialog.getSaveFileName` prompt before every report is pure friction. Requested behavior: click a report button → PDF opens in the OS viewer → user prints it → nobody stores a copy.
+
+**Scope.** ~12 call sites, all shaped as `QFileDialog.getSaveFileName(...)` → `startfile(...)`. Files touched:
+- `employees_tab.py` (active-employee report)
+- `globals_tab.py` (globals report)
+- `inventory_tab.py` (inventory report)
+- `mixtures_tab.py` (mixture report)
+- `notes_tab.py` (notes report + incident report — two sites)
+- `parts_tab.py` (sales report)
+- `points_tab.py` (attendance report)
+- `production_tab.py` (production report trigger near line 578)
+- `pto_tab.py` (PTO report)
+
+**Implementation sketch.**
+1. Add `tempReportPath(prefix: str) -> str` to `utils.py`, near `startfile`. Returns `tempfile.NamedTemporaryFile(suffix=".pdf", prefix=f"{prefix}-", delete=False).name`. Accept the prefix so the OS viewer's default "Save As" filename is still human-readable if the user does want to save after opening.
+2. Per-site: replace the 4-line `QFileDialog` / `if path:` / generate / `startfile` block with `path = tempReportPath(<existing prefix>); <generate>; startfile(path)`. Preserve each site's current prefix string (e.g. `f"{self.date.isoformat()}-Inventory"`).
+3. Strip unused `QFileDialog` imports from any file whose only use was the report save path (sweep after the rewrite; some files still need `QFileDialog` for other dialogs — don't remove blindly).
+
+**Resolved decisions.**
+- **Storage.** Use the OS's default `%TEMP%`, no MERCY-specific subfolder. Windows cleans up eventually; no pruning code needed.
+- **"Save" path retained?** No — clean cut. If they ever need to save, they can Ctrl+S from the PDF viewer.
+
+**Verification.** Run `smoke.py` (should still pass — none of the 7 existing checks depend on the save-dialog flow). Manual: open any tab with a report button, confirm PDF opens immediately with no dialog.
+
+### 13.2 Step 15 — production tab refresh when an employee is deleted
+
+**Motivation.** Team reported that after deleting an employee, the production tab's employee filter dropdown still lists the deleted employee. Desired behavior: deleted employees disappear from selectable pickers, but existing production records referencing them are **kept** (may be useful later for part-level analysis — deletion of a person is not deletion of their history).
+
+**Where things already work.**
+- **Editor dialog:** `ProductionTab`'s entry dialog rebuilds its employee combo in `__init__` (around `production_tab.py:262`), so a freshly-opened editor already omits deleted employees. No fix needed here.
+- **Orphan display:** existing records referencing a deleted employee render as `"(missing #{id})"` at `production_tab.py:158`. No fix needed here.
+
+**What's stale.**
+- The main-tab **employee filter dropdown** (`ProductionTab._rebuildEmployeeFilter`, around `production_tab.py:101`) is built once and only rebuilt when `ProductionTab.refresh()` is called (around line 231). Employee deletion from `employees_tab.py` doesn't currently call `productionTab.refresh()`.
+
+**Implementation sketch.**
+1. Locate the delete-path in `employees_tab.py` (the deletion itself lands at `records.py:1527` via `del self.employees[employeeID]`; find the UI trigger that calls into that).
+2. After the delete succeeds, add `self.mainApp.productionTab.refresh()` (or equivalent — follow whatever `mainApp`-held reference already exists; if the production tab isn't held on `mainApp`, pipe it through the same way other cross-tab refreshes are wired).
+3. If the filter dropdown's currently-selected employee is the one being deleted, the rebuild should fall back to "(All employees)". Verify `_rebuildEmployeeFilter` already handles this case (it preserves `filterEmployeeId` only if it still exists in the employees dict — spot-read confirms it does, but verify against current code before relying on it).
+
+**Resolved decisions.**
+- **Scope:** this fix only. Not sweeping for other cross-tab staleness (inventory on packaging changes, etc.) — YAGNI until the team flags them.
+
+**Verification.** Add a regression check to `smoke.py` (e.g. `production_refresh_on_delete`) that seeds an employee, adds a production record against them, deletes the employee, verifies the orphan record still exists in-memory (as "(missing #id)"-renderable) AND that calling `productionTab.refresh()` doesn't choke on the orphan. Manual test: create two employees, one with production records; delete the non-production one, confirm the filter drops it.
+
+### 13.3 Step 16 — production tab: batch entry
+
+**Motivation.** Team reported that entering production records one at a time via the single-record dialog will be cumbersome when the floor logs dozens per day. Team proposed: shared date + action at the top of a dialog, then N rows of `(employee, target, quantity, scrap)` below, plus an "add row" button.
+
+**Scope.** New `ProductionBatchDialog` in `production_tab.py`, reachable from a new "Batch Entry" button on the `ProductionTab` toolbar alongside whatever triggers `ProductionEntryDialog` today. The existing single-record `ProductionEntryDialog` stays as "Quick Entry" (cheap to keep, still preferable for one-off edits).
+
+**Layout.**
+```
+┌─────────────────────────────────────────────────┐
+│  Date: [____]    Action: [ Pressing     ▾]      │   ← shared header
+├─────────────────────────────────────────────────┤
+│  Employee ▾   Target ▾   Qty   Scrap   Shift ▾   ✕│  ← row 1
+│  Employee ▾   Target ▾   Qty   Scrap   Shift ▾   ✕│  ← row 2
+│  ...                                             │
+│  [+ Add row]                                     │
+├─────────────────────────────────────────────────┤
+│                          [ Cancel ]  [ Save ]    │
+└─────────────────────────────────────────────────┘
+```
+
+**Resolved decisions (from 2026-04-19 session).**
+1. **Shift is per-row**, inherited as a default from the previous row. The same batch can span multiple shifts (shift lead entering a full day).
+2. **Target dropdown is filtered by the shared action.** Since `action` is at the top of the dialog and target-type is a function of action (`Batching` → mix, `Pressing`/`Finishing` → part), each row's target combo only lists the appropriate type. If the user changes the top-level action mid-edit, all row target-combos must be rebuilt (and any now-invalid selections cleared with a status-line warning).
+3. **Atomic per-batch save.** Any validation or UNIQUE failure on any row refuses the entire batch with a per-row error listing. No partial-save semantics — makes the transaction easier to reason about and mirrors Step 7a's atomic-save philosophy for file writes.
+
+**Implementation sketch.**
+1. New class `ProductionBatchDialog(QDialog)` (or `QWidget` top-level like the existing windows) in `production_tab.py`. Mirror the `WA_DeleteOnClose` + `setAttribute` pattern used by other edit windows (Step 7c-3 §12.2).
+2. Header `QHBoxLayout` with `QDateEdit` + `QComboBox` for action.
+3. Scroll area whose inner widget holds a `QVBoxLayout` of row widgets. Each row = small `QWidget` subclass `_BatchRow(QWidget)` holding the 5 input widgets + remove button. Store rows in `self.rows: list[_BatchRow]`.
+4. "Add row" button at bottom of scroll area: instantiates a new `_BatchRow`, pre-populates fields from `self.rows[-1]` if it exists (quantity and scrap cleared — safer default than duplicating numerical values).
+5. Action-change signal (top-level combo): iterate rows, rebuild each target combo for the new target-type, clear rows whose selected target no longer appears in the new list, show a status label above the rows if any row was invalidated.
+6. Save button: iterate rows, build `ProductionRecord` per row, validate each (reusing whatever validation the existing `ProductionEntryDialog` has at `production_tab.py:362`-ish — factor out into a shared module-level helper if it makes the batch code cleaner). UNIQUE-collision check per row against the current in-memory production dict **plus** the rows added earlier in the same batch. On any failure: `QMessageBox` with a per-row error listing, leave the dialog open. On full success: insert all, call `parentTab.refresh()`, close.
+7. Wire a "Batch Entry" button into `ProductionTab`'s toolbar (the current quick-entry trigger remains; batch is a peer).
+
+**Verification.** Add `production_batch_roundtrip` to `smoke.py`: construct the dialog headlessly (or bypass the UI and exercise the save-commit logic directly on a synthetic row list), seed 3–4 rows spanning two shifts, commit, save the file, reload in a fresh `MainWindow`, assert all records present. Manual test with real data: enter a batch of 10 rows against the team's file, confirm they all appear in the list and survive a save/reload.
+
+**Known unknowns.**
+- `ProductionTab` has a second entry-dialog-ish class starting around `production_tab.py:458` (not fully read during planning — it's about an "EmployeeBox + targetTypeBox + targetNameBox + actionBox" flow, so probably the "Quick Entry" alternative already). Worth skimming before starting: if it already does something batch-like, the new work may be incremental rather than greenfield.
+
+---
+
+*This document was prepared with Claude Code (claude-opus-4-6 / claude-sonnet-4-6 / claude-opus-4-7) as a planning artifact; §12 is being maintained as implementation proceeds.*
