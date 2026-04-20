@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFrame
 from PySide6.QtCore import QDate
-import base64, os, sys, datetime
+import base64, os, sys, datetime, tempfile
 
 def getComboBox(items: list[str], item):
     box = QComboBox()
@@ -90,6 +90,12 @@ def startfile(path):
         os.startfile(path)
     else:
         os.system(f"open {path}")
+
+def tempReportPath(prefix: str) -> str:
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in prefix)
+    fd, path = tempfile.mkstemp(suffix=".pdf", prefix=f"{safe}-")
+    os.close(fd)
+    return path
 
 def centerOnScreen(widget: QWidget):
     widget.adjustSize()

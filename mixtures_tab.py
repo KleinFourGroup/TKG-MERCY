@@ -1,13 +1,12 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox
 from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Mixture
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, startfile, centerOnScreen
+from utils import getComboBox, widgetFromList, checkInput, startfile, tempReportPath, centerOnScreen
 
 from report import PDFReport
-import os
 import logging
 
 class MixturesTab(QWidget):
@@ -105,11 +104,10 @@ class MixturesTab(QWidget):
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No mixtures selected."])
         for mixture in self.selection:
-            reportFile  = QFileDialog.getSaveFileName(self, f"Save {mixture} Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-            if not reportFile[0] == "":
-                pdf = PDFReport(self.mainApp.db, reportFile[0])
-                pdf.mixReport(mixture)
-                startfile(reportFile[0])
+            path = tempReportPath(f"mixture-{mixture}")
+            pdf = PDFReport(self.mainApp.db, path)
+            pdf.mixReport(mixture)
+            startfile(path)
     
     def refreshTable(self):
         self.genTableData()

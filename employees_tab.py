@@ -1,15 +1,14 @@
 import datetime
-from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox, QFileDialog
+from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox
 from PySide6.QtCore import QDate, Qt
 import random
 import math
-import os
 
 from table import DBTable
 from app import MainWindow
 from records import Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 import logging
 
@@ -132,11 +131,10 @@ class EmployeeTab(QWidget):
                 QMessageBox.information(self, "Success", "Update successful!")
     
     def reportAll(self):
-        reportFile  = QFileDialog.getSaveFileName(self, f"Save Active Employee Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-        if not reportFile[0] == "":
-            pdf = PDFReport(self.mainApp.db, reportFile[0])
-            pdf.employeeActiveReport()
-            startfile(reportFile[0])
+        path = tempReportPath("active-employees")
+        pdf = PDFReport(self.mainApp.db, path)
+        pdf.employeeActiveReport()
+        startfile(path)
     
     def refreshTable(self):
         self.genTableData()

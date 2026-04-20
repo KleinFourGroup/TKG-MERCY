@@ -1,14 +1,13 @@
 import datetime
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QTextEdit, QFileDialog, QTimeEdit
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QTextEdit, QTimeEdit
 from PySide6.QtCore import QTime, Qt
-import os
 
 from table import DBTable
 from app import MainWindow
 from employee_overview_tab import MainTab
 from records import Employee, EmployeeNote, EmployeeNotesDB
 from error import errorMessage
-from utils import widgetFromList, toQDate, fromQDate, startfile, centerOnScreen
+from utils import widgetFromList, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 
 class NotesTab(QWidget):
@@ -121,11 +120,10 @@ class NotesTab(QWidget):
         if self.currentEmployeeNotes == None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
-            reportFile = QFileDialog.getSaveFileName(self, f"Save {self.currentEmployee.idNum} Notes Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-            if not reportFile[0] == "":
-                pdf = PDFReport(self.mainApp.db, reportFile[0])
-                pdf.employeeNotesReport(self.currentEmployee.idNum)
-                startfile(reportFile[0])
+            path = tempReportPath(f"employee-{self.currentEmployee.idNum}-notes")
+            pdf = PDFReport(self.mainApp.db, path)
+            pdf.employeeNotesReport(self.currentEmployee.idNum)
+            startfile(path)
 
     def incidentReport(self):
         if self.currentEmployeeNotes == None:
@@ -137,11 +135,10 @@ class NotesTab(QWidget):
         else:
             key = self.selection[0]
             if key in self.currentEmployeeNotes.notes:
-                reportFile = QFileDialog.getSaveFileName(self, f"Save {self.currentEmployee.idNum} Incident Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-                if not reportFile[0] == "":
-                    pdf = PDFReport(self.mainApp.db, reportFile[0])
-                    pdf.employeeIncidentReport(self.currentEmployee.idNum, key[0], key[1])
-                    startfile(reportFile[0])
+                path = tempReportPath(f"employee-{self.currentEmployee.idNum}-incident")
+                pdf = PDFReport(self.mainApp.db, path)
+                pdf.employeeIncidentReport(self.currentEmployee.idNum, key[0], key[1])
+                startfile(path)
 
     def refresh(self):
         self.setEmployee(self.mainTab.employeeID)

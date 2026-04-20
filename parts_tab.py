@@ -1,13 +1,13 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QCheckBox, QMessageBox, QFileDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QCheckBox, QMessageBox
 from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Part
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, startfile, centerOnScreen
+from utils import getComboBox, widgetFromList, checkInput, startfile, tempReportPath, centerOnScreen
 
 from report import PDFReport
-import os, math
+import math
 import logging
 
 class PartsTab(QWidget):
@@ -111,11 +111,10 @@ class PartsTab(QWidget):
                 QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
 
     def reportSales(self):
-        reportFile  = QFileDialog.getSaveFileName(self, f"Save Sales Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-        if not reportFile[0] == "":
-            pdf = PDFReport(self.mainApp.db, reportFile[0])
-            pdf.salesReport()
-            startfile(reportFile[0])
+        path = tempReportPath("sales")
+        pdf = PDFReport(self.mainApp.db, path)
+        pdf.salesReport()
+        startfile(path)
     
     def openNew(self):
         PartsEditWindow(None, self.mainApp)

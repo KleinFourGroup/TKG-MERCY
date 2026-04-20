@@ -1,9 +1,8 @@
 import datetime
-from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QSlider, QFileDialog
+from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QSlider
 from PySide6.QtCore import QDate, Qt
 import random
 import math
-import os
 
 from table import DBTable
 from app import MainWindow
@@ -11,7 +10,7 @@ from employee_overview_tab import MainTab
 from records import Employee, EmployeePTORange, EmployeePTODB
 from defaults import POINT_VALS, PTO_ELIGIBILITY
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 
 class PTOTab(QWidget):
@@ -197,11 +196,10 @@ class PTOTab(QWidget):
         if self.currentEmployeePTO == None or self.currentEmployee == None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
-            reportFile  = QFileDialog.getSaveFileName(self, f"Save {self.currentEmployee.idNum} PTO Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-            if not reportFile[0] == "":
-                pdf = PDFReport(self.mainApp.db, reportFile[0])
-                pdf.employeePTOReport(self.currentEmployee.idNum)
-                startfile(reportFile[0])
+            path = tempReportPath(f"employee-{self.currentEmployee.idNum}-pto")
+            pdf = PDFReport(self.mainApp.db, path)
+            pdf.employeePTOReport(self.currentEmployee.idNum)
+            startfile(path)
     
     def refresh(self):
         self.setEmployee(self.mainTab.employeeID)

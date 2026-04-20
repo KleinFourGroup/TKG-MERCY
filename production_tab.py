@@ -1,8 +1,7 @@
 import datetime
-import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QMessageBox, QCalendarWidget, QComboBox, QDateEdit, QFileDialog,
+    QMessageBox, QCalendarWidget, QComboBox, QDateEdit,
 )
 from PySide6.QtCore import Qt
 
@@ -15,7 +14,7 @@ from defaults import (
 from error import errorMessage
 from report import PDFReport
 from utils import (
-    widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen,
+    widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen,
 )
 
 
@@ -574,14 +573,7 @@ class ProductionReportWindow(QWidget):
             errorMessage(self, ["No employee selected."])
             return
 
-        defaultName = self._defaultName(reportType, action, targetName, employeeId)
-        savePath, _ = QFileDialog.getSaveFileName(
-            self, "Save Production Report As",
-            os.path.join(os.path.expanduser("~"), defaultName),
-            "Portable Document Format (*.pdf)"
-        )
-        if not savePath:
-            return
+        savePath = tempReportPath(self._defaultPrefix(reportType, action, targetName, employeeId))
 
         pdf = PDFReport(self.mainApp.db, savePath)
         if reportType == "Production Summary":
@@ -598,14 +590,13 @@ class ProductionReportWindow(QWidget):
         startfile(savePath)
         self.close()
 
-    def _defaultName(self, reportType, action, targetName, employeeId) -> str:
+    def _defaultPrefix(self, reportType, action, targetName, employeeId) -> str:
         if reportType == "Production Summary":
-            return "production-summary.pdf"
+            return "production-summary"
         if reportType == "Per Action":
-            return f"production-{action.lower()}.pdf"
+            return f"production-{action.lower()}"
         if reportType == "Per Target":
-            safe = (targetName or "target").replace("/", "_").replace("\\", "_")
-            return f"production-{safe}.pdf"
+            return f"production-{targetName or 'target'}"
         if reportType == "Per Employee":
-            return f"production-employee-{employeeId}.pdf"
-        return "production-report.pdf"
+            return f"production-employee-{employeeId}"
+        return "production-report"

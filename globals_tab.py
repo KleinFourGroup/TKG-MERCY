@@ -1,12 +1,11 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QFileDialog
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox
 from table import DBTable
 from app import MainWindow
 from records import Package
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, newVLine, startfile
+from utils import getComboBox, widgetFromList, checkInput, newVLine, startfile, tempReportPath
 
 from report import PDFReport
-import os
 
 class GlobalsTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
@@ -56,11 +55,10 @@ class GlobalsTab(QWidget):
         widgetFromList(self, self.mainLayout)
     
     def report(self):
-        reportFile  = QFileDialog.getSaveFileName(self, "Save globals Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-        if not reportFile[0] == "":
-            pdf = PDFReport(self.mainApp.db, reportFile[0])
-            pdf.globalsReport()
-            startfile(reportFile[0])
+        path = tempReportPath("globals")
+        pdf = PDFReport(self.mainApp.db, path)
+        pdf.globalsReport()
+        startfile(path)
     
     def refreshTab(self):
         globalKeys = self.mainApp.db.globals.getGlobals()

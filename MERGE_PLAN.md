@@ -509,7 +509,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-19. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-20. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13; Step 14 has now landed. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -545,6 +545,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 11 | ✅ Done | Merge plan Step 11: production tracking UI |
 | 12 | ✅ Done | Merge plan Step 12: production reports |
 | 13 | ✅ Done | Merge plan Step 13: end-to-end verification on real data |
+| 14 | ✅ Done | Merge plan Step 14: reports skip save dialog, open via temp file |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -712,6 +713,16 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** New `production_report` smoke check plus all six prior checks pass (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `production_roundtrip`, `production_report`). Offscreen sanity check confirms the dialog constructs cleanly, `typeBox` has 4 entries, `actionBox` has 3, and cycling the type dropdown through all four values triggers `_onTypeChanged` without exceptions. Manually verified by Matthew in the real GUI on a real DB before commit.
 
+**Step 14 — reports skip save dialog, open via temp file.** First post-release feature item from §13. Three pieces:
+
+1. **`utils.tempReportPath(prefix)` (new).** Uses `tempfile.mkstemp(suffix=".pdf", prefix=f"{safe}-")`, then `os.close(fd)` and returns the path. The `safe` is the prefix with anything outside `[A-Za-z0-9._-]` replaced by `_`, so each call site can pass a natural human-readable string (`"active-employees"`, `f"employee-{idNum}-notes"`, `f"mixture-{name}"`, `f"{date.isoformat()}-inventory"`) without thinking about path safety. **Deviation from §13.1's sketch:** the sketch suggested `NamedTemporaryFile(... delete=False).name`; switched to `mkstemp` because `NamedTemporaryFile` returns a file object that on Windows holds the OS handle until garbage collection — `mkstemp` returns the fd directly so we can close it immediately and the path is free for `reportlab` to write to.
+
+2. **10 call sites converted across 9 tab files.** Every `QFileDialog.getSaveFileName(...) → if path: → generate → startfile` block became `path = tempReportPath(<prefix>); generate; startfile(path)`. Files: `employees_tab` (active-employee report), `globals_tab`, `inventory_tab`, `mixtures_tab`, `notes_tab` (notes + incident — two sites), `parts_tab` (sales), `points_tab` (attendance), `pto_tab`, `production_tab`. `production_tab.py`'s pre-existing `_defaultName(...)` helper was renamed `_defaultPrefix(...)` and stripped of its `.pdf` suffix; the explicit `targetName.replace("/", "_").replace("\\", "_")` sanitization went away too since `tempReportPath` now centralizes that.
+
+3. **Stale `QFileDialog` and `os` imports swept.** Each affected tab's only `os` use was the `os.path.expanduser("~")` argument to the dialog, so `import os` came out alongside `QFileDialog` in `employees_tab`, `globals_tab`, `mixtures_tab`, `notes_tab`, `points_tab`, `pto_tab`, `parts_tab`, `production_tab`. `inventory_tab.py`'s `import os, datetime` collapsed to `import datetime`; `parts_tab.py`'s `import os, math` collapsed to `import math`. `app.py` still uses `QFileDialog` (open / save / import flows) so its imports were left alone.
+
+**Verification.** All 7 prior smoke checks pass unchanged (`compile_all`, `empty_roundtrip`, `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `production_roundtrip`, `production_report`); no new smoke check was added because the persistence layer is untouched and §13.1's verification plan explicitly said the existing checks suffice. `grep` for `QFileDialog` / `os.path.expanduser` / `reportFile` returns zero hits in the touched tab files. Manually spot-checked by Matthew in the real GUI before commit — report buttons open the PDF in the OS viewer immediately with no save dialog.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -772,31 +783,9 @@ Gotcha when constructing test `Employee` objects headlessly: `Employee.shift` is
 
 Requests from the team after their first look at MERCY. Each item is small enough to be one step and one commit in the §12 style; open questions resolved in-session on 2026-04-19 are recorded inline. Order is deliberate: smallest / lowest-risk first, so tomorrow's session can ship increments rather than gating the whole backlog behind the biggest item.
 
-### 13.1 Step 14 — reports: skip save dialog, open via temp file
+### 13.1 Step 14 — reports: skip save dialog, open via temp file ✅ Done
 
-**Motivation.** Team reported that reports are printed on paper rather than emailed around, so the `QFileDialog.getSaveFileName` prompt before every report is pure friction. Requested behavior: click a report button → PDF opens in the OS viewer → user prints it → nobody stores a copy.
-
-**Scope.** ~12 call sites, all shaped as `QFileDialog.getSaveFileName(...)` → `startfile(...)`. Files touched:
-- `employees_tab.py` (active-employee report)
-- `globals_tab.py` (globals report)
-- `inventory_tab.py` (inventory report)
-- `mixtures_tab.py` (mixture report)
-- `notes_tab.py` (notes report + incident report — two sites)
-- `parts_tab.py` (sales report)
-- `points_tab.py` (attendance report)
-- `production_tab.py` (production report trigger near line 578)
-- `pto_tab.py` (PTO report)
-
-**Implementation sketch.**
-1. Add `tempReportPath(prefix: str) -> str` to `utils.py`, near `startfile`. Returns `tempfile.NamedTemporaryFile(suffix=".pdf", prefix=f"{prefix}-", delete=False).name`. Accept the prefix so the OS viewer's default "Save As" filename is still human-readable if the user does want to save after opening.
-2. Per-site: replace the 4-line `QFileDialog` / `if path:` / generate / `startfile` block with `path = tempReportPath(<existing prefix>); <generate>; startfile(path)`. Preserve each site's current prefix string (e.g. `f"{self.date.isoformat()}-Inventory"`).
-3. Strip unused `QFileDialog` imports from any file whose only use was the report save path (sweep after the rewrite; some files still need `QFileDialog` for other dialogs — don't remove blindly).
-
-**Resolved decisions.**
-- **Storage.** Use the OS's default `%TEMP%`, no MERCY-specific subfolder. Windows cleans up eventually; no pruning code needed.
-- **"Save" path retained?** No — clean cut. If they ever need to save, they can Ctrl+S from the PDF viewer.
-
-**Verification.** Run `smoke.py` (should still pass — none of the 7 existing checks depend on the save-dialog flow). Manual: open any tab with a report button, confirm PDF opens immediately with no dialog.
+Landed 2026-04-20. See §12.2 Step 14 for implementation notes and deviations.
 
 ### 13.2 Step 15 — production tab refresh when an employee is deleted
 

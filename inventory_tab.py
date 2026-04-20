@@ -1,14 +1,14 @@
-from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox, QPushButton, QCalendarWidget, QMessageBox, QLineEdit, QFileDialog
+from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QComboBox, QPushButton, QCalendarWidget, QMessageBox, QLineEdit
 from PySide6.QtCore import Qt
 from records import Database, emptyDB, MaterialInventoryRecord, PartInventoryRecord
 from error import errorMessage
-from utils import newHLine, widgetFromList, checkInput, toQDate, fromQDate, getComboBox, startfile, centerOnScreen
+from utils import newHLine, widgetFromList, checkInput, toQDate, fromQDate, getComboBox, startfile, tempReportPath, centerOnScreen
 
 from app import MainWindow
 from table import DBTable
 from report import PDFReport
 
-import os, datetime
+import datetime
 
 def createTab():
     tab = QWidget()
@@ -116,11 +116,10 @@ class InventoryTab(QWidget):
         if self.date == None:
             errorMessage(self.mainApp, ["No date selected."])
         else:
-            reportFile  = QFileDialog.getSaveFileName(self, f"Save {self.date.isoformat()} Inventory Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-            if not reportFile[0] == "":
-                pdf = PDFReport(self.mainApp.db, reportFile[0])
-                pdf.inventoryReport(self.date)
-                startfile(reportFile[0])
+            path = tempReportPath(f"{self.date.isoformat()}-inventory")
+            pdf = PDFReport(self.mainApp.db, path)
+            pdf.inventoryReport(self.date)
+            startfile(path)
 
 class InventoryDateEditWindow(QWidget):
     def __init__(self, date: datetime.date | None, mainApp: MainWindow):

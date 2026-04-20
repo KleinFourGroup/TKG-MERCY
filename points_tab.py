@@ -1,9 +1,8 @@
 import datetime
-from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox, QFileDialog
+from PySide6.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QCalendarWidget, QComboBox
 from PySide6.QtCore import QDate, Qt
 import random
 import math
-import os
 
 from table import DBTable
 from app import MainWindow
@@ -11,7 +10,7 @@ from employee_overview_tab import MainTab
 from records import Employee, EmployeePoint, EmployeePointsDB
 from defaults import POINT_VALS
 from error import ErrorWindow, errorMessage
-from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, centerOnScreen
+from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 
 class PointsTab(QWidget):
@@ -140,11 +139,10 @@ class PointsTab(QWidget):
         if self.currentEmployeePoints == None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
-            reportFile  = QFileDialog.getSaveFileName(self, f"Save {self.currentEmployee.idNum} Attendance Report As", os.path.expanduser("~"), "Portable Document Format (*.pdf)")
-            if not reportFile[0] == "":
-                pdf = PDFReport(self.mainApp.db, reportFile[0])
-                pdf.employeePointsReport(self.currentEmployee.idNum)
-                startfile(reportFile[0])
+            path = tempReportPath(f"employee-{self.currentEmployee.idNum}-attendance")
+            pdf = PDFReport(self.mainApp.db, path)
+            pdf.employeePointsReport(self.currentEmployee.idNum)
+            startfile(path)
     
     def refresh(self):
         self.setEmployee(self.mainTab.employeeID)
