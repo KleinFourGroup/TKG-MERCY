@@ -947,6 +947,177 @@ def production_refresh_on_delete() -> list[str]:
     return errors
 
 
+def production_batch_roundtrip() -> list[str]:
+    """Step 16: drive ProductionBatchDialog headlessly and verify atomic save.
+
+    Seeds an employee + a part + a mix, opens the batch dialog, constructs four
+    rows spanning two shifts against a mix (Batching action), saves, asserts:
+      - all four records landed in-memory with the correct shared date/action
+      - save/reload roundtrip preserves them on disk
+    Then re-opens the dialog and attempts a batch containing a duplicate key
+    against the already-saved data — expect the save to be refused and the
+    in-memory dict to be unchanged.
+    """
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from app import MainWindow
+    from records import (Employee, Mixture,
+                         EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB,
+                         EmployeePTODB, EmployeeNotesDB)
+    from production_tab import ProductionBatchDialog
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    # _save() pops a success/critical QMessageBox; offscreen those would block.
+    # Stub them out so we can drive the real save path headlessly.
+    origCrit = QMessageBox.critical
+    origInfo = QMessageBox.information
+    QMessageBox.critical = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.information = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w1 = w2 = None
+    try:
+        w1 = MainWindow()
+        if not w1.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        emp = Employee()
+        emp.idNum = 101
+        emp.lastName = "Smith"
+        emp.firstName = "Alice"
+        emp.shift = 1
+        emp.fullTime = True
+        emp.status = True
+        emp.anniversary = datetime_date(2020, 1, 1)
+        w1.db.addEmployee(emp)
+        w1.db.addEmployeeReviews(EmployeeReviewsDB(emp.idNum))
+        w1.db.addEmployeeTraining(EmployeeTrainingDB(emp.idNum))
+        w1.db.addEmployeePoints(EmployeePointsDB(emp.idNum))
+        w1.db.addEmployeePTO(EmployeePTODB(emp.idNum))
+        w1.db.addEmployeeNotes(EmployeeNotesDB(emp.idNum))
+
+        w1.db.mixtures["MixA"] = Mixture("MixA")
+        w1.db.mixtures["MixB"] = Mixture("MixB")
+
+        # Prime the tab so toolbar state reflects the seeded data.
+        w1.productionTab.refresh()
+
+        dialog = ProductionBatchDialog(w1.productionTab, w1)
+        # Fresh dialog starts with one row. Add three more for four total.
+        dialog._addRow()
+        dialog._addRow()
+        dialog._addRow()
+        if len(dialog.rows) != 4:
+            errors.append(f"expected 4 rows after 3x _addRow, got {len(dialog.rows)}")
+
+        # Shared header: Batching against mixes on a fixed date.
+        dialog.actionBox.setCurrentText("Batching")
+        from utils import toQDate
+        batchDate = datetime_date(2026, 4, 18)
+        dialog.dateEdit.setDate(toQDate(batchDate))
+
+        # Two on shift 1, two on shift 2, alternating between MixA/MixB so the
+        # UNIQUE (employeeId, date, shift, targetType, targetName, action) keys
+        # are distinct.
+        plan = [
+            ("1", "MixA", "10", "0"),
+            ("1", "MixB", "12", "1"),
+            ("2", "MixA", "14", "0"),
+            ("2", "MixB", "16", "2"),
+        ]
+        for row, (shift, target, qty, scrap) in zip(dialog.rows, plan):
+            row.shiftBox.setCurrentText(shift)
+            idx = row.targetBox.findText(target)
+            if idx < 0:
+                errors.append(f"target {target!r} missing from row combo")
+                return errors
+            row.targetBox.setCurrentIndex(idx)
+            row.quantityEdit.setText(qty)
+            row.scrapEdit.setText(scrap)
+
+        dialog._save()
+
+        if len(w1.db.production) != 4:
+            errors.append(f"after batch save: expected 4 records in-memory, got {len(w1.db.production)}")
+        for shift, target, qty, scrap in plan:
+            key = (101, batchDate, int(shift), "mix", target, "Batching")
+            if key not in w1.db.production:
+                errors.append(f"missing record after save: {key}")
+                continue
+            rec = w1.db.production[key]
+            if rec.quantity != float(qty):
+                errors.append(f"{key}: quantity expected {qty}, got {rec.quantity!r}")
+            if rec.scrapQuantity != float(scrap):
+                errors.append(f"{key}: scrap expected {scrap}, got {rec.scrapQuantity!r}")
+
+        w1.fileManager.saveFile()
+        if w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+            w1.fileManager.dbFile = None
+
+        # --- reload and verify on-disk roundtrip ---
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading batch DB")
+            return errors
+        w2.fileManager.loadFile()
+        if len(w2.db.production) != 4:
+            errors.append(f"after reload: expected 4 records, got {len(w2.db.production)}")
+
+        # --- attempt a duplicate-key batch; expect refusal ---
+        w2.productionTab.refresh()
+        dialog2 = ProductionBatchDialog(w2.productionTab, w2)
+        dialog2.actionBox.setCurrentText("Batching")
+        dialog2.dateEdit.setDate(toQDate(batchDate))
+        # Single row that exactly duplicates an existing key.
+        row = dialog2.rows[0]
+        row.shiftBox.setCurrentText("1")
+        idx = row.targetBox.findText("MixA")
+        if idx >= 0:
+            row.targetBox.setCurrentIndex(idx)
+        row.quantityEdit.setText("99")
+        row.scrapEdit.setText("0")
+
+        beforeCount = len(w2.db.production)
+        # _save should refuse (QMessageBox.critical pops but doesn't raise offscreen).
+        dialog2._save()
+        if len(w2.db.production) != beforeCount:
+            errors.append(f"duplicate-key batch was not refused: count {beforeCount} -> {len(w2.db.production)}")
+
+        # --- attempt an intra-batch duplicate; expect refusal ---
+        dialog3 = ProductionBatchDialog(w2.productionTab, w2)
+        dialog3.actionBox.setCurrentText("Batching")
+        dialog3.dateEdit.setDate(toQDate(datetime_date(2026, 4, 19)))  # new date, not colliding with saved
+        dialog3._addRow()
+        for r in dialog3.rows:
+            r.shiftBox.setCurrentText("1")
+            idx = r.targetBox.findText("MixA")
+            if idx >= 0:
+                r.targetBox.setCurrentIndex(idx)
+            r.quantityEdit.setText("5")
+            r.scrapEdit.setText("0")
+        beforeCount = len(w2.db.production)
+        dialog3._save()
+        if len(w2.db.production) != beforeCount:
+            errors.append(f"intra-batch duplicate was not refused: count {beforeCount} -> {len(w2.db.production)}")
+    finally:
+        if w1 is not None and w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        QMessageBox.critical = origCrit  # type: ignore[assignment]
+        QMessageBox.information = origInfo  # type: ignore[assignment]
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
@@ -956,7 +1127,8 @@ def main() -> int:
                      ("legacy_merge", legacy_merge),
                      ("production_roundtrip", production_roundtrip),
                      ("production_report", production_report),
-                     ("production_refresh_on_delete", production_refresh_on_delete)]:
+                     ("production_refresh_on_delete", production_refresh_on_delete),
+                     ("production_batch_roundtrip", production_batch_roundtrip)]:
         errors = fn()
         if errors:
             failed = True

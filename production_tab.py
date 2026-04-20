@@ -1,7 +1,7 @@
 import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QMessageBox, QCalendarWidget, QComboBox, QDateEdit,
+    QMessageBox, QCalendarWidget, QComboBox, QDateEdit, QScrollArea,
 )
 from PySide6.QtCore import Qt
 
@@ -72,8 +72,10 @@ class ProductionTab(QWidget):
         self.selection: list[tuple] = []  # list of 6-tuple keys
         self.selectLabel = QLabel("Selection: N/A")
 
-        self.newB = QPushButton("New Production")
+        self.newB = QPushButton("Quick Entry")
         self.newB.clicked.connect(self.openNew)
+        self.batchB = QPushButton("Batch Entry")
+        self.batchB.clicked.connect(self.openBatch)
         self.editB = QPushButton("Edit Production")
         self.editB.clicked.connect(self.openEdits)
         self.deleteB = QPushButton("Delete Production")
@@ -83,6 +85,7 @@ class ProductionTab(QWidget):
 
         barLayout = QHBoxLayout()
         barLayout.addWidget(self.newB)
+        barLayout.addWidget(self.batchB)
         barLayout.addWidget(self.editB)
         barLayout.addWidget(self.deleteB)
         barLayout.addWidget(self.reportB)
@@ -184,7 +187,9 @@ class ProductionTab(QWidget):
         hasEmployees = len(self.mainApp.db.employees) > 0
         hasParts = len(self.mainApp.db.parts) > 0
         hasMixes = len(self.mainApp.db.mixtures) > 0
-        self.newB.setEnabled(hasEmployees and (hasParts or hasMixes))
+        canEnter = hasEmployees and (hasParts or hasMixes)
+        self.newB.setEnabled(canEnter)
+        self.batchB.setEnabled(canEnter)
         self.editB.setEnabled(len(self.selection) > 0)
         self.deleteB.setEnabled(len(self.selection) > 0)
 
@@ -196,6 +201,15 @@ class ProductionTab(QWidget):
             errorMessage(self.mainApp, ["Cannot record production: no parts or mixtures in the database."])
             return
         ProductionEditWindow(self, None, self.mainApp)
+
+    def openBatch(self):
+        if len(self.mainApp.db.employees) == 0:
+            errorMessage(self.mainApp, ["Cannot record production: no employees in the database."])
+            return
+        if len(self.mainApp.db.parts) == 0 and len(self.mainApp.db.mixtures) == 0:
+            errorMessage(self.mainApp, ["Cannot record production: no parts or mixtures in the database."])
+            return
+        ProductionBatchDialog(self, self.mainApp)
 
     def openEdits(self):
         if len(self.selection) == 0:
@@ -600,3 +614,306 @@ class ProductionReportWindow(QWidget):
         if reportType == "Per Employee":
             return f"production-employee-{employeeId}"
         return "production-report"
+
+
+class _BatchRow(QWidget):
+    # One row inside ProductionBatchDialog. Holds employee / target / quantity /
+    # scrap / shift widgets plus a Remove button. Date and action are shared and
+    # live on the parent dialog.
+    def __init__(self, mainApp: MainWindow, parentDialog: "ProductionBatchDialog",
+                 targetType: str, prevRow: "_BatchRow | None"):
+        super().__init__(parentDialog)
+        self.mainApp = mainApp
+        self.parentDialog = parentDialog
+
+        self.employeeBox = QComboBox()
+        self.employeeBox.setEditable(False)
+        self.employeeBox.setMinimumWidth(200)
+        emps = list(self.mainApp.db.employees.values())
+        emps.sort(key=lambda e: (0 if e.status else 1,
+                                 (e.lastName or "").lower(),
+                                 (e.firstName or "").lower()))
+        for emp in emps:
+            suffix = "" if emp.status else " [inactive]"
+            self.employeeBox.addItem(_employeeLabel(emp) + suffix, userData=emp.idNum)
+
+        self.targetBox = QComboBox()
+        self.targetBox.setEditable(False)
+        self.targetBox.setMinimumWidth(160)
+        self._populateTargets(targetType)
+
+        self.quantityEdit = QLineEdit()
+        self.quantityEdit.setMaximumWidth(80)
+        self.scrapEdit = QLineEdit("0")
+        self.scrapEdit.setMaximumWidth(80)
+
+        self.shiftBox = QComboBox()
+        self.shiftBox.setEditable(False)
+        self.shiftBox.addItems(["1", "2", "3"])
+        self.shiftBox.setMaximumWidth(60)
+
+        self.removeB = QPushButton("Remove")
+        self.removeB.clicked.connect(lambda: self.parentDialog._removeRow(self))
+
+        if prevRow is not None:
+            # Inherit defaults from the previous row per §16 decision — quantity and
+            # scrap stay blank/zero so the user doesn't accidentally duplicate numbers.
+            self.employeeBox.setCurrentIndex(prevRow.employeeBox.currentIndex())
+            self.shiftBox.setCurrentText(prevRow.shiftBox.currentText())
+            prevTarget = prevRow.targetBox.currentText()
+            if prevTarget:
+                idx = self.targetBox.findText(prevTarget)
+                if idx >= 0:
+                    self.targetBox.setCurrentIndex(idx)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.employeeBox)
+        layout.addWidget(self.targetBox)
+        layout.addWidget(self.quantityEdit)
+        layout.addWidget(self.scrapEdit)
+        layout.addWidget(self.shiftBox)
+        layout.addWidget(self.removeB)
+        self.setLayout(layout)
+
+    def _populateTargets(self, targetType: str) -> bool:
+        # Refill the target combo for the current action's targetType. Returns True
+        # if the previously-selected target no longer appears in the new list (so
+        # the batch dialog can tally invalidated rows for the status label).
+        prev = self.targetBox.currentText()
+        self.targetBox.blockSignals(True)
+        self.targetBox.clear()
+        if targetType == "mix":
+            names = sorted(self.mainApp.db.mixtures.keys())
+        elif targetType == "part":
+            names = sorted(self.mainApp.db.parts.keys())
+        else:
+            names = []
+        self.targetBox.addItems(names)
+        invalidated = False
+        if prev:
+            if prev in names:
+                self.targetBox.setCurrentText(prev)
+            else:
+                invalidated = True
+        self.targetBox.blockSignals(False)
+        return invalidated
+
+
+class ProductionBatchDialog(QWidget):
+    # Batch-entry dialog: shared date + action at the top, a scrollable list of
+    # _BatchRow widgets below, atomic save. See MERGE_PLAN §13.3 (Step 16).
+    def __init__(self, parentTab: ProductionTab, mainApp: MainWindow):
+        super().__init__(mainApp, Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self.mainApp = mainApp
+        self.parentTab = parentTab
+        self.setWindowTitle("Production: Batch Entry")
+
+        today = datetime.date.today()
+        self.dateEdit = QDateEdit()
+        self.dateEdit.setCalendarPopup(True)
+        self.dateEdit.setDisplayFormat("yyyy-MM-dd")
+        self.dateEdit.setDate(toQDate(today))
+
+        self.actionBox = QComboBox()
+        self.actionBox.setEditable(False)
+        self.actionBox.addItems(PRODUCTION_ACTIONS)
+        self.actionBox.currentTextChanged.connect(self._onActionChanged)
+
+        headerLayout = QHBoxLayout()
+        headerLayout.addWidget(QLabel("Date:"))
+        headerLayout.addWidget(self.dateEdit)
+        headerLayout.addSpacing(24)
+        headerLayout.addWidget(QLabel("Action:"))
+        headerLayout.addWidget(self.actionBox)
+        headerLayout.addStretch()
+
+        colHeaderLayout = QHBoxLayout()
+        colHeaderLayout.setContentsMargins(0, 0, 0, 0)
+        for text, minW, maxW in (
+            ("Employee", 200, 0),
+            ("Target",   160, 0),
+            ("Quantity",   0, 80),
+            ("Scrap",      0, 80),
+            ("Shift",      0, 60),
+            ("",           0, 0),
+        ):
+            lbl = QLabel(text)
+            if minW:
+                lbl.setMinimumWidth(minW)
+            if maxW:
+                lbl.setMaximumWidth(maxW)
+            colHeaderLayout.addWidget(lbl)
+
+        self.statusLabel = QLabel("")
+
+        self.rows: list[_BatchRow] = []
+        self.rowsLayout = QVBoxLayout()
+        self.rowsLayout.setContentsMargins(0, 0, 0, 0)
+        self.rowsLayout.addStretch()
+
+        rowsContainer = QWidget()
+        rowsContainer.setLayout(self.rowsLayout)
+        self.scroll = QScrollArea()
+        self.scroll.setWidget(rowsContainer)
+        self.scroll.setWidgetResizable(True)
+
+        self.addRowB = QPushButton("Add row")
+        self.addRowB.clicked.connect(self._addRow)
+
+        self.saveB = QPushButton("Save")
+        self.saveB.clicked.connect(self._save)
+        self.cancelB = QPushButton("Cancel")
+        self.cancelB.clicked.connect(self.close)
+
+        buttonRow = QHBoxLayout()
+        buttonRow.addStretch()
+        buttonRow.addWidget(self.cancelB)
+        buttonRow.addWidget(self.saveB)
+
+        mainLayout = QVBoxLayout()
+        mainLayout.addLayout(headerLayout)
+        mainLayout.addLayout(colHeaderLayout)
+        mainLayout.addWidget(self.scroll)
+        mainLayout.addWidget(self.addRowB)
+        mainLayout.addWidget(self.statusLabel)
+        mainLayout.addLayout(buttonRow)
+        self.setLayout(mainLayout)
+
+        self.resize(900, 480)
+        self._addRow()  # also updates height for the initial row
+
+        centerOnScreen(self)
+        self.show()
+
+    def _currentTargetType(self) -> str:
+        return PRODUCTION_ACTION_TARGET.get(self.actionBox.currentText(), "")
+
+    def _addRow(self):
+        prev = self.rows[-1] if self.rows else None
+        row = _BatchRow(self.mainApp, self, self._currentTargetType(), prev)
+        self.rows.append(row)
+        # Insert before the trailing stretch so rows stack at the top of the scroll area.
+        insertAt = self.rowsLayout.count() - 1
+        self.rowsLayout.insertWidget(insertAt, row)
+        self._updateHeight()
+
+    def _removeRow(self, row: _BatchRow):
+        if row not in self.rows:
+            return
+        self.rows.remove(row)
+        self.rowsLayout.removeWidget(row)
+        row.setParent(None)
+        row.deleteLater()
+        self._updateHeight()
+
+    def _updateHeight(self):
+        # Grow/shrink the dialog with the row count so the user doesn't have to
+        # drag the bottom edge every time. Capped at ~90% of screen so the save
+        # button can't drift off-screen on a runaway add.
+        ROW_HEIGHT = 36
+        CHROME_HEIGHT = 180  # header + col header + add button + status + save row + margins
+        minHeight = 480
+        maxHeight = 900
+        screen = self.screen()
+        if screen is not None:
+            maxHeight = max(minHeight, int(screen.availableGeometry().height() * 0.9))
+        desired = max(minHeight, min(CHROME_HEIGHT + len(self.rows) * ROW_HEIGHT, maxHeight))
+        if desired != self.height():
+            self.resize(self.width(), desired)
+
+    def _onActionChanged(self, _text: str):
+        targetType = self._currentTargetType()
+        invalidated = 0
+        for row in self.rows:
+            if row._populateTargets(targetType):
+                invalidated += 1
+        if invalidated:
+            self.statusLabel.setText(
+                f"Action changed — cleared target on {invalidated} row(s); "
+                f"pick new targets before saving."
+            )
+        else:
+            self.statusLabel.setText("")
+
+    def _save(self):
+        if not self.rows:
+            errorMessage(self, ["No rows to save."])
+            return
+
+        batchDate = fromQDate(self.dateEdit.date())
+        action = self.actionBox.currentText()
+        if action not in PRODUCTION_ACTIONS:
+            errorMessage(self, [f"Unknown action: {action!r}"])
+            return
+        targetType = PRODUCTION_ACTION_TARGET[action]
+
+        errors: list[str] = []
+        toCreate: list[ProductionRecord] = []
+        seenKeys: set[tuple] = set()
+
+        for i, row in enumerate(self.rows, start=1):
+            rowErrs: list[str] = []
+
+            empId = row.employeeBox.currentData()
+            if empId is None:
+                rowErrs.append("no employee selected")
+            elif empId not in self.mainApp.db.employees:
+                rowErrs.append(f"employee {empId} no longer exists")
+
+            shiftText = row.shiftBox.currentText()
+            try:
+                shift = int(shiftText)
+            except ValueError:
+                rowErrs.append(f"invalid shift {shiftText!r}")
+                shift = 0
+
+            targetName = row.targetBox.currentText()
+            if not targetName:
+                rowErrs.append("no target selected")
+            elif targetType == "mix" and targetName not in self.mainApp.db.mixtures:
+                rowErrs.append(f"mixture {targetName!r} no longer exists")
+            elif targetType == "part" and targetName not in self.mainApp.db.parts:
+                rowErrs.append(f"part {targetName!r} no longer exists")
+
+            qtyRaw = row.quantityEdit.text().strip()
+            if not qtyRaw:
+                rowErrs.append("quantity is blank")
+                quantity = 0.0
+            else:
+                quantity = checkInput(qtyRaw, float, "nonneg", rowErrs, "quantity")
+
+            scrapRaw = row.scrapEdit.text().strip()
+            if not scrapRaw:
+                scrap = 0.0
+            else:
+                scrap = checkInput(scrapRaw, float, "nonneg", rowErrs, "scrap")
+
+            if not rowErrs:
+                key = (empId, batchDate, shift, targetType, targetName, action)
+                if key in self.mainApp.db.production:
+                    rowErrs.append("a matching production record already exists in the database")
+                elif key in seenKeys:
+                    rowErrs.append("duplicates an earlier row in this batch")
+                else:
+                    seenKeys.add(key)
+
+            if rowErrs:
+                errors.append(f"Row {i}: " + "; ".join(rowErrs))
+            else:
+                rec = ProductionRecord()
+                rec.setRecord(empId, batchDate, shift, action, targetName, quantity, scrap)
+                toCreate.append(rec)
+
+        if errors:
+            errorMessage(self, errors)
+            return
+
+        for rec in toCreate:
+            self.mainApp.db.production[rec.key()] = rec
+
+        self.parentTab.refresh()
+        QMessageBox.information(self, "Success",
+                                f"{len(toCreate)} production record(s) added!")
+        self.close()
