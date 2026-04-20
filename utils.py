@@ -97,8 +97,9 @@ def tempReportPath(prefix: str) -> str:
     os.close(fd)
     return path
 
-def centerOnScreen(widget: QWidget):
-    widget.adjustSize()
+def centerOnScreen(widget: QWidget, adjustSize: bool = True):
+    if adjustSize:
+        widget.adjustSize()
     screen = widget.screen()
     if screen is None:
         return

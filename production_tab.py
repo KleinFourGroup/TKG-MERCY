@@ -629,6 +629,7 @@ class _BatchRow(QWidget):
         self.employeeBox = QComboBox()
         self.employeeBox.setEditable(False)
         self.employeeBox.setMinimumWidth(200)
+        self.employeeBox.setMaximumWidth(200)
         emps = list(self.mainApp.db.employees.values())
         emps.sort(key=lambda e: (0 if e.status else 1,
                                  (e.lastName or "").lower(),
@@ -640,6 +641,7 @@ class _BatchRow(QWidget):
         self.targetBox = QComboBox()
         self.targetBox.setEditable(False)
         self.targetBox.setMinimumWidth(160)
+        self.targetBox.setMaximumWidth(160)
         self._populateTargets(targetType)
 
         self.quantityEdit = QLineEdit()
@@ -732,8 +734,8 @@ class ProductionBatchDialog(QWidget):
         colHeaderLayout = QHBoxLayout()
         colHeaderLayout.setContentsMargins(0, 0, 0, 0)
         for text, minW, maxW in (
-            ("Employee", 200, 0),
-            ("Target",   160, 0),
+            ("Employee", 200, 200),
+            ("Target",   160, 160),
             ("Quantity",   0, 80),
             ("Scrap",      0, 80),
             ("Shift",      0, 60),
@@ -755,9 +757,9 @@ class ProductionBatchDialog(QWidget):
 
         rowsContainer = QWidget()
         rowsContainer.setLayout(self.rowsLayout)
-        self.scroll = QScrollArea()
-        self.scroll.setWidget(rowsContainer)
-        self.scroll.setWidgetResizable(True)
+        self.scrollB = QScrollArea()
+        self.scrollB.setWidget(rowsContainer)
+        self.scrollB.setWidgetResizable(True)
 
         self.addRowB = QPushButton("Add row")
         self.addRowB.clicked.connect(self._addRow)
@@ -775,7 +777,7 @@ class ProductionBatchDialog(QWidget):
         mainLayout = QVBoxLayout()
         mainLayout.addLayout(headerLayout)
         mainLayout.addLayout(colHeaderLayout)
-        mainLayout.addWidget(self.scroll)
+        mainLayout.addWidget(self.scrollB)
         mainLayout.addWidget(self.addRowB)
         mainLayout.addWidget(self.statusLabel)
         mainLayout.addLayout(buttonRow)
@@ -784,7 +786,7 @@ class ProductionBatchDialog(QWidget):
         self.resize(900, 480)
         self._addRow()  # also updates height for the initial row
 
-        centerOnScreen(self)
+        centerOnScreen(self, False)
         self.show()
 
     def _currentTargetType(self) -> str:
