@@ -133,7 +133,7 @@ class ProductionTab(QWidget):
 
     def genTableData(self):
         self.headers = ["#", "Employee", "Date", "Shift", "Action",
-                        "Target", "Quantity", "Unit", "Scrap"]
+                        "Target", "Quantity", "Unit", "Scrap", "Hours"]
         self._keyByRowId = {}
         rows = []
         recs = list(self.mainApp.db.production.values())
@@ -169,6 +169,7 @@ class ProductionTab(QWidget):
                 f"{rec.quantity}" if rec.quantity is not None else "",
                 unit,
                 f"{rec.scrapQuantity}",
+                f"{rec.hours}",
             ])
             self._keyByRowId[rowId] = rec.key()
         self.tableData = rows
@@ -322,6 +323,12 @@ class ProductionEditWindow(QWidget):
         else:
             self.scrapEdit.setText("0")
 
+        self.hoursEdit = QLineEdit()
+        if not self.isNew and record is not None:
+            self.hoursEdit.setText(f"{record.hours}")
+        else:
+            self.hoursEdit.setText("0")
+
         # Seed the action dropdown — this also populates targetBox + unitLabel via the
         # cascade. On edit we want the record's saved action/target, so set action
         # explicitly and then override the target selection.
@@ -344,6 +351,7 @@ class ProductionEditWindow(QWidget):
             [self.unitLabel],
             [QLabel("Quantity:"), self.quantityEdit],
             [QLabel("Scrap:"), self.scrapEdit],
+            [QLabel("Hours:"), self.hoursEdit],
             [QPushButton("Update"), QPushButton("Create")],
         ]
 
@@ -402,6 +410,7 @@ class ProductionEditWindow(QWidget):
 
         quantity = checkInput(self.quantityEdit.text(), float, "nonneg", errors, "Quantity")
         scrap = checkInput(self.scrapEdit.text(), float, "nonneg", errors, "Scrap")
+        hours = checkInput(self.hoursEdit.text(), float, "nonneg", errors, "Hours")
 
         if errors:
             errorMessage(self, errors)
@@ -432,7 +441,7 @@ class ProductionEditWindow(QWidget):
 
         if isNew:
             rec = ProductionRecord()
-            rec.setRecord(empId, date, shift, action, targetName, quantity, scrap)
+            rec.setRecord(empId, date, shift, action, targetName, quantity, scrap, hours)
             self.mainApp.db.production[rec.key()] = rec
         else:
             if self.record is None:
@@ -440,7 +449,7 @@ class ProductionEditWindow(QWidget):
             oldKey = self.record.key()
             if oldKey in self.mainApp.db.production:
                 del self.mainApp.db.production[oldKey]
-            self.record.setRecord(empId, date, shift, action, targetName, quantity, scrap)
+            self.record.setRecord(empId, date, shift, action, targetName, quantity, scrap, hours)
             self.mainApp.db.production[self.record.key()] = self.record
 
         self.parentTab.refresh()
@@ -648,6 +657,8 @@ class _BatchRow(QWidget):
         self.quantityEdit.setMaximumWidth(80)
         self.scrapEdit = QLineEdit("0")
         self.scrapEdit.setMaximumWidth(80)
+        self.hoursEdit = QLineEdit("0")
+        self.hoursEdit.setMaximumWidth(80)
 
         self.shiftBox = QComboBox()
         self.shiftBox.setEditable(False)
@@ -674,6 +685,7 @@ class _BatchRow(QWidget):
         layout.addWidget(self.targetBox)
         layout.addWidget(self.quantityEdit)
         layout.addWidget(self.scrapEdit)
+        layout.addWidget(self.hoursEdit)
         layout.addWidget(self.shiftBox)
         layout.addWidget(self.removeB)
         self.setLayout(layout)
@@ -738,6 +750,7 @@ class ProductionBatchDialog(QWidget):
             ("Target",   160, 160),
             ("Quantity",   0, 80),
             ("Scrap",      0, 80),
+            ("Hours",      0, 80),
             ("Shift",      0, 60),
             ("",           0, 0),
         ):
@@ -892,6 +905,12 @@ class ProductionBatchDialog(QWidget):
             else:
                 scrap = checkInput(scrapRaw, float, "nonneg", rowErrs, "scrap")
 
+            hoursRaw = row.hoursEdit.text().strip()
+            if not hoursRaw:
+                hours = 0.0
+            else:
+                hours = checkInput(hoursRaw, float, "nonneg", rowErrs, "hours")
+
             if not rowErrs:
                 key = (empId, batchDate, shift, targetType, targetName, action)
                 if key in self.mainApp.db.production:
@@ -905,7 +924,7 @@ class ProductionBatchDialog(QWidget):
                 errors.append(f"Row {i}: " + "; ".join(rowErrs))
             else:
                 rec = ProductionRecord()
-                rec.setRecord(empId, batchDate, shift, action, targetName, quantity, scrap)
+                rec.setRecord(empId, batchDate, shift, action, targetName, quantity, scrap, hours)
                 toCreate.append(rec)
 
         if errors:

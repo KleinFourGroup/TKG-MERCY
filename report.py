@@ -681,12 +681,12 @@ class PDFReport:
     def productionSummaryReport(self, startDate: datetime.date, endDate: datetime.date):
         recs = self._filterProduction(startDate, endDate)
 
-        grid: dict[tuple[int | None, str | None], tuple[float, float]] = {}
+        grid: dict[tuple[int | None, str | None], tuple[float, float, float]] = {}
         empIds: set = set()
         for r in recs:
             key = (r.employeeId, r.action)
-            q, s = grid.get(key, (0.0, 0.0))
-            grid[key] = (q + (r.quantity or 0), s + r.scrapQuantity)
+            q, s, h = grid.get(key, (0.0, 0.0, 0.0))
+            grid[key] = (q + (r.quantity or 0), s + r.scrapQuantity, h + r.hours)
             empIds.add(r.employeeId)
 
         def empSortKey(eid):
@@ -702,20 +702,29 @@ class PDFReport:
             for a in PRODUCTION_ACTIONS
         ]
 
-        def cell(eid, action) -> str:
-            q, s = grid.get((eid, action), (0.0, 0.0))
-            if q == 0 and s == 0:
+        def _format(q: float, s: float, h: float) -> str:
+            if q == 0 and s == 0 and h == 0:
                 return "—"
-            return f"{q:g} (scrap: {s:g})" if s > 0 else f"{q:g}"
+            extras = []
+            if s > 0:
+                extras.append(f"scrap: {s:g}")
+            if h > 0:
+                extras.append(f"{h:g}h")
+            return f"{q:g} ({', '.join(extras)})" if extras else f"{q:g}"
+
+        def cell(eid, action) -> str:
+            q, s, h = grid.get((eid, action), (0.0, 0.0, 0.0))
+            return _format(q, s, h)
 
         data = [[self._employeeName(eid)] + [cell(eid, a) for a in PRODUCTION_ACTIONS]
                 for eid in sortedIds]
 
         totalsRow = ["Total"]
         for a in PRODUCTION_ACTIONS:
-            tq = sum(grid.get((eid, a), (0.0, 0.0))[0] for eid in empIds)
-            ts = sum(grid.get((eid, a), (0.0, 0.0))[1] for eid in empIds)
-            totalsRow.append(f"{tq:g} (scrap: {ts:g})" if ts > 0 else f"{tq:g}")
+            tq = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[0] for eid in empIds)
+            ts = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[1] for eid in empIds)
+            th = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[2] for eid in empIds)
+            totalsRow.append(_format(tq, ts, th))
 
         olen = len(data)
         rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
@@ -757,7 +766,7 @@ class PDFReport:
         targetLabel = "Mixture" if targetType == "mix" else "Part"
 
         headers = ["Date", "Shift", "Employee", targetLabel,
-                   f"Quantity ({unit})", f"Scrap ({unit})"]
+                   f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
         data = [[
             r.date.isoformat() if r.date else "",
             str(r.shift) if r.shift is not None else "",
@@ -765,11 +774,13 @@ class PDFReport:
             r.targetName or "",
             f"{r.quantity:g}" if r.quantity is not None else "",
             f"{r.scrapQuantity:g}",
+            f"{r.hours:g}",
         ] for r in recs]
         olen = len(data)
 
         totalQ = sum((r.quantity or 0) for r in recs)
         totalS = sum(r.scrapQuantity for r in recs)
+        totalH = sum(r.hours for r in recs)
         rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
 
         if olen == 0:
@@ -790,7 +801,7 @@ class PDFReport:
                                  else f"{action} Records -- Continued")
                 drawn = self.drawTable(data, headers)
                 if drawn == len(data):
-                    self.drawTable([], ["", "", "", "Total", f"{totalQ:g}", f"{totalS:g}"])
+                    self.drawTable([], ["", "", "", "Total", f"{totalQ:g}", f"{totalS:g}", f"{totalH:g}"])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()
@@ -810,7 +821,7 @@ class PDFReport:
         targetLabel = "Mixture" if targetType == "mix" else "Part"
 
         headers = ["Date", "Shift", "Employee", "Action",
-                   f"Quantity ({unit})", f"Scrap ({unit})"]
+                   f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
         data = [[
             r.date.isoformat() if r.date else "",
             str(r.shift) if r.shift is not None else "",
@@ -818,13 +829,14 @@ class PDFReport:
             r.action or "",
             f"{r.quantity:g}" if r.quantity is not None else "",
             f"{r.scrapQuantity:g}",
+            f"{r.hours:g}",
         ] for r in recs]
         olen = len(data)
 
-        perAction: dict[str, tuple[float, float]] = {}
+        perAction: dict[str, tuple[float, float, float]] = {}
         for r in recs:
-            q, s = perAction.get(r.action or "", (0.0, 0.0))
-            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity)
+            q, s, h = perAction.get(r.action or "", (0.0, 0.0, 0.0))
+            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity, h + r.hours)
 
         rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
 
@@ -848,8 +860,8 @@ class PDFReport:
                 if drawn == len(data):
                     for a in PRODUCTION_ACTIONS:
                         if a in perAction:
-                            q, s = perAction[a]
-                            self.drawTable([], ["", "", "", f"Total {a}", f"{q:g}", f"{s:g}"])
+                            q, s, h = perAction[a]
+                            self.drawTable([], ["", "", "", f"Total {a}", f"{q:g}", f"{s:g}", f"{h:g}"])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()
@@ -863,7 +875,7 @@ class PDFReport:
         recs.sort(key=lambda r: (r.date, r.shift if r.shift is not None else 0,
                                  r.action or "", r.targetName or ""))
 
-        headers = ["Date", "Shift", "Action", "Target", "Quantity", "Unit", "Scrap"]
+        headers = ["Date", "Shift", "Action", "Target", "Quantity", "Unit", "Scrap", "Hours"]
         data = [[
             r.date.isoformat() if r.date else "",
             str(r.shift) if r.shift is not None else "",
@@ -872,13 +884,14 @@ class PDFReport:
             f"{r.quantity:g}" if r.quantity is not None else "",
             PRODUCTION_TARGET_UNIT.get(r.targetType or "", ""),
             f"{r.scrapQuantity:g}",
+            f"{r.hours:g}",
         ] for r in recs]
         olen = len(data)
 
-        perAction: dict[str, tuple[float, float]] = {}
+        perAction: dict[str, tuple[float, float, float]] = {}
         for r in recs:
-            q, s = perAction.get(r.action or "", (0.0, 0.0))
-            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity)
+            q, s, h = perAction.get(r.action or "", (0.0, 0.0, 0.0))
+            perAction[r.action or ""] = (q + (r.quantity or 0), s + r.scrapQuantity, h + r.hours)
 
         empName = self._employeeName(employeeId)
         rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
@@ -907,10 +920,10 @@ class PDFReport:
                 if drawn == len(data):
                     for a in PRODUCTION_ACTIONS:
                         if a in perAction:
-                            q, s = perAction[a]
+                            q, s, h = perAction[a]
                             unit = PRODUCTION_TARGET_UNIT[PRODUCTION_ACTION_TARGET[a]]
                             self.drawTable([], ["", "", f"Total {a}", "",
-                                                f"{q:g}", unit, f"{s:g}"])
+                                                f"{q:g}", unit, f"{s:g}", f"{h:g}"])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()

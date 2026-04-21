@@ -548,6 +548,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 14 | ✅ Done | Merge plan Step 14: reports skip save dialog, open via temp file |
 | 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
+| 17 | ✅ Done | Merge plan Step 17: production hours field |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -756,6 +757,36 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** All 9 smoke checks pass (the 8 prior plus the new `production_batch_roundtrip`). Manually verified by Matthew in the real GUI before commit.
 
+**Step 17 — production hours field.** Fourth post-release feature item, surfaced 2026-04-21: the team had omitted a `duration / hours` variable from the production schema. Added as a per-record `hours REAL DEFAULT 0` column, labeled "Hours" in the UI. Five groups of changes:
+
+1. **Schema + migration.** `MERCY_DB_VERSION` bumped 3 → 4. `_createProductionTable` now declares `hours REAL DEFAULT 0`. New `_migrateV3ToV4()` does a guarded `ALTER TABLE production ADD COLUMN hours REAL DEFAULT 0` (the `if 'hours' not in cols` guard is defensive — Case 4 creates the production table fresh at the v4 shape then runs the BECKY v2→v3 migration, so a reopen of a Case-4-opened file would otherwise re-attempt the ALTER on an already-present column). Wired into Case 2 as a third chained `if dbVersion < 4:` clause after the existing ANIKA v1→v2 and BECKY v2→v3 steps.
+
+2. **Case 4 stamping fix.** Case 4 (legacy BECKY) was stamping `db_version=3` at the end instead of `MERCY_DB_VERSION`, a pre-existing inconsistency with Case 3's `self._setDbVersion(MERCY_DB_VERSION)`. Added the stamp at the tail of Case 4 so a freshly-migrated legacy BECKY file lands at the current version rather than triggering a no-op v3→v4 migration on the *next* open. Latent and harmless before this step; only noticeable now that v4 exists. Both `legacy_anika_migration` and `legacy_becky_migration` smoke checks updated `db_version` assertion `3 → 4`.
+
+3. **`ProductionRecord`.** `self.hours: float = 0` added to `__init__`. `setRecord(..., scrapQuantity=0, hours=0)` — keyword arg at the tail so existing call sites that pass `scrapQuantity=...` continue to work. `getTuple` extended to a 9-tuple; `fromTuple` updated with the same `if row[i] is not None else 0` guard used for `scrapQuantity` to tolerate legacy rows where the ALTER-added column is NULL on a few oddball edge cases. `__str__` appends `hours={self.hours}`.
+
+4. **Save / load.** `file_manager.py` INSERT OR REPLACE into production extended from 8 columns to 9 (`hours` added); SELECT on the load side matches. No other persistence path references the tuple shape.
+
+5. **UI surfaces — three paths.**
+   - **Table view (`ProductionTab.genTableData`).** New `"Hours"` column at the tail of `headers`; each row appends `f"{rec.hours}"` after scrap. No column-width tuning — `DBTable` auto-sizes, and the existing columns already carry more weight than a single-number hours cell.
+   - **Quick Entry (`ProductionEditWindow`).** New `self.hoursEdit = QLineEdit()` inserted below Scrap in `mainLayout`. Defaults to `"0"` on new / mirrors `record.hours` on edit — identical shape to the existing scrap-edit flow. `readData` adds `hours = checkInput(self.hoursEdit.text(), float, "nonneg", errors, "Hours")` and passes it as the 8th positional arg to `setRecord`.
+   - **Batch Entry (`_BatchRow` + `ProductionBatchDialog`).** New `self.hoursEdit = QLineEdit("0")` with the same `setMaximumWidth(80)` as scrap, inserted in the HBox between scrap and shift. Column-header tuple extended with `("Hours", 0, 80)` in matching position. `_save()` parses `hoursRaw` with the same blank→0 / else-nonneg-checked pattern as scrap and forwards to `setRecord(..., scrap, hours)`. Inheritance from `prevRow` deliberately does **not** carry hours (same rationale as quantity/scrap per §13.3 decision — safer to leave numeric fields fresh).
+
+6. **Reports.** Hours added to every production report:
+   - **Per Action / Per Target / Per Employee** (the three detail reports): new `"Hours"` column at the tail of the headers tuple; each data row appends `f"{r.hours:g}"`; totals rows extended to carry a summed hours cell. `perAction` dict upgraded from `(q, s)` tuples to `(q, s, h)`.
+   - **Summary** (the employee×action grid): the cell formatter switched from "`q (scrap: s)` if scrap else `q`" to a unified `_format(q, s, h)` that emits parenthetical annotations only when the corresponding value is `> 0`. Examples: `250` (nothing extra), `250 (scrap: 3)` (scrap only), `250 (8h)` (hours only), `250 (scrap: 3, 8h)` (both). The totals row uses the same formatter. Chosen over a dedicated "Total Hours" column because the grid is already 4 columns wide (Employee + 3 actions) and inlining keeps the report scannable.
+
+7. **Smoke checks.** New `mercy_v3_to_v4_migration` (6th in run order, after `legacy_merge`): hand-crafts a full v3 MERCY DB with one pre-hours production row, opens with MERCY v4, asserts the `ALTER` ran (hours in `PRAGMA table_info(production)`), `db_version=4`, pre-existing row preserved with `hours=0`, and in-memory `loadFile` surfaces `rec.hours == 0`. Existing `production_roundtrip` extended: r1 asserts `hours` defaults to 0, r2 sets `hours=7.5`, r3 sets `hours=4.0`, all three assert round-trip fidelity. Existing `production_batch_roundtrip`'s plan tuple extended from 4-tuple to 5-tuple (adds hours column `"8"`/`"7.5"`/`"0"`/`"6"`), with hours set via `row.hoursEdit.setText(hours)` and asserted against `rec.hours` post-save. Total smoke check count: **10**.
+
+**Decisions / non-decisions worth noting.**
+- **Label is "Hours", not "Duration".** Matthew's original prompt said "duration / hours"; picked the shorter / more concrete label for the UI and the DB column. If the team wants "Duration" this is a label-only change (string in the UI labels + headers) — no data rewrites needed.
+- **Default is `0`, not blank.** Consistent with scrap. Blank-in-quick-entry would fail validation rather than defaulting, which felt worse. Blank-in-batch-entry parses as 0 to let fast-entry workflows skip the column, same as scrap.
+- **Hours is not in the UNIQUE key.** No change to `UNIQUE(employeeId, date, shift, targetType, targetName, action)` — an employee doesn't log two different "hours spent Pressing PartA on shift 1 of date D". The existing semantic of "one record = one action-against-one-target per employee per shift per day" is what we want; hours is just a payload field.
+- **Inheritance in batch entry does not carry hours.** Matches the §13.3 decision for quantity and scrap. Easy to add if the team flags it as annoying.
+- **Reports show hours as parenthetical in the summary, dedicated column elsewhere.** Flagged explicitly to the team before commit; if they'd rather see a dedicated "Hours" column in the summary (5th column), it's a one-method rewrite.
+
+**Verification.** All 10 smoke checks pass (the 9 prior — with the `db_version` assertion updates in the two legacy tests — plus the new `mercy_v3_to_v4_migration`). Offscreen `MainWindow()` construction confirms `productionTab.headers` ends in `'Hours'`. Manually verified by Matthew in the real GUI on a real DB before commit.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -830,7 +861,11 @@ Landed 2026-04-20. See §12.2 Step 15 for implementation notes and the scope dec
 
 Landed 2026-04-20. See §12.2 Step 16 for implementation notes and the scope decisions.
 
-Original plan below, preserved for reference.
+### 13.4 Step 17 — production hours field ✅ Done
+
+Landed 2026-04-21. Surfaced in Matthew's first post-release feedback session: the team had forgotten to include duration/hours in the production schema. One-session add — new `hours REAL DEFAULT 0` column on `production`, wired through records / save / load / table / Quick Entry / Batch Entry / all four reports. See §12.2 Step 17 for implementation notes, the Case-4 stamping fix it piggybacked, and the report-formatting decisions.
+
+Original plan for Step 16 (pre-dated by Step 17) preserved below for reference.
 
 
 

@@ -23,7 +23,7 @@ from utils import stringToList, stringFromB64
 #   v3 — Step 9: BECKY schema normalized. `employees.shift` split into `shift INTEGER` +
 #        `fullTime INTEGER`; `reviews.details` and `notes.details` stored as plain TEXT
 #        (base64 wrapping removed); orphan rows in training/attendance/PTO swept out (§3.1, §3.3).
-MERCY_DB_VERSION = 3
+MERCY_DB_VERSION = 4
 
 # Table-set fingerprints for format detection (§8.1 of MERGE_PLAN).
 ANIKA_TABLES = {"globals", "materials", "mixtures", "packaging", "parts",
@@ -87,6 +87,7 @@ class FileManager:
             "action TEXT, "
             "quantity REAL, "
             "scrapQuantity REAL DEFAULT 0, "
+            "hours REAL DEFAULT 0, "
             "UNIQUE(employeeId, date, shift, targetType, targetName, action))"
         )
 
@@ -303,6 +304,18 @@ class FileManager:
         self._setDbVersion(3)
         logging.info(" --> BECKY v2->v3 migration complete")
 
+    def _migrateV3ToV4(self):
+        # Add `hours` column to the production table. Existing records get 0 via the
+        # column default; no data transform needed.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v3->v4 migration: add production.hours")
+        cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(production)").fetchall()]
+        if 'hours' not in cols:
+            self.dbFile.execute("ALTER TABLE production ADD COLUMN hours REAL DEFAULT 0")
+        self._setDbVersion(4)
+        logging.info(" --> v3->v4 migration complete")
+
     # ---- initFile --------------------------------------------------------------------------
 
     def _detectDbFormat(self, tables: set[str]) -> str:
@@ -358,6 +371,8 @@ class FileManager:
                     self._migrateAnikaV1ToV2()
                 if dbVersion is not None and dbVersion < 3:
                     self._migrateBeckyV2ToV3()
+                if dbVersion is not None and dbVersion < 4:
+                    self._migrateV3ToV4()
                 self.dbFile.commit()
                 return True
 
@@ -398,6 +413,8 @@ class FileManager:
                 # closes the connection without committing and leaves the file untouched.
                 self._setDbVersion(2)
                 self._migrateBeckyV2ToV3()
+                # Production table was created fresh at current shape; bump to match.
+                self._setDbVersion(MERCY_DB_VERSION)
                 self.dbFile.commit()
                 return True
 
@@ -749,8 +766,8 @@ class FileManager:
             try:
                 self.dbFile.execute(
                     "INSERT OR REPLACE INTO production"
-                    "(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity, hours) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     vals
                 )
                 logging.info(f" * Saving {vals}")
@@ -1017,7 +1034,7 @@ class FileManager:
         # --- MERCY: production ---
         logging.info(f"Loading production from {self.filePath}")
         res = self.dbFile.execute(
-            "SELECT employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity "
+            "SELECT employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity, hours "
             "FROM production"
         )
         for values in res.fetchall():

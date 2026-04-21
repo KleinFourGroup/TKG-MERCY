@@ -1198,10 +1198,11 @@ class ProductionRecord:
         self.action: str | None = None
         self.quantity: float | None = None
         self.scrapQuantity: float = 0
+        self.hours: float = 0
 
     def setRecord(self, employeeId: int, date: datetime.date, shift: int,
                   action: str, targetName: str,
-                  quantity: float, scrapQuantity: float = 0):
+                  quantity: float, scrapQuantity: float = 0, hours: float = 0):
         # Action picks targetType: Batching->mix, Pressing/Finishing->part.
         if action not in defaults.PRODUCTION_ACTIONS:
             raise RuntimeError(f'action {action!r} not in PRODUCTION_ACTIONS')
@@ -1213,6 +1214,7 @@ class ProductionRecord:
         self.targetName = targetName
         self.quantity = quantity
         self.scrapQuantity = scrapQuantity
+        self.hours = hours
 
     def key(self):
         # Matches the UNIQUE constraint on the production table.
@@ -1231,9 +1233,10 @@ class ProductionRecord:
             self.action,
             self.quantity,
             self.scrapQuantity,
+            self.hours,
         )
 
-    def fromTuple(self, row: tuple[int, str, int, str, str, str, float, float]):
+    def fromTuple(self, row: tuple[int, str, int, str, str, str, float, float, float]):
         action = row[5]
         if action not in defaults.PRODUCTION_ACTIONS:
             raise RuntimeError(f'action {action!r} not in PRODUCTION_ACTIONS')
@@ -1251,12 +1254,13 @@ class ProductionRecord:
         self.action = action
         self.quantity = row[6]
         self.scrapQuantity = row[7] if row[7] is not None else 0
+        self.hours = row[8] if row[8] is not None else 0
 
     def __str__(self) -> str:
         dateStr = self.date.isoformat() if self.date is not None else "?"
         return (f"({self.employeeId} {dateStr} s{self.shift} {self.action} "
                 f"{self.targetName} [{self.targetType}] "
-                f"{self.quantity} scrap={self.scrapQuantity})")
+                f"{self.quantity} scrap={self.scrapQuantity} hours={self.hours})")
 
 class Database:
     def __init__(self,

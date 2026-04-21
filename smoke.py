@@ -84,8 +84,8 @@ def legacy_anika_migration() -> list[str]:
       - 2 mixtures: MixA with 3 materials, MixB with 1 material
       - 3 parts: PartA with 2 pads, PartB with 2 misc, PartC with 1 pad + 1 misc
     Expected post-open state:
-      - db_version = 3 (legacy ANIKA takes the full v1->v3 path; BECKY side is empty
-        so the v2->v3 step is a no-op version bump)
+      - db_version = 4 (Case 3 stamps MERCY_DB_VERSION after the ANIKA normalization;
+        BECKY/production tables are created fresh at current shape)
       - mixture_components has 4 rows
       - part_pads has 3 rows, part_misc has 3 rows
       - parts table has exactly 12 columns (dead cols dropped)
@@ -173,8 +173,8 @@ def legacy_anika_migration() -> list[str]:
         # --- schema assertions ---
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 3:
-            errors.append(f"db_version expected 3, got {version}")
+        if version is None or int(version[0]) != 4:
+            errors.append(f"db_version expected 4, got {version}")
 
         mix_cols = [r[1] for r in conn.execute("PRAGMA table_info(mixtures)").fetchall()]
         if mix_cols != ["name"]:
@@ -285,7 +285,7 @@ def legacy_becky_migration() -> list[str]:
       - 1 orphan PTO row
       - 1 valid training / attendance / PTO row each to confirm sweep is selective
     Expected post-open state:
-      - db_version = 3
+      - db_version = 4
       - employees table has `shift INTEGER, fullTime INTEGER` as separate cols (15 total)
       - shift/fullTime split correctly for each seeded employee
       - reviews.details and notes.details are plain text (not b64)
@@ -365,8 +365,8 @@ def legacy_becky_migration() -> list[str]:
         # --- schema assertions ---
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 3:
-            errors.append(f"db_version expected 3, got {version}")
+        if version is None or int(version[0]) != 4:
+            errors.append(f"db_version expected 4, got {version}")
 
         emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employees)").fetchall()]
         expected_emp = ["idNum", "lastName", "firstName", "anniversary", "role",
@@ -644,6 +644,99 @@ def legacy_merge() -> list[str]:
     return errors
 
 
+def mercy_v3_to_v4_migration() -> list[str]:
+    """Seed a unified MERCY DB stamped at v3 with a pre-hours production row,
+    open with MERCY v4, verify the hours column is added and existing data is
+    preserved with hours=0."""
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import sqlite3
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        # Build a v3-shape MERCY DB by hand: full unified schema except production
+        # has no `hours` column, and db_version=3.
+        conn = sqlite3.connect(tmp.name)
+        conn.execute("CREATE TABLE globals(name PRIMARY KEY, value)")
+        conn.execute("INSERT INTO globals VALUES ('db_version', 3)")
+        conn.execute("CREATE TABLE materials(name PRIMARY KEY, cost, freight, SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, LOI, Plus50, Sub50Plus100, Sub100Plus200, Sub200Plus325, Sub325, otherChem)")
+        conn.execute("CREATE TABLE mixtures(name PRIMARY KEY)")
+        conn.execute("CREATE TABLE mixture_components(mixture, material, weight REAL, sort_order INTEGER, UNIQUE(mixture, material))")
+        conn.execute("CREATE TABLE packaging(name PRIMARY KEY, kind, cost)")
+        conn.execute("CREATE TABLE parts(name PRIMARY KEY, weight, mix, pressing, turning, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, price, sales)")
+        conn.execute("CREATE TABLE part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))")
+        conn.execute("CREATE TABLE part_misc(part, item, sort_order INTEGER, UNIQUE(part, item))")
+        conn.execute("CREATE TABLE materialInventory(name, date, cost, amount, UNIQUE(name, date))")
+        conn.execute("CREATE TABLE partInventory(name, date, cost, amount40, amount60, amount80, amount100, UNIQUE(name, date))")
+        conn.execute("CREATE TABLE employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift INTEGER, fullTime INTEGER, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
+        conn.execute("CREATE TABLE reviews(idNum, date, nextReview, details TEXT, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE training(idNum, training, date, comment, UNIQUE(idNum, training, date))")
+        conn.execute("CREATE TABLE attendance(idNum, date, reason, value, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE PTO(idNum, start, end, hours, UNIQUE(idNum, start, end))")
+        conn.execute("CREATE TABLE notes(idNum, date, time, details TEXT, UNIQUE(idNum, date, time))")
+        conn.execute("CREATE TABLE holidays(holiday PRIMARY KEY, month)")
+        conn.execute("CREATE TABLE observances(holiday, shift, date, UNIQUE(holiday, shift, date))")
+        # Pre-v4 production table: no hours column.
+        conn.execute(
+            "CREATE TABLE production("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "employeeId INTEGER, date TEXT, shift INTEGER, "
+            "targetType TEXT, targetName TEXT, action TEXT, "
+            "quantity REAL, scrapQuantity REAL DEFAULT 0, "
+            "UNIQUE(employeeId, date, shift, targetType, targetName, action))"
+        )
+        conn.execute(
+            "INSERT INTO production(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (101, "2026-04-15", 1, "mix", "MixA", "Batching", 7.5, 0)
+        )
+        conn.commit()
+        conn.close()
+
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on v3 MERCY DB")
+            return errors
+
+        conn = sqlite3.connect(tmp.name)
+        version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
+        if version is None or int(version[0]) != 4:
+            errors.append(f"post-migration db_version expected 4, got {version}")
+        prod_cols = [r[1] for r in conn.execute("PRAGMA table_info(production)").fetchall()]
+        if "hours" not in prod_cols:
+            errors.append(f"production.hours missing after migration: cols={prod_cols}")
+        row = conn.execute(
+            "SELECT quantity, scrapQuantity, hours FROM production WHERE employeeId=101"
+        ).fetchone()
+        if row is None:
+            errors.append("pre-existing production row lost during migration")
+        elif row != (7.5, 0, 0):
+            errors.append(f"production row after migration: expected (7.5, 0, 0), got {row}")
+        conn.close()
+
+        # loadFile should surface hours=0 on the in-memory record.
+        w.fileManager.loadFile()
+        recs = list(w.db.production.values())
+        if len(recs) != 1:
+            errors.append(f"expected 1 production record in-memory, got {len(recs)}")
+        elif recs[0].hours != 0:
+            errors.append(f"in-memory hours after migration: got {recs[0].hours!r}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def production_roundtrip() -> list[str]:
     """Seed ProductionRecords in-memory, save, reload, assert state is preserved.
 
@@ -671,25 +764,27 @@ def production_roundtrip() -> list[str]:
 
         d = datetime_date(2026, 4, 15)
 
-        # Batching -> mix, default scrap.
+        # Batching -> mix, default scrap, default hours.
         r1 = ProductionRecord()
         r1.setRecord(101, d, 1, "Batching", "MixA", 7.5)
         if r1.targetType != "mix":
             errors.append(f"r1.targetType: expected 'mix', got {r1.targetType!r}")
         if r1.scrapQuantity != 0:
             errors.append(f"r1.scrapQuantity default: expected 0, got {r1.scrapQuantity!r}")
+        if r1.hours != 0:
+            errors.append(f"r1.hours default: expected 0, got {r1.hours!r}")
         w1.db.production[r1.key()] = r1
 
-        # Pressing -> part, explicit scrap.
+        # Pressing -> part, explicit scrap + hours.
         r2 = ProductionRecord()
-        r2.setRecord(102, d, 2, "Pressing", "PartA", 250.0, scrapQuantity=3)
+        r2.setRecord(102, d, 2, "Pressing", "PartA", 250.0, scrapQuantity=3, hours=7.5)
         if r2.targetType != "part":
             errors.append(f"r2.targetType: expected 'part', got {r2.targetType!r}")
         w1.db.production[r2.key()] = r2
 
-        # Finishing -> part, different shift/date/target to avoid UNIQUE overlap with r2.
+        # Finishing -> part, hours only.
         r3 = ProductionRecord()
-        r3.setRecord(102, d, 3, "Finishing", "PartB", 125.5)
+        r3.setRecord(102, d, 3, "Finishing", "PartB", 125.5, hours=4.0)
         if r3.targetType != "part":
             errors.append(f"r3.targetType: expected 'part', got {r3.targetType!r}")
         w1.db.production[r3.key()] = r3
@@ -719,6 +814,8 @@ def production_roundtrip() -> list[str]:
                 errors.append(f"r1 post-reload quantity: got {got.quantity!r}")
             if got.scrapQuantity != 0:
                 errors.append(f"r1 post-reload scrap: got {got.scrapQuantity!r}")
+            if got.hours != 0:
+                errors.append(f"r1 post-reload hours: got {got.hours!r}")
 
         if r2.key() not in db.production:
             errors.append(f"r2 key missing after reload: {r2.key()}")
@@ -728,6 +825,8 @@ def production_roundtrip() -> list[str]:
                 errors.append(f"r2 post-reload: action={got.action!r} targetType={got.targetType!r}")
             if got.scrapQuantity != 3:
                 errors.append(f"r2 post-reload scrap: got {got.scrapQuantity!r}")
+            if got.hours != 7.5:
+                errors.append(f"r2 post-reload hours: got {got.hours!r}")
 
         if r3.key() not in db.production:
             errors.append(f"r3 key missing after reload: {r3.key()}")
@@ -735,6 +834,8 @@ def production_roundtrip() -> list[str]:
             got = db.production[r3.key()]
             if got.action != "Finishing" or got.targetType != "part":
                 errors.append(f"r3 post-reload: action={got.action!r} targetType={got.targetType!r}")
+            if got.hours != 4.0:
+                errors.append(f"r3 post-reload hours: got {got.hours!r}")
 
         # --- delete one, save, reload: confirm sweep removes it ---
         del db.production[r2.key()]
@@ -1023,12 +1124,12 @@ def production_batch_roundtrip() -> list[str]:
         # UNIQUE (employeeId, date, shift, targetType, targetName, action) keys
         # are distinct.
         plan = [
-            ("1", "MixA", "10", "0"),
-            ("1", "MixB", "12", "1"),
-            ("2", "MixA", "14", "0"),
-            ("2", "MixB", "16", "2"),
+            ("1", "MixA", "10", "0", "8"),
+            ("1", "MixB", "12", "1", "7.5"),
+            ("2", "MixA", "14", "0", "0"),
+            ("2", "MixB", "16", "2", "6"),
         ]
-        for row, (shift, target, qty, scrap) in zip(dialog.rows, plan):
+        for row, (shift, target, qty, scrap, hours) in zip(dialog.rows, plan):
             row.shiftBox.setCurrentText(shift)
             idx = row.targetBox.findText(target)
             if idx < 0:
@@ -1037,12 +1138,13 @@ def production_batch_roundtrip() -> list[str]:
             row.targetBox.setCurrentIndex(idx)
             row.quantityEdit.setText(qty)
             row.scrapEdit.setText(scrap)
+            row.hoursEdit.setText(hours)
 
         dialog._save()
 
         if len(w1.db.production) != 4:
             errors.append(f"after batch save: expected 4 records in-memory, got {len(w1.db.production)}")
-        for shift, target, qty, scrap in plan:
+        for shift, target, qty, scrap, hours in plan:
             key = (101, batchDate, int(shift), "mix", target, "Batching")
             if key not in w1.db.production:
                 errors.append(f"missing record after save: {key}")
@@ -1052,6 +1154,8 @@ def production_batch_roundtrip() -> list[str]:
                 errors.append(f"{key}: quantity expected {qty}, got {rec.quantity!r}")
             if rec.scrapQuantity != float(scrap):
                 errors.append(f"{key}: scrap expected {scrap}, got {rec.scrapQuantity!r}")
+            if rec.hours != float(hours):
+                errors.append(f"{key}: hours expected {hours}, got {rec.hours!r}")
 
         w1.fileManager.saveFile()
         if w1.fileManager.dbFile is not None:
@@ -1125,6 +1229,7 @@ def main() -> int:
                      ("legacy_anika_migration", legacy_anika_migration),
                      ("legacy_becky_migration", legacy_becky_migration),
                      ("legacy_merge", legacy_merge),
+                     ("mercy_v3_to_v4_migration", mercy_v3_to_v4_migration),
                      ("production_roundtrip", production_roundtrip),
                      ("production_report", production_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
