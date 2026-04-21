@@ -865,6 +865,50 @@ Landed 2026-04-20. See §12.2 Step 16 for implementation notes and the scope dec
 
 Landed 2026-04-21. Surfaced in Matthew's first post-release feedback session: the team had forgotten to include duration/hours in the production schema. One-session add — new `hours REAL DEFAULT 0` column on `production`, wired through records / save / load / table / Quick Entry / Batch Entry / all four reports. See §12.2 Step 17 for implementation notes, the Case-4 stamping fix it piggybacked, and the report-formatting decisions.
 
+### 13.5 Step 18 — productivity rate reports (feeds costing) ⏳ Planning
+
+**Motivation.** Surfaced 2026-04-21 alongside Step 17. Team wants productivity drill-downs — rates per hour by part × action × employee × shift, with the ability to compare individuals to the fleet average. **Downstream consumer is the costing code, not HR.** They're gathering more precise labor data so they can refine the per-part cost estimates in the costing globals (the existing `pressing` / `turning` / `finishing` / etc. fields on `parts`). Not bonuses, not quotas, no targets stored on the record. This reframing matters: report shape should mirror the *inputs costing needs*, not a generic performance dashboard.
+
+**Confirmed scope (from 2026-04-21 session).**
+- Rate = `quantity / hours`, aggregated across arbitrary slices.
+- Comparisons are individual-vs-average (per part, per employee). Nice-to-have, not required.
+- No target-rate column or threshold storage. If "vs. expected" ever becomes desirable, the expected rate is already in costing globals.
+- PDF deliverable, same `PDFReport` pipeline as the other production reports.
+
+**Open questions — need team input before coding starts.**
+1. **Aggregation math.** `sum(qty) / sum(hours)` over the window, vs. mean of per-shift rates, vs. median. These diverge whenever shifts are uneven in length or in completeness. Pick wrong and the rates mislead.
+2. **Primary cut.** Probably per `(part, action)` since that's the costing-input granularity. But `(employee, part, action)` would let them see which employees are skewing the average — worth clarifying whether that's a separate report or a drill-down from the primary.
+3. **Windowing.** Rolling 30 days, user-picked range, or both? Filter UI can handle either.
+4. **Scrap rate.** `scrap / quantity` alongside the production rate in the same table, or a separate report?
+5. **Export.** Does the team want a CSV alongside the PDF so they can paste rates into the costing globals, or is reading-and-typing fine for the first iteration?
+
+**Tentative direction (subject to team answers).** New report type "Production Rates" as a fifth entry in `ProductionReportWindow.REPORT_TYPES`. Shape: grouped table (one row per `(part, action)`) with columns Quantity / Hours / Rate (qty/hr) / Scrap / Scrap-rate. When an employee is selected, add a "vs. average" column comparing the selected employee's rate to the fleet average for that `(part, action)`. Fleet average row at the bottom. Integrates with Step 19 (graphs) — this is the natural first customer.
+
+**Next session pickup.** Draft two or three example reports (mocked numbers) to send the team a concrete "pick one" doc — that unsticks scope faster than open-ended questions.
+
+### 13.6 Step 19 — graphs in reports (reportlab native) ⏳ Planning
+
+**Motivation.** Second half of the 2026-04-21 feedback: team wants graphs alongside (or instead of) tables in the production reports.
+
+**Confirmed decisions (2026-04-21 session).**
+- **PDF only.** No dashboard pivot — the app's deliverable stays a file you can email and archive.
+- **`reportlab.graphics.charts` first.** Native to the stack, zero new deps, vector into the PDF, keeps the PyInstaller binary lean. Matplotlib stays a latent escape hatch if the aesthetics fall short after seeing the first pass — decision deferred until we have team eyes on real output.
+
+**Open questions.**
+1. **Which charts, for which reports?** Bar-per-employee-per-action in Summary? Line-over-time for a per-part report? Both? Team hasn't been specific — mock examples will help.
+2. **Replace tables or sit alongside?** Default: alongside, since the numbers themselves are the costing-input deliverable (§13.5). Losing them loses half the point.
+3. **Styling tolerance.** `reportlab.graphics.charts` gives frumpy-but-functional output. Before we over-invest in tick customization / legend placement / color schemes, see what the team says about the first pass.
+
+**Tentative direction.** Add chart helpers to `report.py` mirroring the existing `drawTable(data, headers)` API — e.g., `drawBarChart(groups, labels, values, title)`. Most plausible first charts:
+- **Grouped bar** — one group per employee, three bars (Batching / Pressing / Finishing rate). Companions the Summary report.
+- **Line over time** — one line per part, x = date, y = rate. Companions a per-part rate report.
+
+Ship those two as exemplars inside §13.5's new "Production Rates" report, hand to the team, iterate.
+
+**Next session pickup.** Draft one report using mock rate data with both a table and a grouped-bar chart rendered side-by-side. That's the concrete deliverable to validate the approach before scaling to the other report types.
+
+---
+
 Original plan for Step 16 (pre-dated by Step 17) preserved below for reference.
 
 
