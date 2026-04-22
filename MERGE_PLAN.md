@@ -5,6 +5,8 @@
 **Author:** Matthew Kilgore  
 **Status:** Implementation complete — all 13 planned steps landed as of 2026-04-19, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); Step 13 verified the build end-to-end against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog requested by the team during Step 13 is tracked in §13.
 
+**See also:** [`CONVENTIONS.md`](CONVENTIONS.md) — live dev conventions and gotchas (smoke.py baseline, `fuzz_db.py` upkeep, headless Qt + `Employee` construction pitfalls).
+
 ---
 
 ## 1. Background and Motivation
@@ -549,7 +551,10 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
 | 17 | ✅ Done | Merge plan Step 17: production hours field |
+| 18 | ⏳ Planning | productivity rate reports (feeds costing) — see §13.5 |
+| 19 | ⏳ Planning | graphs in reports (reportlab native) — see §13.6 |
 | 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
+| 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
