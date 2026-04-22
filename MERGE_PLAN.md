@@ -907,6 +907,59 @@ Ship those two as exemplars inside §13.5's new "Production Rates" report, hand 
 
 **Next session pickup.** Draft one report using mock rate data with both a table and a grouped-bar chart rendered side-by-side. That's the concrete deliverable to validate the approach before scaling to the other report types.
 
+### 13.7 Step 20 — remember last DB, prompt to reopen on startup ⏳ Planning
+
+**Motivation.** Surfaced 2026-04-22 (Matthew's backlog). MERCY currently boots into an empty DB and the user has to File → Open every session. Quality-of-life ask: remember the last successfully opened DB path and offer to reopen it on startup.
+
+**Confirmed scope.**
+- Persist the last-opened DB path after any successful open / save-as.
+- On startup, if the path still exists, show a yes/no prompt offering to reopen.
+- On Yes, load through the existing `setFile` + `loadFile` pipeline.
+- On No or stale path, fall through to the empty-DB state — no badgering.
+
+**Open questions.**
+1. **Suppressible prompt?** "Always reopen without asking" checkbox, or prompt every time for the first pass? Prompt-every-time is safer — no way for the user to get stuck reopening a busted file. Latent escape hatch: add the checkbox later if they ask.
+2. **Prompt wording.** Full path, or just filename? Full path answers "which copy are we talking about?" when copies proliferate on the floor (has happened). Recommend full path.
+3. **Stale-path behavior.** If the stored path no longer exists, silently skip vs. show a "last file missing" message. Silently skip is friendlier; `logging.info` covers diagnostics.
+
+**Tentative direction.**
+- Use `QSettings`. Zero new deps; it's already in the PySide6 stack. Per-OS: registry on Windows, plist on macOS, ini on Linux.
+- Register org/app name in `main.py` *before* constructing any `QSettings`:
+  ```python
+  QCoreApplication.setOrganizationName("k4g")
+  QCoreApplication.setApplicationName("MERCY")
+  ```
+- Persist path on successful open: in `MainWindow.open()` (after `setFile`+`loadFile`) and `MainWindow.saveAs()` (after `setFile`). Settings key: `"lastDbPath"`.
+- Startup prompt lives in `main.py`, **after `window.show()` but before `app.exec()`** — keeps `MainWindow.__init__` free of dialogs (important so smoke tests don't hit a modal). Sketch:
+  ```python
+  path = QSettings().value("lastDbPath")
+  if path and os.path.isfile(path):
+      reply = QMessageBox.question(window, "Reopen Last Database?",
+          f"Reopen {path}?", QMessageBox.Yes | QMessageBox.No)
+      if reply == QMessageBox.Yes:
+          try:
+              if window.fileManager.setFile(path):
+                  window.fileManager.loadFile()
+                  window.setFileLabel()
+                  window._refreshAllTabs()
+          except Exception as e:
+              logging.error(f"Auto-reopen failed for {path}: {e!r}")
+  ```
+  A failed auto-reopen leaves the empty DB in place — never blocks startup.
+- Factor the load-from-path logic into a `MainWindow._loadPath(path) -> bool` helper shared between `open()` and the startup hook. That way the smoke test can drive the load path without needing to simulate a modal.
+
+**Next session pickup.**
+- Check existing `QCoreApplication` init order in `main.py` — org/app name has to be set before any `QSettings` construction, and currently there's no such registration.
+- Implement the helper + startup hook + smoke test (fixture DB roundtrip via `QSettings` key, bypassing the modal).
+- Confirm with Matthew whether to also remember the last *import* path for the Import Database dialog, since that currently hard-codes `os.path.expanduser("~")`. Probably a follow-up, not part of Step 20.
+
+### 13.8 Dev tooling landed
+
+Not step commits but worth cataloging so a cold pickup knows they exist:
+
+- **`mock_reports.py`** — Step 18 planning artifact, landed 2026-04-21 (commit `5bd3433`). Generates three candidate productivity-rate-report layouts (A/hierarchical, B/flat-with-fleet-comparison, C/action-by-part matrix), each with a reportlab-native grouped bar chart. Output writes to `mock_reports/` (gitignored). Deletable once the team picks a design.
+- **`fuzz_db.py`** — fake-data DB generator, landed 2026-04-22 (commit `e4246ee`). Writes a fully-populated MERCY DB through the real `FileManager.saveFile()` pipeline: every record type (materials, mixtures, packaging, parts, inventory, employees, reviews, training, attendance, PTO including CARRY/CASH/DROP, notes, holidays + observances, production) gets plausible random data. Deterministic with `--seed`; scales `tiny|small|medium|large` (medium → ~1.7k production records over 90 days). Verified end-to-end: generated DBs roundtrip through `MainWindow.loadFile()`, the Part → Mix → Material cost chain computes cleanly, `PDFReport.productionSummaryReport` renders against them, and a given seed is byte-equivalent across all 12 populated tables on re-run. Good for stress-testing any report (including Step 18's future output) without needing real team numbers.
+
 ---
 
 Original plan for Step 16 (pre-dated by Step 17) preserved below for reference.
