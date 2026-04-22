@@ -2,10 +2,9 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QPushButton, QFileDialog, QSizePolicy, QMessageBox
 from records import Database, emptyDB
 from utils import newHLine
+from version import VERSION
 
 import os
-
-VERSION = "1.0rc3"
 
 class MainWindow(QWidget):
     def __init__(self, db: Database | None = None):

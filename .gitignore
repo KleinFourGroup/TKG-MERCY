@@ -7,6 +7,9 @@ scripts/
 .claude/
 mock_reports/
 
+# Auto-generated at PyInstaller build time (see main.spec + version.py).
+_version.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -40,6 +43,9 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+
+# Our custom spec
+!main.spec
 
 # Installer logs
 pip-log.txt
