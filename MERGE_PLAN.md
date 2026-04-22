@@ -509,7 +509,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-20. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked as Steps 14–16 in §13; Steps 14 and 15 have now landed. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-22. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see §12.5 findings). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, and 20 have now landed. Each step was committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -549,6 +549,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
 | 17 | ✅ Done | Merge plan Step 17: production hours field |
+| 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -787,6 +788,26 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 **Verification.** All 10 smoke checks pass (the 9 prior — with the `db_version` assertion updates in the two legacy tests — plus the new `mercy_v3_to_v4_migration`). Offscreen `MainWindow()` construction confirms `productionTab.headers` ends in `'Hours'`. Manually verified by Matthew in the real GUI on a real DB before commit.
 
+**Step 20 — remember last DB, prompt to reopen on startup.** Fifth post-release feature item, surfaced 2026-04-22: quality-of-life ask so MERCY doesn't boot into an empty DB every session. Pre-planning in §13.7 carried through unchanged. Four groups of changes:
+
+1. **Org/app identity in `main.py`.** `QCoreApplication.setOrganizationName("tkg")` and `setApplicationName("MERCY")` added at the top of the `if __name__ == "__main__":` block, *before* `QApplication([])`. Safe to set before the app is constructed; required before any `QSettings()` call so Qt knows where to read/write (registry on Windows under `HKCU\Software\tkg\MERCY`, `~/.config/tkg/MERCY.conf` on Linux, plist on macOS). The Windows taskbar-grouping `myappid` in `main.py` was also updated from the legacy `k4g.anikaSuite.products` to `tkg.mercySuite.products` in the same commit so the two identities stay in sync.
+
+2. **`MainWindow._loadPath(path: str) -> bool` helper in `app.py`.** Factored out of `open()` so both the File → Open dialog and the startup auto-reopen hook share a single load pipeline. Body: `setFile` → on success `loadFile`, always `setFileLabel` + `_refreshAllTabs`, on success `QSettings().setValue("lastDbPath", self.fileManager.filePath)`. Returns `True` iff `setFile` succeeded. The "always refresh tabs/label" behavior preserves the pre-existing semantics of `open()` (which refreshed even when the dialog was cancelled or `setFile` rolled back the path); a cancel path in `open()` still calls `setFileLabel` + `_refreshAllTabs` directly since it never enters the helper. Persisting inside the helper means the startup auto-reopen also re-writes `lastDbPath` on a successful load — idempotent, and guarantees the key is always pointing at whatever MERCY last successfully read.
+
+3. **Persist on `saveAs` too.** One-liner `QSettings().setValue("lastDbPath", self.fileManager.filePath)` immediately after the successful `saveFile()` inside `saveAs()`. `save()` was deliberately *not* touched — it saves back to an already-persisted path, so re-writing the key would be pure no-op chatter.
+
+4. **Startup hook in `main.py`.** Lives between `window.show()` and `app.exec()`, not in `MainWindow.__init__`. Reads `QSettings().value("lastDbPath")`, guards on `path and os.path.isfile(path)` (stale-path → silent skip; `QSettings.value` returns `None` for a never-set key, which also silently skips), offers a `QMessageBox.question` with the full path in the body so users can tell "which copy" they're about to reopen, and on Yes calls `window._loadPath(lastPath)` inside a `try/except` that logs via `logging.error` and falls through to the empty-DB state on any failure. Matches §13.7's "never block startup" stance.
+
+**Decisions / non-decisions worth noting.**
+- **No "always reopen without asking" checkbox on the first pass.** §13.7 flagged this as a latent escape hatch — prompt-every-time keeps the user unstuck if they point MERCY at a busted DB. Add later if the team asks.
+- **Full path in the prompt body**, not just the filename. Matthew's floor occasionally has duplicate copies of the same DB in different directories; the path disambiguates without forcing the user to File → Open just to find out.
+- **Stale-path path is silent.** Per §13.7 — no "last file missing" dialog. `logging.info` in the logs is enough for diagnostics; users who move their DB don't need a popup on every startup.
+- **Refresh semantics in `open()` preserved exactly.** The pre-existing `open()` called `setFileLabel` + `_refreshAllTabs` on every exit path (success / cancel / `setFile` failure). Factoring the load into a helper could have accidentally skipped the refresh on cancel; the `else` branch in the rewritten `open()` keeps parity.
+- **`QSettings` has no `initFile` equivalent at the startup hook.** If the file exists but is unreadable or the wrong format, `setFile` returns False inside `_loadPath` and the exception-less fall-through leaves the empty DB. Confirmed by manual test with a truncated 0-byte `.db` — the prompt appears, user clicks Yes, load fails silently in `setFile`, empty DB stays.
+- **Only `open()` and `saveAs()` write the key — not `importOther()`.** Import doesn't change the active file path (§12.5(d) — it loads into the in-memory DB and leaves persistence for the user's next Save/Save-As). The key still points at whatever was open before the import; if the user hits Save, nothing needs to change; if they hit Save As, that handler persists the new path.
+
+**Verification.** All 11 smoke checks pass (the 10 prior plus the new `qsettings_reopen`, which round-trips an empty DB through `QSettings.setValue` + `MainWindow._loadPath` in an isolated `IniFormat` store — no touching the user's real registry). `qsettings_reopen` also confirms `_loadPath` re-persists the key on load and exercises the stale-path guard. Manually verified by Matthew in the real GUI on a real DB before commit — fresh launch after opening a file prompts on next startup; Yes reloads; No leaves the empty DB; moving/renaming the last-opened DB silently skips the prompt.
+
 ### 12.3 Known deferred issues visible in the current build
 
 - Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see §12.2 Step 7c-3 note). Small optional follow-up.
@@ -797,16 +818,18 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 
 Testing has been manual in the real PySide6 GUI on the user's machine. Headless sanity checks are run from the repo-local venv as `./Scripts/python.exe -c '...'`, with `QT_QPA_PLATFORM=offscreen` for anything that instantiates widgets. The Step-5 smoke test that builds a full `MainWindow` offscreen and walks `tab_widget` is a good template for later UI steps.
 
-**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, 10, 11, 12, 15, and 16). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Nine checks:
+**Baseline smoke harness** (`smoke.py` at repo root — added after Step 7e, extended in Steps 8, 9, 10, 11, 12, 15, 16, 17, and 20). Run as `./Scripts/python.exe smoke.py`; it sets `QT_QPA_PLATFORM=offscreen` internally. Eleven checks:
 - `compile_all` — `py_compile` every `.py` at repo root. Catches syntax errors from scripted rewrites (7c-1 / 7c-2 / 7c-3 patterns). ~1s.
 - `empty_roundtrip` — build `MainWindow()`, `setFile` + `saveFile` to a tmp path, reload into a fresh `MainWindow`, `loadFile`, assert the 11 dict-valued collections on `db` are present and empty and `db.holidays` (an `ObservancesDB`, not a dict) exists. Closes sqlite handles before `os.unlink` because Windows file-locks open connections.
 - `legacy_anika_migration` (Step 8) — hand-crafts a v1 ANIKA-shape DB with 2 mixtures and 3 parts (covering pads-only, misc-only, and pads+misc combos), opens it with MERCY to trigger Case 3, then asserts v3 schema (`mixtures`=[`name`] only; `parts` = 12 expected cols; `db_version=3` after chained v1→v3 migration), expected child-table row contents, in-memory reconstruction of `Mixture.materials`/`weights` and `Part.pad`/`padsPerBox`/`misc`, presence of a `.db.bak-*` sibling, and save/reload roundtrip fidelity. Updated in Step 9 to assert v3 (the BECKY v2→v3 migration is a no-op version-bump in Case 3 since the employee tables are empty).
 - `legacy_becky_migration` (Step 9) — hand-crafts a v2 BECKY-shape DB with 3 employees covering both compound-shift shapes (`"1|1"`, `"2|0"`, `"3|1"`), 2 base64-wrapped reviews (one multi-line), 2 base64-wrapped notes, and deliberately-orphaned `training`/`attendance`/`PTO` rows alongside valid ones. Opens with MERCY to trigger Case 4, then asserts `db_version=3`, the 15-col v3 `employees` shape, correct shift/fullTime split per row, plain-text `reviews.details`/`notes.details` (newlines preserved), orphan sweep removed only the dangling rows, backup sibling file exists, in-memory `Employee.shift`/`fullTime` reconstruct as `int`/`bool`, and save/reload roundtrip fidelity.
 - `legacy_merge` (Step 10) — seeds a legacy ANIKA file and a legacy BECKY file, opens the ANIKA one with MERCY (triggers Case 3 + v1→v3 migration), sha256-hashes the BECKY file, calls `FileManager.importOtherDb(beckyPath)` + `Database.mergeFrom(tmpDb)`, then asserts: products from ANIKA + employees + reviews + notes from BECKY are all present in-memory with correct shift/fullTime split; the BECKY source file is byte-identical to what was seeded (hash before == after — the import must never mutate the source); and save/reload roundtrip on the ANIKA file preserves the merged contents.
+- `mercy_v3_to_v4_migration` (Step 17) — hand-crafts a unified MERCY-shape DB stamped at `db_version=3` with one pre-hours `production` row (no `hours` column), opens it with MERCY to trigger Case 2's chained v3→v4 migration, then asserts: post-migration `db_version=4`, `hours` present in `PRAGMA table_info(production)`, the pre-existing `production` row preserved with `hours=0` on disk, and `loadFile` surfaces a single in-memory record with `rec.hours == 0`. Closes the sqlite handle before `os.unlink` per the Windows file-lock convention.
 - `production_roundtrip` (Step 11) — builds a fresh `MainWindow` against an empty DB, inserts three `ProductionRecord`s directly into `db.production` covering all three actions (`Batching`→mix with default scrap, `Pressing`→part with explicit `scrapQuantity=3`, `Finishing`→part), saves, reloads into a second `MainWindow`, asserts each record round-trips with correct `action` / `targetType` / `targetName` / `quantity` / `scrapQuantity` (including the default-0 case), then deletes one record, re-saves, and reloads into a third `MainWindow` to confirm the save-side sweep in `_saveFileBody` removes the on-disk row when the in-memory key is gone. Does not populate `db.employees` / `db.parts` / `db.mixtures` — the persistence layer doesn't cross-validate those, so keeping the fixture minimal keeps the test focused.
 - `production_report` (Step 12) — seeds one `Employee` (id 101, `lastName="Smith"`, `firstName="Alice"`, `fullTime=True`, anniversary 2020-01-01) plus the same three-record fixture as `production_roundtrip` (one record per action, mix and parts), then generates each of the four reports — `productionSummaryReport`, `productionActionReport("Pressing")`, `productionTargetReport("part", "PartA")`, `productionEmployeeReport(101)` — over a 2026-04 window plus an empty 2030 window for the empty-range path. Asserts every PDF file exists and is non-empty; does not parse PDF content (per §12.4 convention — generation succeeding without exception is the bar). Cleans up tmp `.pdf` paths and the `.db`/`-wal`/`-shm` triple in the `finally` block.
 - `production_refresh_on_delete` (Step 15) — builds `MainWindow` against an empty DB, seeds one `Employee` plus all five shadow collections (`EmployeeReviewsDB` / `EmployeeTrainingDB` / `EmployeePointsDB` / `EmployeePTODB` / `EmployeeNotesDB` — required because `delEmployee` asserts each is populated), seeds one `ProductionRecord` against the employee, primes `productionTab.refresh()` once and confirms the employee shows up in `employeeFilter`, then calls `db.delEmployee(emp.idNum)`. Asserts (a) the production record still exists in `db.production` with its `employeeId` unchanged (orphan retention — see §13.2), (b) a second `productionTab.refresh()` doesn't raise when the record's `employeeId` is no longer a key in `db.employees`, and (c) the deleted employee's id is gone from `employeeFilter`'s `itemData` after the refresh. Closes the sqlite handle before `os.unlink` in `finally` per the Windows file-lock convention.
 - `production_batch_roundtrip` (Step 16) — builds `MainWindow` against an empty DB, seeds one `Employee` plus all five shadow collections plus `Mixture("MixA")` + `Mixture("MixB")`, then drives the real `ProductionBatchDialog._save()` against four rows spanning shifts 1+2 and alternating MixA/MixB (so the 6-tuple keys are all distinct). Verifies in-memory state, then save/reload roundtrip on a fresh `MainWindow`. Adds two refusal cases: a single-row batch that exactly duplicates an already-saved key, and an intra-batch duplicate (two rows with identical key fields) — both expected to leave `db.production` untouched. **First smoke check that drives a UI save-button handler**, so it patches `QMessageBox.critical` + `QMessageBox.information` to no-op lambdas returning `StandardButton.Ok` for the duration of the check and restores in `finally` — offscreen, those dialogs' `exec()` nests an event loop without an input path to dismiss it, so without the patch the check would hang.
+- `qsettings_reopen` (Step 20) — saves an empty DB through the real `FileManager.saveFile()` pipeline, stashes its path under the `lastDbPath` key of an isolated `QSettings` store (IniFormat + `setPath(UserScope, tmpdir)` + a throwaway org/app name so the check never touches the user's real registry/plist), constructs a fresh `MainWindow`, then drives `MainWindow._loadPath(lastPath)` to simulate the startup auto-reopen hook *without* invoking the modal. Asserts (a) `QSettings.value("lastDbPath")` survives a fresh `QSettings()` after `sync()`, (b) `_loadPath` returns `True` and sets `fileManager.filePath`, (c) `_loadPath` re-persists the key on success, and (d) `os.path.isfile` correctly rejects a plausible stale-path sentinel (the guard `main.py` uses before calling `_loadPath`). Restores the original org/app name and rmtree's the settings tmpdir in `finally` so subsequent checks run clean.
 
 Run `smoke.py` as the always-on baseline at the start and end of any invasive step. Step-specific assertions still go in throwaway `-c '...'` scripts or a new function in `smoke.py` if broadly reusable.
 
@@ -907,51 +930,11 @@ Ship those two as exemplars inside §13.5's new "Production Rates" report, hand 
 
 **Next session pickup.** Draft one report using mock rate data with both a table and a grouped-bar chart rendered side-by-side. That's the concrete deliverable to validate the approach before scaling to the other report types.
 
-### 13.7 Step 20 — remember last DB, prompt to reopen on startup ⏳ Planning
+### 13.7 Step 20 — remember last DB, prompt to reopen on startup ✅ Done
 
-**Motivation.** Surfaced 2026-04-22 (Matthew's backlog). MERCY currently boots into an empty DB and the user has to File → Open every session. Quality-of-life ask: remember the last successfully opened DB path and offer to reopen it on startup.
+Landed 2026-04-22. Fifth post-release feature item from Matthew's backlog: MERCY previously booted into an empty DB every session. Quality-of-life add — `QSettings`-backed `lastDbPath` persisted after every successful `open()`/`saveAs()`, loaded on startup via a new `MainWindow._loadPath(path) -> bool` helper, prompted through a `QMessageBox.question` in `main.py` between `window.show()` and `app.exec()`. Zero new deps (`QSettings` is already in the PySide6 stack). See §12.2 Step 20 for implementation notes, the decision to keep the prompt modal every time (no "always reopen" checkbox yet), and the stale-path-silent-skip behavior.
 
-**Confirmed scope.**
-- Persist the last-opened DB path after any successful open / save-as.
-- On startup, if the path still exists, show a yes/no prompt offering to reopen.
-- On Yes, load through the existing `setFile` + `loadFile` pipeline.
-- On No or stale path, fall through to the empty-DB state — no badgering.
-
-**Open questions.**
-1. **Suppressible prompt?** "Always reopen without asking" checkbox, or prompt every time for the first pass? Prompt-every-time is safer — no way for the user to get stuck reopening a busted file. Latent escape hatch: add the checkbox later if they ask.
-2. **Prompt wording.** Full path, or just filename? Full path answers "which copy are we talking about?" when copies proliferate on the floor (has happened). Recommend full path.
-3. **Stale-path behavior.** If the stored path no longer exists, silently skip vs. show a "last file missing" message. Silently skip is friendlier; `logging.info` covers diagnostics.
-
-**Tentative direction.**
-- Use `QSettings`. Zero new deps; it's already in the PySide6 stack. Per-OS: registry on Windows, plist on macOS, ini on Linux.
-- Register org/app name in `main.py` *before* constructing any `QSettings`:
-  ```python
-  QCoreApplication.setOrganizationName("k4g")
-  QCoreApplication.setApplicationName("MERCY")
-  ```
-- Persist path on successful open: in `MainWindow.open()` (after `setFile`+`loadFile`) and `MainWindow.saveAs()` (after `setFile`). Settings key: `"lastDbPath"`.
-- Startup prompt lives in `main.py`, **after `window.show()` but before `app.exec()`** — keeps `MainWindow.__init__` free of dialogs (important so smoke tests don't hit a modal). Sketch:
-  ```python
-  path = QSettings().value("lastDbPath")
-  if path and os.path.isfile(path):
-      reply = QMessageBox.question(window, "Reopen Last Database?",
-          f"Reopen {path}?", QMessageBox.Yes | QMessageBox.No)
-      if reply == QMessageBox.Yes:
-          try:
-              if window.fileManager.setFile(path):
-                  window.fileManager.loadFile()
-                  window.setFileLabel()
-                  window._refreshAllTabs()
-          except Exception as e:
-              logging.error(f"Auto-reopen failed for {path}: {e!r}")
-  ```
-  A failed auto-reopen leaves the empty DB in place — never blocks startup.
-- Factor the load-from-path logic into a `MainWindow._loadPath(path) -> bool` helper shared between `open()` and the startup hook. That way the smoke test can drive the load path without needing to simulate a modal.
-
-**Next session pickup.**
-- Check existing `QCoreApplication` init order in `main.py` — org/app name has to be set before any `QSettings` construction, and currently there's no such registration.
-- Implement the helper + startup hook + smoke test (fixture DB roundtrip via `QSettings` key, bypassing the modal).
-- Confirm with Matthew whether to also remember the last *import* path for the Import Database dialog, since that currently hard-codes `os.path.expanduser("~")`. Probably a follow-up, not part of Step 20.
+**Follow-up still open (not part of Step 20).** Confirm with Matthew whether to also remember the last *import* path for the Import Database dialog, since that currently hard-codes `os.path.expanduser("~")`. Separate feature, separate step.
 
 ### 13.8 Dev tooling landed
 

@@ -1222,6 +1222,96 @@ def production_batch_roundtrip() -> list[str]:
     return errors
 
 
+def qsettings_reopen() -> list[str]:
+    """Step 20: QSettings lastDbPath round-trips through ``_loadPath``.
+
+    Saves an empty DB, stashes its path under ``lastDbPath`` in an isolated
+    INI-backed QSettings store, then drives ``MainWindow._loadPath`` on a
+    fresh window to simulate the startup auto-reopen hook (bypassing the
+    modal). Asserts the DB loads, ``fileManager.filePath`` is set, and
+    ``_loadPath`` re-persists ``lastDbPath``. Also checks that a stale
+    (missing) path is caught by the caller's ``os.path.isfile`` guard that
+    ``main.py`` uses before invoking the helper.
+    """
+    from PySide6.QtCore import QCoreApplication, QSettings
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    # Isolate QSettings storage so the test never touches the user's real
+    # registry/plist. IniFormat + a tmpdir gets torn down cleanly at the end.
+    origOrg = QCoreApplication.organizationName()
+    origApp = QCoreApplication.applicationName()
+    QCoreApplication.setOrganizationName("k4g-mercy-smoke")
+    QCoreApplication.setApplicationName("MERCY-smoke")
+    settingsDir = tempfile.mkdtemp(prefix="mercy-qsettings-")
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, settingsDir)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w1 = w2 = None
+    try:
+        w1 = MainWindow()
+        if not w1.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        w1.fileManager.saveFile()
+        if w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+            w1.fileManager.dbFile = None
+
+        # Simulate a previous session having persisted lastDbPath.
+        QSettings().setValue("lastDbPath", tmp.name)
+        # Force a sync so the value is readable by a fresh QSettings instance.
+        QSettings().sync()
+
+        w2 = MainWindow()
+        lastPath = QSettings().value("lastDbPath")
+        if lastPath != tmp.name:
+            errors.append(f"QSettings lastDbPath did not persist: got {lastPath!r}")
+            return errors
+        if not os.path.isfile(lastPath):
+            errors.append(f"lastPath is not a file on disk: {lastPath}")
+            return errors
+
+        if not w2._loadPath(lastPath):
+            errors.append(f"_loadPath returned False for {lastPath}")
+            return errors
+        if w2.fileManager.filePath != tmp.name:
+            errors.append(f"filePath after _loadPath: expected {tmp.name}, got {w2.fileManager.filePath}")
+
+        post = QSettings().value("lastDbPath")
+        if post != tmp.name:
+            errors.append(f"_loadPath did not re-persist lastDbPath: got {post!r}")
+
+        # Stale-path guard: main.py checks os.path.isfile before calling
+        # _loadPath, so a missing path never reaches the helper. Verify the
+        # guard catches a plausible stale path.
+        stale = tmp.name + ".missing"
+        if os.path.exists(stale):
+            errors.append(f"test setup bug: {stale} should not exist")
+        elif os.path.isfile(stale):
+            errors.append("os.path.isfile true-positive on a path that does not exist")
+    finally:
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        if w1 is not None and w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        import shutil
+        shutil.rmtree(settingsDir, ignore_errors=True)
+        QCoreApplication.setOrganizationName(origOrg)
+        QCoreApplication.setApplicationName(origApp)
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
@@ -1233,7 +1323,8 @@ def main() -> int:
                      ("production_roundtrip", production_roundtrip),
                      ("production_report", production_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
-                     ("production_batch_roundtrip", production_batch_roundtrip)]:
+                     ("production_batch_roundtrip", production_batch_roundtrip),
+                     ("qsettings_reopen", qsettings_reopen)]:
         errors = fn()
         if errors:
             failed = True

@@ -1,3 +1,4 @@
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QPushButton, QFileDialog, QSizePolicy, QMessageBox
 from records import Database, emptyDB
 from utils import newHLine
@@ -132,19 +133,34 @@ class MainWindow(QWidget):
         # Production domain
         self.productionTab.refresh()
 
+    def _loadPath(self, path: str) -> bool:
+        # Shared entry point for loading a DB from a known path — used by the
+        # File → Open dialog and by the startup auto-reopen hook. Skips any modal
+        # UI so a smoke test can drive the load path directly. Always refreshes
+        # the label/tabs so the caller doesn't have to; only persists lastDbPath
+        # and returns True on a successful load.
+        success = self.fileManager.setFile(path)
+        if success:
+            self.fileManager.loadFile()
+        self.setFileLabel()
+        self._refreshAllTabs()
+        if success:
+            QSettings().setValue("lastDbPath", self.fileManager.filePath)
+        return success
+
     def open(self):
         self.openButton.setEnabled(False)
         self.saveButton.setEnabled(False)
         self.saveAsButton.setEnabled(False)
         dbFile = QFileDialog.getOpenFileName(self, "Open Database", os.path.expanduser("~"), "Database (*.db)")
         if not dbFile[0] == "":
-            if self.fileManager.setFile(dbFile[0]):
-                self.fileManager.loadFile()
-        self.setFileLabel()
+            self._loadPath(dbFile[0])
+        else:
+            self.setFileLabel()
+            self._refreshAllTabs()
         self.openButton.setEnabled(True)
         self.saveButton.setEnabled(self.fileManager.filePath is not None)
         self.saveAsButton.setEnabled(True)
-        self._refreshAllTabs()
 
     def save(self):
         if self.fileManager.filePath is None:
@@ -160,6 +176,7 @@ class MainWindow(QWidget):
         if not dbFile[0] == "":
             if self.fileManager.setFile(dbFile[0]):
                 self.fileManager.saveFile()
+                QSettings().setValue("lastDbPath", self.fileManager.filePath)
         self.setFileLabel()
         self.openButton.setEnabled(True)
         self.saveButton.setEnabled(self.fileManager.filePath is not None)
