@@ -1203,7 +1203,8 @@ class ProductionRecord:
     def setRecord(self, employeeId: int, date: datetime.date, shift: int,
                   action: str, targetName: str,
                   quantity: float, scrapQuantity: float = 0, hours: float = 0):
-        # Action picks targetType: Batching->mix, Pressing/Finishing->part.
+        # Action picks targetType: Batching->mix, Pressing/Finishing->part,
+        # Tool Change->"" (no target — scrap is also fixed at 0).
         if action not in defaults.PRODUCTION_ACTIONS:
             raise RuntimeError(f'action {action!r} not in PRODUCTION_ACTIONS')
         self.employeeId = employeeId
@@ -1211,9 +1212,15 @@ class ProductionRecord:
         self.shift = shift
         self.action = action
         self.targetType = defaults.PRODUCTION_ACTION_TARGET[action]
-        self.targetName = targetName
+        # For targetless actions, coerce targetName/scrap to the canonical empty-state
+        # values so the natural UNIQUE key doesn't get polluted by stray UI text.
+        if self.targetType == "":
+            self.targetName = ""
+            self.scrapQuantity = 0
+        else:
+            self.targetName = targetName
+            self.scrapQuantity = scrapQuantity
         self.quantity = quantity
-        self.scrapQuantity = scrapQuantity
         self.hours = hours
 
     def key(self):

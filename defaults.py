@@ -45,18 +45,23 @@ PRODUCTION_ACTIONS: list[str] = [
     "Batching",
     "Pressing",
     "Finishing",
+    "Tool Change",
 ]
 
 # Each action is scoped to exactly one target type per the team's Step 11 spec:
 # Batching is always against a mixture; Pressing and Finishing are always against a part.
+# Tool Change has no target (empty string) — the event itself is the record.
 PRODUCTION_ACTION_TARGET: dict[str, str] = {
     "Batching":  "mix",
     "Pressing":  "part",
     "Finishing": "part",
+    "Tool Change": "",
 }
 
 # Display unit for quantities, implied by target type (§6.3 as clarified by team at Step 11 kickoff).
+# Empty-string target type (Tool Change) counts discrete events.
 PRODUCTION_TARGET_UNIT: dict[str, str] = {
     "mix":  "drops",
     "part": "parts",
+    "":     "changes",
 }

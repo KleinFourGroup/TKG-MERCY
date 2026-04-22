@@ -5,7 +5,7 @@ from utils import newHLine
 
 import os
 
-VERSION = "1.0rc1"
+VERSION = "1.0rc3"
 
 class MainWindow(QWidget):
     def __init__(self, db: Database | None = None):

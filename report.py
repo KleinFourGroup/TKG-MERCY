@@ -763,19 +763,33 @@ class PDFReport:
 
         targetType = PRODUCTION_ACTION_TARGET[action]
         unit = PRODUCTION_TARGET_UNIT[targetType]
+        # Targetless actions (Tool Change) drop the target + scrap columns — both
+        # are always empty/zero for those records and would just clutter the table.
+        hasTarget = targetType != ""
         targetLabel = "Mixture" if targetType == "mix" else "Part"
 
-        headers = ["Date", "Shift", "Employee", targetLabel,
-                   f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
-        data = [[
-            r.date.isoformat() if r.date else "",
-            str(r.shift) if r.shift is not None else "",
-            self._employeeName(r.employeeId),
-            r.targetName or "",
-            f"{r.quantity:g}" if r.quantity is not None else "",
-            f"{r.scrapQuantity:g}",
-            f"{r.hours:g}",
-        ] for r in recs]
+        if hasTarget:
+            headers = ["Date", "Shift", "Employee", targetLabel,
+                       f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
+            data = [[
+                r.date.isoformat() if r.date else "",
+                str(r.shift) if r.shift is not None else "",
+                self._employeeName(r.employeeId),
+                r.targetName or "",
+                f"{r.quantity:g}" if r.quantity is not None else "",
+                f"{r.scrapQuantity:g}",
+                f"{r.hours:g}",
+            ] for r in recs]
+        else:
+            headers = ["Date", "Shift", "Employee",
+                       f"Quantity ({unit})", "Hours"]
+            data = [[
+                r.date.isoformat() if r.date else "",
+                str(r.shift) if r.shift is not None else "",
+                self._employeeName(r.employeeId),
+                f"{r.quantity:g}" if r.quantity is not None else "",
+                f"{r.hours:g}",
+            ] for r in recs]
         olen = len(data)
 
         totalQ = sum((r.quantity or 0) for r in recs)
@@ -801,7 +815,12 @@ class PDFReport:
                                  else f"{action} Records -- Continued")
                 drawn = self.drawTable(data, headers)
                 if drawn == len(data):
-                    self.drawTable([], ["", "", "", "Total", f"{totalQ:g}", f"{totalS:g}", f"{totalH:g}"])
+                    if hasTarget:
+                        self.drawTable([], ["", "", "", "Total",
+                                            f"{totalQ:g}", f"{totalS:g}", f"{totalH:g}"])
+                    else:
+                        self.drawTable([], ["", "", "Total",
+                                            f"{totalQ:g}", f"{totalH:g}"])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()

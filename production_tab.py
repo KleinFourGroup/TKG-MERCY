@@ -306,10 +306,13 @@ class ProductionEditWindow(QWidget):
         self.actionBox.addItems(PRODUCTION_ACTIONS)
         self.actionBox.currentTextChanged.connect(self._onActionChanged)
 
+        self.targetLabel = QLabel("Target:")
         self.targetBox = QComboBox()
         self.targetBox.setEditable(False)
 
         self.unitLabel = QLabel("Unit: —")
+
+        self.scrapLabel = QLabel("Scrap:")
 
         # --- quantities ---
         self.quantityEdit = QLineEdit()
@@ -329,28 +332,15 @@ class ProductionEditWindow(QWidget):
         else:
             self.hoursEdit.setText("0")
 
-        # Seed the action dropdown — this also populates targetBox + unitLabel via the
-        # cascade. On edit we want the record's saved action/target, so set action
-        # explicitly and then override the target selection.
-        if not self.isNew and record is not None and record.action in PRODUCTION_ACTIONS:
-            self.actionBox.setCurrentText(record.action)
-        else:
-            self.actionBox.setCurrentIndex(0)
-        self._onActionChanged(self.actionBox.currentText())
-        if not self.isNew and record is not None and record.targetName:
-            idx = self.targetBox.findText(record.targetName)
-            if idx >= 0:
-                self.targetBox.setCurrentIndex(idx)
-
         self.mainLayout = [
             [QLabel("Employee:"), self.employeeBox],
             [QLabel("Date:"), self.calendar],
             [QLabel("Shift:"), self.shiftBox],
             [QLabel("Action:"), self.actionBox],
-            [QLabel("Target:"), self.targetBox],
+            [self.targetLabel, self.targetBox],
             [self.unitLabel],
             [QLabel("Quantity:"), self.quantityEdit],
-            [QLabel("Scrap:"), self.scrapEdit],
+            [self.scrapLabel, self.scrapEdit],
             [QLabel("Hours:"), self.hoursEdit],
             [QPushButton("Update"), QPushButton("Create")],
         ]
@@ -361,6 +351,20 @@ class ProductionEditWindow(QWidget):
         else:
             self.mainLayout[-1][0].setEnabled(False)
         self.mainLayout[-1][1].clicked.connect(self.newRecord)
+
+        # Seed the action dropdown AFTER the layout so _onActionChanged's setVisible
+        # calls land on parented widgets — toggling visibility on unparented children
+        # doesn't always stick once Qt adds them to the layout.
+        if not self.isNew and record is not None and record.action in PRODUCTION_ACTIONS:
+            self.actionBox.setCurrentText(record.action)
+        else:
+            self.actionBox.setCurrentIndex(0)
+        self._onActionChanged(self.actionBox.currentText())
+        if not self.isNew and record is not None and record.targetName:
+            idx = self.targetBox.findText(record.targetName)
+            if idx >= 0:
+                self.targetBox.setCurrentIndex(idx)
+
         centerOnScreen(self)
         self.show()
 
@@ -376,6 +380,13 @@ class ProductionEditWindow(QWidget):
         self.targetBox.addItems(names)
         unit = PRODUCTION_TARGET_UNIT.get(targetType or "", "")
         self.unitLabel.setText(f"Unit: {unit}" if unit else "Unit: —")
+        # Targetless actions (Tool Change) hide the target + scrap rows entirely —
+        # targetName/scrap are forced to canonical empty-state values in readData.
+        hasTarget = targetType not in (None, "")
+        self.targetLabel.setVisible(hasTarget)
+        self.targetBox.setVisible(hasTarget)
+        self.scrapLabel.setVisible(hasTarget)
+        self.scrapEdit.setVisible(hasTarget)
 
     def readData(self, isNew: bool) -> bool:
         errors: list[str] = []
@@ -399,17 +410,22 @@ class ProductionEditWindow(QWidget):
         if action not in PRODUCTION_ACTIONS:
             errors.append(f"Unknown action: {action!r}")
         targetType = PRODUCTION_ACTION_TARGET.get(action, "")
-        targetName = self.targetBox.currentText()
-        if not targetName:
-            errors.append("No target selected.")
+        if targetType == "":
+            # Targetless action — targetName and scrap are forced to empty / zero.
+            targetName = ""
+            scrap = 0.0
         else:
-            if targetType == "mix" and targetName not in self.mainApp.db.mixtures:
-                errors.append(f"Mixture {targetName!r} no longer exists.")
-            if targetType == "part" and targetName not in self.mainApp.db.parts:
-                errors.append(f"Part {targetName!r} no longer exists.")
+            targetName = self.targetBox.currentText()
+            if not targetName:
+                errors.append("No target selected.")
+            else:
+                if targetType == "mix" and targetName not in self.mainApp.db.mixtures:
+                    errors.append(f"Mixture {targetName!r} no longer exists.")
+                if targetType == "part" and targetName not in self.mainApp.db.parts:
+                    errors.append(f"Part {targetName!r} no longer exists.")
+            scrap = checkInput(self.scrapEdit.text(), float, "nonneg", errors, "Scrap")
 
         quantity = checkInput(self.quantityEdit.text(), float, "nonneg", errors, "Quantity")
-        scrap = checkInput(self.scrapEdit.text(), float, "nonneg", errors, "Scrap")
         hours = checkInput(self.hoursEdit.text(), float, "nonneg", errors, "Hours")
 
         if errors:
@@ -713,6 +729,12 @@ class _BatchRow(QWidget):
         self.targetBox.blockSignals(False)
         return invalidated
 
+    def setHasTarget(self, hasTarget: bool):
+        # Toggle target + scrap widgets in lockstep with the shared action's
+        # target type — Tool Change rows don't need them.
+        self.targetBox.setVisible(hasTarget)
+        self.scrapEdit.setVisible(hasTarget)
+
 
 class ProductionBatchDialog(QWidget):
     # Batch-entry dialog: shared date + action at the top, a scrollable list of
@@ -743,8 +765,13 @@ class ProductionBatchDialog(QWidget):
         headerLayout.addWidget(self.actionBox)
         headerLayout.addStretch()
 
+        # Grab Target + Scrap header references so _onActionChanged can hide them
+        # in lockstep with each row's targetBox / scrapEdit when the shared action
+        # has no target (Tool Change).
         colHeaderLayout = QHBoxLayout()
         colHeaderLayout.setContentsMargins(0, 0, 0, 0)
+        self.targetHeader: QLabel | None = None
+        self.scrapHeader: QLabel | None = None
         for text, minW, maxW in (
             ("Employee", 200, 200),
             ("Target",   160, 160),
@@ -760,6 +787,10 @@ class ProductionBatchDialog(QWidget):
             if maxW:
                 lbl.setMaximumWidth(maxW)
             colHeaderLayout.addWidget(lbl)
+            if text == "Target":
+                self.targetHeader = lbl
+            elif text == "Scrap":
+                self.scrapHeader = lbl
 
         self.statusLabel = QLabel("")
 
@@ -798,6 +829,8 @@ class ProductionBatchDialog(QWidget):
 
         self.resize(900, 480)
         self._addRow()  # also updates height for the initial row
+        # Apply initial target/scrap visibility based on the default action.
+        self._onActionChanged(self.actionBox.currentText())
 
         centerOnScreen(self, False)
         self.show()
@@ -807,7 +840,9 @@ class ProductionBatchDialog(QWidget):
 
     def _addRow(self):
         prev = self.rows[-1] if self.rows else None
-        row = _BatchRow(self.mainApp, self, self._currentTargetType(), prev)
+        targetType = self._currentTargetType()
+        row = _BatchRow(self.mainApp, self, targetType, prev)
+        row.setHasTarget(targetType != "")
         self.rows.append(row)
         # Insert before the trailing stretch so rows stack at the top of the scroll area.
         insertAt = self.rowsLayout.count() - 1
@@ -840,11 +875,21 @@ class ProductionBatchDialog(QWidget):
 
     def _onActionChanged(self, _text: str):
         targetType = self._currentTargetType()
+        hasTarget = targetType != ""
+        if self.targetHeader is not None:
+            self.targetHeader.setVisible(hasTarget)
+        if self.scrapHeader is not None:
+            self.scrapHeader.setVisible(hasTarget)
         invalidated = 0
         for row in self.rows:
-            if row._populateTargets(targetType):
+            row.setHasTarget(hasTarget)
+            if hasTarget and row._populateTargets(targetType):
                 invalidated += 1
-        if invalidated:
+        if not hasTarget:
+            self.statusLabel.setText(
+                f"{self.actionBox.currentText()} has no target — targets hidden."
+            )
+        elif invalidated:
             self.statusLabel.setText(
                 f"Action changed — cleared target on {invalidated} row(s); "
                 f"pick new targets before saving."
@@ -884,13 +929,24 @@ class ProductionBatchDialog(QWidget):
                 rowErrs.append(f"invalid shift {shiftText!r}")
                 shift = 0
 
-            targetName = row.targetBox.currentText()
-            if not targetName:
-                rowErrs.append("no target selected")
-            elif targetType == "mix" and targetName not in self.mainApp.db.mixtures:
-                rowErrs.append(f"mixture {targetName!r} no longer exists")
-            elif targetType == "part" and targetName not in self.mainApp.db.parts:
-                rowErrs.append(f"part {targetName!r} no longer exists")
+            if targetType == "":
+                # Targetless action (Tool Change): no target/scrap per row.
+                targetName = ""
+                scrap = 0.0
+            else:
+                targetName = row.targetBox.currentText()
+                if not targetName:
+                    rowErrs.append("no target selected")
+                elif targetType == "mix" and targetName not in self.mainApp.db.mixtures:
+                    rowErrs.append(f"mixture {targetName!r} no longer exists")
+                elif targetType == "part" and targetName not in self.mainApp.db.parts:
+                    rowErrs.append(f"part {targetName!r} no longer exists")
+
+                scrapRaw = row.scrapEdit.text().strip()
+                if not scrapRaw:
+                    scrap = 0.0
+                else:
+                    scrap = checkInput(scrapRaw, float, "nonneg", rowErrs, "scrap")
 
             qtyRaw = row.quantityEdit.text().strip()
             if not qtyRaw:
@@ -898,12 +954,6 @@ class ProductionBatchDialog(QWidget):
                 quantity = 0.0
             else:
                 quantity = checkInput(qtyRaw, float, "nonneg", rowErrs, "quantity")
-
-            scrapRaw = row.scrapEdit.text().strip()
-            if not scrapRaw:
-                scrap = 0.0
-            else:
-                scrap = checkInput(scrapRaw, float, "nonneg", rowErrs, "scrap")
 
             hoursRaw = row.hoursEdit.text().strip()
             if not hoursRaw:

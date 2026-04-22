@@ -415,7 +415,8 @@ def populateProduction(db, rng, idNums, partNames, mixtureNames, days, today):
     """
     Scatter production records across the last `days` days. For each employee
     on each day, 0-3 records split across the three actions (Batching on mixes,
-    Pressing/Finishing on parts). UNIQUE(employee, date, shift, type, name, action).
+    Pressing/Finishing on parts, Tool Change with no target).
+    UNIQUE(employee, date, shift, type, name, action).
     """
     actions = defaults.PRODUCTION_ACTIONS
     usedKeys = set()
@@ -432,7 +433,12 @@ def populateProduction(db, rng, idNums, partNames, mixtureNames, days, today):
             for _ in range(rng.randint(1, 3)):
                 action = rng.choice(actions)
                 targetType = defaults.PRODUCTION_ACTION_TARGET[action]
-                target = rng.choice(mixtureNames if targetType == "mix" else partNames)
+                if targetType == "":
+                    target = ""
+                elif targetType == "mix":
+                    target = rng.choice(mixtureNames)
+                else:
+                    target = rng.choice(partNames)
                 key = (idNum, date, shift, targetType, target, action)
                 if key in usedKeys:
                     continue
@@ -441,6 +447,9 @@ def populateProduction(db, rng, idNums, partNames, mixtureNames, days, today):
                 if action == "Batching":
                     qty = rng.randint(1, 6)          # drops
                     hours = round(rng.uniform(0.5, 4), 1)
+                elif action == "Tool Change":
+                    qty = rng.randint(1, 4)          # changes
+                    hours = round(rng.uniform(0.1, 1.0), 1)
                 else:
                     qty = rng.randint(10, 200)       # parts
                     hours = round(rng.uniform(1, 8), 1)

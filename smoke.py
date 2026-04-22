@@ -869,6 +869,97 @@ def production_roundtrip() -> list[str]:
     return errors
 
 
+def production_tool_change_roundtrip() -> list[str]:
+    """Step 22: seed a Tool Change record, save, reload, verify empty-state shape.
+
+    Passes deliberately-garbage targetName and scrapQuantity to `setRecord` to
+    confirm the `targetType == ""` branch coerces them to the canonical
+    empty-state values before the record is stored. Then saves, reloads, and
+    checks the canonical shape survives the SQLite roundtrip:
+
+      - targetType  == ""
+      - targetName  == ""
+      - scrapQuantity == 0
+      - quantity + hours are preserved as entered (they vary per shift — one
+        row per employee per shift carries the count of changes).
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w1 = w2 = None
+    try:
+        w1 = MainWindow()
+        if not w1.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        d = datetime_date(2026, 4, 15)
+
+        # Pass garbage targetName and scrapQuantity; setRecord must coerce.
+        r = ProductionRecord()
+        r.setRecord(101, d, 2, "Tool Change", "stray-part-name",
+                    3.0, scrapQuantity=99, hours=0.75)
+        if r.targetType != "":
+            errors.append(f"targetType: expected '', got {r.targetType!r}")
+        if r.targetName != "":
+            errors.append(f"targetName coercion failed: got {r.targetName!r}")
+        if r.scrapQuantity != 0:
+            errors.append(f"scrapQuantity coercion failed: got {r.scrapQuantity!r}")
+        if r.quantity != 3.0:
+            errors.append(f"quantity should pass through: got {r.quantity!r}")
+        if r.hours != 0.75:
+            errors.append(f"hours should pass through: got {r.hours!r}")
+        w1.db.production[r.key()] = r
+
+        w1.fileManager.saveFile()
+        if w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+
+        # --- reload and verify ---
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading tool-change DB")
+            return errors
+        w2.fileManager.loadFile()
+
+        db = w2.db
+        if len(db.production) != 1:
+            errors.append(f"expected 1 production record after reload, got {len(db.production)}")
+        if r.key() not in db.production:
+            errors.append(f"tool-change key missing after reload: {r.key()}")
+        else:
+            got = db.production[r.key()]
+            if got.action != "Tool Change":
+                errors.append(f"post-reload action: got {got.action!r}")
+            if got.targetType != "":
+                errors.append(f"post-reload targetType: got {got.targetType!r}")
+            if got.targetName != "":
+                errors.append(f"post-reload targetName: got {got.targetName!r}")
+            if got.scrapQuantity != 0:
+                errors.append(f"post-reload scrapQuantity: got {got.scrapQuantity!r}")
+            if got.quantity != 3.0:
+                errors.append(f"post-reload quantity: got {got.quantity!r}")
+            if got.hours != 0.75:
+                errors.append(f"post-reload hours: got {got.hours!r}")
+    finally:
+        if w1 is not None and w1.fileManager.dbFile is not None:
+            w1.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def production_report() -> list[str]:
     """Step 12: generate each production report and assert files are non-empty.
 
@@ -1321,6 +1412,7 @@ def main() -> int:
                      ("legacy_merge", legacy_merge),
                      ("mercy_v3_to_v4_migration", mercy_v3_to_v4_migration),
                      ("production_roundtrip", production_roundtrip),
+                     ("production_tool_change_roundtrip", production_tool_change_roundtrip),
                      ("production_report", production_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
                      ("production_batch_roundtrip", production_batch_roundtrip),
