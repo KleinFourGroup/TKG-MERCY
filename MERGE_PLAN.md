@@ -693,66 +693,15 @@ Not step commits but worth cataloging so a cold pickup knows they exist:
 
 ### 13.9 Step 21 — split MERGE_PLAN.md into archive files ✅ Done
 
-Landed 2026-04-22. This doc had grown to ~1028 lines / ~51k tokens — `Read` without `offset`/`limit` tripped the 25k-token cap. Most of that bulk was historical narrative not needed at session start.
-
-**What moved.** §12.2 step-by-step implementation narratives → [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md); §12.4 historical smoke-check list → [`plan_archive/test_conventions.md`](plan_archive/test_conventions.md); §12.5 Step 13 real-data drill findings → [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md). All three moved verbatim — relative `§12.x` pointers and "Step N above" language inside them are intentionally preserved since historical accuracy matters more than polish. Archive files open with a small header naming the split date and pointing back to this doc.
-
-**What was extracted to live docs.** Working notes buried in the old §12.4 — the always-on `smoke.py` baseline, a `fuzz_db.py` upkeep reminder, and two gotchas (headless `Employee` construction, offscreen Qt needing `QApplication`) — moved to [`CONVENTIONS.md`](CONVENTIONS.md) at repo root. Expected to grow organically as more conventions and gotchas surface.
-
-**What stayed live.** §12.1 (step status table), §12.3 (known deferred issues), and all of §13 (post-release backlog). Section numbers §12.2 / §12.4 / §12.5 kept as stub-bodied headers so commit messages and archive-file cross-references don't go stale. Every MERGE_PLAN.md pointer that referenced the moved bodies — line 6, the §12 intro paragraph, §12.3 bullets 1 and 3, and the "See §12.2 Step N" pointers in §13.1 / §13.2 / §13.3 / §13.4 / §13.7 — was redirected to the archive path. The `(Step 7c-3 §12.2)` reference inside the preserved pre-Step-16 draft at the doc tail was deliberately left alone since that whole section is already historical-preservation content.
-
-**Verification.** `wc -l MERGE_PLAN.md` dropped from 1028 to 706; remaining `§12.2` / `§12.4` / `§12.5` hits are all section headers, back-references inside this landed-note, or the preserved pre-Step-16 draft at the doc tail; `Read` end-to-end no longer trips the 25k cap; all four archive/convention files exist and are non-empty. No code touched; `smoke.py` green unchanged.
+Landed 2026-04-22. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 21 for what moved where, what stayed live, and the pointer-redirection work.
 
 ### 13.10 Step 22 — add Tool Change production action ✅ Done
 
-**Landed 2026-04-22** alongside a VERSION bump to `1.0rc3` (rc2 skipped — internal numbering slip, no rc2 build shipped).
-
-**Motivation.** Surfaced 2026-04-22 in follow-up team feedback (not part of the pending feedback we're still waiting on — this was a sixth request that came in alongside it). Team wants to track an additional production action: `Tool Change`. Unlike the three existing actions, a tool change has no part/mix target — the event itself is the record.
-
-**Team spec, as clarified in session.**
-- New action `"Tool Change"` in `PRODUCTION_ACTIONS`.
-- `targetType` and `targetName` both stored as `""` (empty strings, consistent with the existing TEXT columns — no schema change).
-- `scrapQuantity` fixed at 0 (scrap has no meaning without a target).
-- `quantity` is **user-entered**. Original proposal was "always 1", but UNIQUE(employeeId, date, shift, targetType, targetName, action) would then cap tool changes at one per shift per employee. Matthew chose to let quantity vary — one record per employee per shift carries the count of changes that shift. More elegant; "one row per change" is available later as an escape hatch if the team wants finer granularity.
-- `hours` is still user-entered. Team wants to track how much time is being spent on tool changes.
-
-**Scope.**
-- `defaults.py`: append `"Tool Change"` to `PRODUCTION_ACTIONS`, `"Tool Change": ""` to `PRODUCTION_ACTION_TARGET`, and `"": "changes"` to `PRODUCTION_TARGET_UNIT` so the unit label renders cleanly everywhere.
-- `records.py`: `ProductionRecord.setRecord` coerces `targetName=""` and `scrapQuantity=0` when the action's target type is `""`. Keeps the natural UNIQUE key canonical even if callers (fuzz, smoke, batch dialog) pass stale UI text. `fromTuple`'s existing targetType equality check already passes for the new action since both expected and stored values are `""`.
-- `production_tab.py`:
-  - `ProductionEditWindow`: promote `Target:` / `Scrap:` labels to instance members so `_onActionChanged` can toggle their visibility alongside the combo/edit widgets. Action-cascade block moved to **after** `widgetFromList` so `setVisible` lands on parented widgets (defensive — otherwise visibility sometimes doesn't stick once Qt reparents the children). `readData` skips target + scrap validation when `targetType == ""`, forcing `targetName=""` and `scrap=0.0`.
-  - `ProductionBatchDialog`: grab `Target` / `Scrap` column-header `QLabel` references out of the construction loop; `_onActionChanged` toggles their visibility and every row's target/scrap widgets (via a new `_BatchRow.setHasTarget()` helper). `_save` skips target + scrap validation for targetless actions. `_addRow` calls `setHasTarget` on newly added rows so they match the current action's state. Initial state is applied with an explicit `_onActionChanged` call after the first row is seeded. Status label reads `"Tool Change has no target — targets hidden."` while a targetless action is selected.
-- `report.py`: `productionActionReport` drops the Target + Scrap columns (headers, data, and the totals row) when `targetType == ""`. The other three reports already handle mixed-action data correctly because the `PRODUCTION_TARGET_UNIT[""] = "changes"` mapping fills in the blanks; no code changes in `productionSummaryReport`, `productionTargetReport`, or `productionEmployeeReport`.
-- `fuzz_db.py`: extend `populateProduction` so Tool Change gets picked into the per-employee-per-day rotation with plausible counts (1–4 changes) and short hours (0.1–1.0h).
-- **No schema change.** TEXT columns already allow empty strings; the UNIQUE constraint treats `""` like any other value. Old DBs keep loading; new DBs open on older builds too (they just won't show the new action in the dropdown — rows with `action="Tool Change"` would surface the `RuntimeError` in `fromTuple`. Matthew has no pre-Step-22 DBs in the field yet, so this isn't a real concern; flagging in case it becomes one).
-
-**Verification.** `smoke.py` green — twelve checks pass. Added `production_tool_change_roundtrip` alongside the existing eleven: it seeds a Tool Change record with deliberately-garbage `targetName` / `scrapQuantity` args, asserts `setRecord` coerces them to the canonical empty-state, then saves / reloads / verifies the shape survives the SQLite roundtrip (`targetType == ""`, `targetName == ""`, `scrapQuantity == 0`, quantity + hours preserved as entered). Beyond smoke, verified interactively via `fuzz_db.py` (61/232 records were Tool Change with correct empty-state shape) and three inline headless probes against the edit dialog, batch dialog, and per-action report.
-
-**Known unknowns / open follow-ups.**
-- ~~Productivity rate reporting (§13.5) will need to think about whether Tool Change rates (changes/hr) belong alongside the production-action rates or get a separate report. Flag for the Step 18 planning session.~~ **Resolved 2026-04-24:** Tool Change reports show total time spent — no rate/hr, no per-employee breakdown. Applies to both Step 18 (productivity tables) and Step 19 (trend graphs). See §13.5 / §13.6 for the specifics.
+Landed 2026-04-22 alongside a VERSION bump to `1.0rc3`. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 22 for the team spec, scope across `defaults.py` / `records.py` / `production_tab.py` / `report.py` / `fuzz_db.py`, and the verification details. The Tool-Change-in-reports follow-up was resolved 2026-04-24 — see §13.5 / §13.6 for the call.
 
 ### 13.11 Step 23 — production quantity: positive, not non-negative ✅ Done
 
-**Landed 2026-04-24** alongside the backlog refresh. Two-line fix plus a new smoke check; `smoke.py` goes from 12 to 13 checks green.
-
-**Motivation.** Surfaced 2026-04-24 with the second round of team feedback. Production entry was accepting `quantity = 0`, which has no meaning — a zero-produced record is just noise in the DB. Validation needs to reject zero as well as negatives.
-
-**Scope as implemented.**
-- [production_tab.py:428](production_tab.py:428) (`ProductionEditWindow.readData`, Quick Entry): `checkInput(..., float, "nonneg", errors, "Quantity")` → `checkInput(..., float, "pos", errors, "Quantity")`.
-- [production_tab.py:956](production_tab.py:956) (`ProductionBatchDialog._save`, Batch Entry): same swap for the `quantity` field.
-- Scrap stays `"nonneg"` — zero scrap is legitimate and the default. Hours likewise stays `"nonneg"` for Tool Change's 0-hour edge case.
-- `"pos"` mode already existed in [utils.py:42](utils.py:42)'s `checkInput`; no new validator written.
-- `ProductionRecord.setRecord` deliberately left without a belt-and-suspenders `quantity <= 0` guard. The UI is the single validation boundary (7a philosophy); adding a record-layer check would double-fire the error path with no user-visible upside.
-
-**Verification.** New `production_quantity_validation` check in [smoke.py](smoke.py). Seeds an employee + a `MixA` mixture, then:
-- **Quick Entry:** builds a `ProductionEditWindow`, sets action=Batching + target=MixA + quantity=0 + scrap=0 + hours=1, calls `readData(isNew=True)`. Asserts the call returns `False`, the captured `errorMessage` payload contains a "Quantity ... positive" string, and `db.production` stays empty.
-- **Batch Entry:** builds a `ProductionBatchDialog`, fills row 0 with the same zero-quantity shape, calls `_save()`. Asserts `db.production` count is unchanged and the captured error payload mentions "quantity ... positive".
-
-`production_tab.errorMessage` is monkey-patched to capture error text (cleaner than sniffing `QMessageBox.critical` args — follows the batch smoke's structural pattern). Regression-caught via a `git stash` dance: reverting the two-line swap and re-running smoke surfaces the new check failing loudly (quantity=0 stored on Quick Entry, batch fails on an unrelated UNIQUE collision rather than the expected validation), confirming the test actually exercises what it claims.
-
-All 13 smoke checks pass after the fix. Existing Tool Change smoke (Step 22) unaffected since Tool Change records still carry positive `quantity` (the user-entered count of changes per shift).
-
-**Known unknowns.** None.
+Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 23 for the two-line fix, why `ProductionRecord.setRecord` deliberately doesn't get a belt-and-suspenders guard, and the new `production_quantity_validation` smoke check (regression-verified via stash dance).
 
 ### 13.12 Step 24 — per-employee reports ⏳ Deferred
 
