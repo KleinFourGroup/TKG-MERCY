@@ -181,6 +181,39 @@ class MainWindow(QWidget):
         self.saveButton.setEnabled(self.fileManager.filePath is not None)
         self.saveAsButton.setEnabled(True)
 
+    def closeEvent(self, event):
+        # Step 25: prompt Save / Don't Save / Cancel before exiting when a DB
+        # file is loaded. No dirty tracking yet (Step 26) — always prompt if a
+        # filePath is set. A never-saved empty DB closes silently since there's
+        # nowhere to save to.
+        if self.fileManager.filePath is None:
+            event.accept()
+            return
+        choice = self._confirmCloseChoice()
+        if choice == QMessageBox.StandardButton.Save:
+            # Bypass MainWindow.save() — that pops a "Save successful!" modal
+            # which would make closing the app a two-click flow. Close-flow
+            # save is silent by design.
+            self.fileManager.saveFile()
+            event.accept()
+        elif choice == QMessageBox.StandardButton.Discard:
+            event.accept()
+        else:
+            event.ignore()
+
+    def _confirmCloseChoice(self):
+        # Factored out so the smoke test can swap the return value without
+        # monkeypatching QMessageBox globally.
+        return QMessageBox.warning(
+            self, "Close MERCY",
+            f"Save changes to "
+            f"{os.path.basename(self.fileManager.filePath)} before closing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+
     def importOther(self):
         # Pick a second .db and merge its non-overlapping contents into the currently-open
         # in-memory DB. Does not write to disk — the user must click Save (or Save As) to

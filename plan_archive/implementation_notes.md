@@ -373,3 +373,29 @@ Verified offscreen: `updateEmployee(42, 99)` rekeys all six dicts, propagates ch
 - **`meanOfRates` vs. `ratioOfSums`.** Module-level `TREND_MODE` flag in [`report.py`](../report.py). Currently defaults to `ratioOfSums` per the 2026-04-24 decision. Flip-test against real data if the default produces counterintuitive traces.
 - **Chart-styling tolerance.** Reportlab native look shipped unretouched. If the team asks for matplotlib-quality output, the escape hatch is still on the shelf — render a `matplotlib` figure to a `BytesIO` PNG, then `pdf.drawImage`.
 
+**Step 25 — confirm-on-close dialog (Save / Don't Save / Cancel).** Landed 2026-04-24, right after Step 19. `smoke.py` goes from 15 to 16 checks green. Surfaced 2026-04-24 immediately after the Step 19 review — team reported that exiting MERCY without a prompt loses unsaved edits; every other desktop app they use prompts before closing. Ship the always-prompt-when-file-loaded version now; a proper dirty-tracked prompt is Step 26 (deferred).
+
+*Team spec, as shipped.*
+- **Override `MainWindow.closeEvent(event)`** on the `QWidget`-based main window. When `fileManager.filePath is not None`, show a three-button `QMessageBox.warning` titled "Close MERCY" with body `Save changes to {basename(filePath)} before closing?`, buttons Save | Discard | Cancel, default Save.
+- **Save branch.** Call `fileManager.saveFile()` directly — not `MainWindow.save()` — and accept the event. `MainWindow.save()` pops a "Save successful!" info modal, which would turn exit into a two-click flow. Close-flow save is silent by design.
+- **Discard branch.** Accept the event.
+- **Cancel branch (or dialog X).** Ignore the event; window stays open.
+- **No-file-loaded branch.** If `filePath is None`, accept the close without prompting. A never-saved empty DB has nowhere to save to, so the prompt would just be noise. (Edge case where a user typed records but never Save-As'd — still lose their work silently. Deferred to Step 26 per team call; §13.13 follow-ups notes this explicitly.)
+
+*Scope as implemented.*
+- [`app.py`](../app.py) — new `MainWindow.closeEvent(self, event)` method (9 lines of branching logic) plus a factored-out `MainWindow._confirmCloseChoice(self)` helper that wraps the `QMessageBox.warning(...)` call. The helper split is purely so `smoke.py` can swap the return value without monkeypatching `QMessageBox.warning` globally (`QMessageBox` is a class, not a module attr; patching it is fiddly and leaky across tests).
+- [`smoke.py`](../smoke.py) — new `close_confirm` check, registered 16th in `main()`. Seeds a fresh on-disk DB, wraps `fileManager.saveFile` in a counter, then loops over `(Save, Discard, Cancel)` stubbing `_confirmCloseChoice` to return each `StandardButton` and asserts `(eventAccepted, saveCallCount)` match the expected `(True, 1)` / `(True, 0)` / `(False, 0)`. A final no-file-loaded pass nulls `fileManager.filePath`, installs a prompt stub that would increment a counter, and asserts the stub is never called and the event is accepted.
+- No schema change. No `fuzz_db.py` change.
+
+*Decisions / deviations.*
+- **Helper method, not global patching.** First pass considered stubbing `QMessageBox.warning` directly in the smoke test. Cleaner and more surgical to factor the one-line prompt call into `_confirmCloseChoice`; the test then rebinds the method on the instance. Cheaper to read, harder to accidentally leak into other tests.
+- **Silent save on close.** Plan spelled this out (§13.13 "Save in the close flow doesn't chain through `MainWindow.save()`") — implementation matches. The tradeoff: a save-then-exit flow gives no success indicator, but the alternative is a confirmation dialog followed by a success dialog followed by the app disappearing, which is worse UX for an exit path.
+- **No prompt when `filePath is None`.** Matches how `saveButton.setEnabled` is already gated on `filePath is not None`. Consistent behavior; easy to reason about. Step 26 will revisit once dirty tracking lands.
+- **Default button = Save.** Enter-key safe behavior for the common case where the user hits Enter reflexively. Discard-as-default would make accidental data loss a single-keystroke away.
+
+*Verification.* 16/16 smoke checks green. Also manually verified: open MERCY with a real DB, click the window X — dialog appears with Save default; Save branch saves file + exits cleanly; Discard exits without saving; Cancel leaves the app open; File → Open a fresh empty DB (no Save-As yet) → close → exits without prompting.
+
+*Known unknowns / open follow-ups.*
+- **Step 26 — proper dirty tracking.** Flag per-mutation across every edit path (CRUD dialogs, inline table edits, batch-entry save, etc.); `fileManager.saveFile` / `loadFile` clear the flag. Prompt only when dirty. Real work — 20+ mutation sites. Deferred per Matthew 2026-04-24 ("most of them don't save their work until the very end anyway").
+- **Never-saved-but-has-data edge case.** The current gate silently closes if `filePath is None`, even if the in-memory DB has been populated. Once Step 26 adds dirty tracking, the gate becomes `dirty and (filePath is not None or hasAnyData)`, and the `filePath is None` branch needs to route through a Save-As dialog before the actual save. Held until Step 26 to avoid building the Save-As plumbing twice.
+

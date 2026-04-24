@@ -1795,6 +1795,97 @@ def qsettings_reopen() -> list[str]:
     return errors
 
 
+def close_confirm() -> list[str]:
+    """Step 25: close-event prompts Save / Don't Save / Cancel.
+
+    Stubs MainWindow._confirmCloseChoice to force each StandardButton in turn,
+    fires closeEvent, and asserts the three branches behave correctly:
+      - Save     -> event accepted, fileManager.saveFile called
+      - Discard  -> event accepted, fileManager.saveFile NOT called
+      - Cancel   -> event ignored (window stays open)
+    Also confirms the no-file-loaded case skips the prompt entirely.
+    """
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtGui import QCloseEvent
+    from app import MainWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        w.fileManager.saveFile()
+
+        # Swap saveFile for a counter so we can tell whether the close flow
+        # actually persists, without having to re-read the DB from disk.
+        saveCalls = {"n": 0}
+        origSave = w.fileManager.saveFile
+        def countingSave():
+            saveCalls["n"] += 1
+            return origSave()
+        w.fileManager.saveFile = countingSave  # type: ignore[assignment]
+
+        cases = [
+            ("Save",    QMessageBox.StandardButton.Save,    True,  1),
+            ("Discard", QMessageBox.StandardButton.Discard, True,  0),
+            ("Cancel",  QMessageBox.StandardButton.Cancel,  False, 0),
+        ]
+        for label, button, expectAccept, expectSaves in cases:
+            saveCalls["n"] = 0
+            w._confirmCloseChoice = lambda b=button: b  # type: ignore[assignment]
+            ev = QCloseEvent()
+            w.closeEvent(ev)
+            if ev.isAccepted() != expectAccept:
+                errors.append(
+                    f"{label}: expected isAccepted={expectAccept}, "
+                    f"got {ev.isAccepted()}"
+                )
+            if saveCalls["n"] != expectSaves:
+                errors.append(
+                    f"{label}: expected {expectSaves} saveFile call(s), "
+                    f"got {saveCalls['n']}"
+                )
+
+        # No-file-loaded path: swap filePath to None and confirm the close
+        # event accepts without invoking the prompt.
+        w.fileManager.filePath = None
+        promptCalls = {"n": 0}
+        def shouldNotPrompt():
+            promptCalls["n"] += 1
+            return QMessageBox.StandardButton.Cancel
+        w._confirmCloseChoice = shouldNotPrompt  # type: ignore[assignment]
+        saveCalls["n"] = 0
+        ev = QCloseEvent()
+        w.closeEvent(ev)
+        if not ev.isAccepted():
+            errors.append("no-file-loaded: expected event accepted, got ignored")
+        if promptCalls["n"] != 0:
+            errors.append(
+                f"no-file-loaded: prompt fired {promptCalls['n']} time(s) "
+                f"(should be 0)"
+            )
+        if saveCalls["n"] != 0:
+            errors.append(
+                f"no-file-loaded: saveFile fired {saveCalls['n']} time(s) "
+                f"(should be 0)"
+            )
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def main() -> int:
     failed = False
     for name, fn in [("compile_all", compile_all),
@@ -1811,7 +1902,8 @@ def main() -> int:
                      ("production_refresh_on_delete", production_refresh_on_delete),
                      ("production_batch_roundtrip", production_batch_roundtrip),
                      ("production_quantity_validation", production_quantity_validation),
-                     ("qsettings_reopen", qsettings_reopen)]:
+                     ("qsettings_reopen", qsettings_reopen),
+                     ("close_confirm", close_confirm)]:
         errors = fn()
         if errors:
             failed = True

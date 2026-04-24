@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 20, 21, 22, and 23 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), and finalized the scope of Steps 18 and 19; Step 18 landed 2026-04-24. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, and 25 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -558,6 +558,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 22 | ✅ Done | Merge plan Step 22: add Tool Change production action — see §13.10 |
 | 23 | ✅ Done | Merge plan Step 23: production quantity positive check — see §13.11 |
 | 24 | ⏳ Deferred | per-employee reports (pending team confirmation) — see §13.12 |
+| 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -701,6 +702,38 @@ Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`pla
 - Any Tool Change inclusion at all on per-employee reports, or skip it entirely since the team explicitly said Tool Change doesn't need per-employee data? Likely "skip", but worth asking.
 
 **Next session pickup.** Hold off until Steps 18/19 have shipped and the team has used them for a bit. Bring this skeleton back as a concrete proposal then — ideally with a mock in `mock_reports.py` rather than open-ended questions.
+
+### 13.13 Step 25 — confirm-on-close dialog (Save / Don't Save / Cancel) ✅ Done
+
+Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 25 for the shipped shape, the smoke-check factoring, and the Step 26 dirty-tracking follow-up.
+
+*Planning notes (preserved; the spec they document shipped as-is).*
+
+**Motivation.** Team feedback 2026-04-24 right after Step 19 landed. MERCY currently exits with no prompt — a user who made edits and forgot to save loses them. Every desktop app in the team's working memory prompts on close; MERCY should too.
+
+**Scope (first pass — no dirty tracking).**
+- Override `MainWindow.closeEvent`. When a DB file is loaded (`fileManager.filePath is not None`), show a three-button `QMessageBox.warning`: **Save** / **Don't Save** / **Cancel**, defaulting to Save.
+  - *Save:* call `fileManager.saveFile()` directly (bypassing `MainWindow.save()`'s "Save successful!" info popup — closing the app shouldn't be a two-click flow), then accept the event.
+  - *Don't Save:* accept the event.
+  - *Cancel* (or the dialog's X): ignore the event, keep the window open.
+- No prompt when `filePath is None` — a never-saved empty DB has nowhere to save to, so prompting there would be noise. Accept the close.
+- Factor the prompt call into a small `MainWindow._confirmCloseChoice()` helper so `smoke.py` can swap the return value without monkeypatching `QMessageBox` globally.
+
+**Decisions (resolved pre-implementation, per Matthew 2026-04-24).**
+- **No dirty tracking yet.** The "correct" design tracks mutations across every tab + dialog + model and only prompts if something actually changed; invasive. Matthew's call: ship the always-prompt version first ("most of them don't save their work until the very end anyway"); revisit with a proper dirty flag later if the nag becomes painful.
+- **Gate on `filePath`, not on `self.db` contents.** Consistent with how `saveButton` is enabled.
+- **Save in the close flow doesn't chain through `MainWindow.save()`.** That method exists for explicit save-button clicks and pops its own success modal. The close-flow save is silent by design — dialog → save → exit.
+
+**Scope as planned.**
+- [`app.py`](app.py) — `MainWindow.closeEvent(event)` override + `_confirmCloseChoice()` helper.
+- [`smoke.py`](smoke.py) — new `close_confirm` check. Stubs `_confirmCloseChoice` to each of the three `StandardButton` values, fires `closeEvent`, asserts event accepted/ignored correctly and that `saveFile` fires only on the Save branch. Also the no-file case (event accepted without any prompt call).
+- No schema change. No `fuzz_db.py` change.
+
+**Verification.** New smoke check covers: (a) Save → event accepted + saveFile called, (b) Don't Save → event accepted + saveFile NOT called, (c) Cancel → event ignored, (d) no file loaded → event accepted without invoking the prompt.
+
+**Follow-up / known unknowns.**
+- **Step 26 — proper dirty tracking.** Flag per-mutation in every tab's edit/save path and `fileManager.saveFile` / `loadFile` clear it. Only prompt when the flag is set. Deferred per Matthew 2026-04-24.
+- **Never-saved empty DB edge case.** Current gate silently accepts close, so a user who entered a bunch of data but never saved-as will still lose it. Hand-in-hand with Step 26 (once dirty tracking exists, the gate becomes `dirty and (filePath is not None or hasAnyData)` with a save-as dialog for the filePath-None branch). Not worth the complexity on this first pass.
 
 ---
 
