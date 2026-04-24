@@ -1160,6 +1160,159 @@ def production_productivity_report() -> list[str]:
     return errors
 
 
+def production_trend_report() -> list[str]:
+    """Step 19: trend report covers all four layout cases + Tool Change + both
+    rolling modes, and rejects ranges shorter than 30 days.
+
+    Seeds two employees across two shifts with ~90 days of production so the
+    30-day rolling window always has data to chew on. Exercises the trend
+    report in the four shape combinations, plus Tool Change's two variants,
+    plus a run with TREND_MODE flipped to "meanOfRates". Finally confirms a
+    sub-30-day range raises RuntimeError and an all-empty range still produces
+    a valid PDF ("No production recorded").
+    """
+    import report as R
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord, Employee
+    from report import PDFReport
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    savedMode = R.TREND_MODE
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        for idNum, first, shift in [(101, "Alice", 1), (102, "Bob", 2)]:
+            emp = Employee()
+            emp.idNum = idNum
+            emp.lastName = "Smith" if idNum == 101 else "Jones"
+            emp.firstName = first
+            emp.shift = shift
+            emp.fullTime = True
+            emp.status = True
+            emp.anniversary = datetime_date(2020, 1, 1)
+            w.db.employees[emp.idNum] = emp
+
+        base = datetime_date(2026, 1, 1)
+        import random
+        import datetime as _dt
+        rnd = random.Random(42)
+        for day in range(90):
+            d = base + _dt.timedelta(days=day)
+            for eid, shift in [(101, 1), (102, 2)]:
+                for target in ("PartA", "PartB"):
+                    r = ProductionRecord()
+                    r.setRecord(eid, d, shift, "Pressing", target,
+                                100.0 + rnd.random() * 50.0, 0, 2.0)
+                    w.db.production[r.key()] = r
+                r = ProductionRecord()
+                r.setRecord(eid, d, shift, "Tool Change", "", 1.0, 0, 0.3)
+                w.db.production[r.key()] = r
+
+        start = datetime_date(2026, 1, 1)
+        end = datetime_date(2026, 3, 31)
+        shortStart = datetime_date(2026, 1, 1)
+        shortEnd = datetime_date(2026, 1, 15)  # 15 days — must reject
+        emptyStart = datetime_date(2030, 1, 1)
+        emptyEnd = datetime_date(2030, 3, 1)  # 60 days of nothing
+
+        reports = [
+            ("trend-specific-specific",
+             lambda p: p.productionTrendReport("Pressing", "PartA", 1, start, end)),
+            ("trend-specific-allshifts",
+             lambda p: p.productionTrendReport("Pressing", "PartA", None, start, end)),
+            ("trend-alltargets-specific",
+             lambda p: p.productionTrendReport("Pressing", None, 1, start, end)),
+            ("trend-alltargets-allshifts",
+             lambda p: p.productionTrendReport("Pressing", None, None, start, end)),
+            ("trend-toolchange-specific",
+             lambda p: p.productionTrendReport("Tool Change", None, 1, start, end)),
+            ("trend-toolchange-allshifts",
+             lambda p: p.productionTrendReport("Tool Change", None, None, start, end)),
+            ("trend-empty",
+             lambda p: p.productionTrendReport("Pressing", None, None, emptyStart, emptyEnd)),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+
+        # Flip the rolling-average mode and re-run the richest layout to make
+        # sure meanOfRates path doesn't crash either.
+        R.TREND_MODE = "meanOfRates"
+        tmpPdf = tempfile.NamedTemporaryFile(suffix="-trend-meanofrates.pdf", delete=False)
+        tmpPdf.close()
+        pdfPaths.append(tmpPdf.name)
+        try:
+            pdf = PDFReport(w.db, tmpPdf.name)
+            pdf.productionTrendReport("Pressing", None, None, start, end)
+        except Exception as e:
+            errors.append(f"meanOfRates mode raised: {e!r}")
+        else:
+            if os.path.getsize(tmpPdf.name) == 0:
+                errors.append("meanOfRates mode produced empty file")
+        R.TREND_MODE = savedMode
+
+        # Sub-30-day range must be rejected by the report itself (belt and
+        # suspenders — the UI also blocks it).
+        tmpPdf = tempfile.NamedTemporaryFile(suffix="-trend-short.pdf", delete=False)
+        tmpPdf.close()
+        pdfPaths.append(tmpPdf.name)
+        pdf = PDFReport(w.db, tmpPdf.name)
+        raised = False
+        try:
+            pdf.productionTrendReport("Pressing", None, None, shortStart, shortEnd)
+        except RuntimeError:
+            raised = True
+        if not raised:
+            errors.append("sub-30-day range did not raise RuntimeError")
+
+        # Unknown action must also raise.
+        tmpPdf = tempfile.NamedTemporaryFile(suffix="-trend-bogus.pdf", delete=False)
+        tmpPdf.close()
+        pdfPaths.append(tmpPdf.name)
+        pdf = PDFReport(w.db, tmpPdf.name)
+        raised = False
+        try:
+            pdf.productionTrendReport("NotARealAction", None, None, start, end)
+        except RuntimeError:
+            raised = True
+        if not raised:
+            errors.append("unknown action did not raise RuntimeError")
+    finally:
+        R.TREND_MODE = savedMode
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def production_refresh_on_delete() -> list[str]:
     """Step 15: deleting an employee must not leave the production tab stale.
 
@@ -1654,6 +1807,7 @@ def main() -> int:
                      ("production_tool_change_roundtrip", production_tool_change_roundtrip),
                      ("production_report", production_report),
                      ("production_productivity_report", production_productivity_report),
+                     ("production_trend_report", production_trend_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
                      ("production_batch_roundtrip", production_batch_roundtrip),
                      ("production_quantity_validation", production_quantity_validation),

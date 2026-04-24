@@ -5,12 +5,40 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.lib import colors
+from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.charts.lineplots import LinePlot
+from reportlab.graphics.charts.legends import Legend
+from reportlab.graphics import renderPDF
 
 from records import Database, ProductionRecord
 from defaults import (
     PTO_ELIGIBILITY,
     PRODUCTION_ACTIONS, PRODUCTION_ACTION_TARGET, PRODUCTION_TARGET_UNIT,
 )
+
+# Step 19 trend-report knobs. Module-level so the team can flip modes without a
+# signature change if the default doesn't match their gut. See MERGE_PLAN.md
+# §13.6 for the decision on ratio-of-sums as default.
+TREND_WINDOW_DAYS = 30
+TREND_MIN_RANGE_DAYS = 30
+# "ratioOfSums": sum(qty in window) / sum(hours in window). Matches Step 18's
+# aggregation. Zero-production days contribute nothing to numerator or
+# denominator and fall out naturally.
+# "meanOfRates": mean of per-day rates (qty/hours), skipping days with no
+# production so they don't drag the mean toward zero.
+TREND_MODE = "ratioOfSums"
+
+# Colorblind-friendly palette for trend lines (matplotlib's tab10 subset). The
+# aggregate/"All shifts" line is always rendered last and gets the final color.
+_TREND_LINE_COLORS = [
+    colors.HexColor('#1f77b4'),  # blue
+    colors.HexColor('#ff7f0e'),  # orange
+    colors.HexColor('#2ca02c'),  # green
+    colors.HexColor('#d62728'),  # red
+    colors.HexColor('#9467bd'),  # purple
+    colors.HexColor('#000000'),  # black
+]
 
 class PDFReport:
     def __init__(self, db: Database, path: str, margin: float = inch) -> None:
@@ -1160,3 +1188,313 @@ class PDFReport:
             rows = rows[drawn:]
             self.nextPage()
         self.pdf.save()
+
+    def productionTrendReport(self, action: str,
+                              targetName: str | None,
+                              shift: int | None,
+                              startDate: datetime.date,
+                              endDate: datetime.date):
+        # Step 19: 30-day rolling-rate line chart. Graph-only; numbers for the
+        # same window come from the Step 18 productivity report. Range is
+        # validated to be at least TREND_MIN_RANGE_DAYS so the window always
+        # has a meaningful span; the UI enforces this too, but the report is a
+        # public entrypoint so we belt-and-suspender it.
+        if action not in PRODUCTION_ACTIONS:
+            raise RuntimeError(f'unknown action {action!r}')
+        if (endDate - startDate).days < TREND_MIN_RANGE_DAYS - 1:
+            raise RuntimeError(
+                f'Trend reports require a date range of at least '
+                f'{TREND_MIN_RANGE_DAYS} days.'
+            )
+        if action == "Tool Change":
+            self._toolChangeTrendReport(shift, startDate, endDate)
+            return
+
+        targetType = PRODUCTION_ACTION_TARGET[action]
+        unit = PRODUCTION_TARGET_UNIT[targetType]
+        allTargets = targetName is None
+        allShifts = shift is None
+
+        # Only plot days whose full 30-day lookback fits inside the requested
+        # range — reaching outside the range would mean partial windows and a
+        # noisy leading edge (first 30 points climbing up to a steady state).
+        # Per Matthew 2026-04-24: every datapoint must represent a full window.
+        plotStart = startDate + datetime.timedelta(days=TREND_WINDOW_DAYS - 1)
+
+        filterKwargs: dict = {"action": action}
+        if not allTargets:
+            filterKwargs["targetType"] = targetType
+            filterKwargs["targetName"] = targetName
+        recs = self._filterProduction(startDate, endDate, **filterKwargs)
+        if shift is not None:
+            recs = [r for r in recs if r.shift == shift]
+
+        title = f"TKG {action} Trend"
+        subtitleBits = []
+        if not allTargets:
+            subtitleBits.append(str(targetName))
+        if not allShifts:
+            subtitleBits.append(f"Shift {shift}")
+        subtitleBits.append(f"{startDate.isoformat()} through {endDate.isoformat()}")
+        subtitle = " — ".join(subtitleBits)
+
+        yLabel = f"Rate ({unit}/hr, 30-day avg)"
+
+        if allTargets:
+            # Leading aggregate chart across every target, then one chart per
+            # target. Order: total first (team wants the fleet view up front),
+            # then alphabetical by target name.
+            aggSeries = self._buildTrendSeries(recs, plotStart, endDate,
+                                               splitByShift=allShifts)
+            self._drawTrendPage(title, subtitle, "All targets (aggregate)",
+                                aggSeries, yLabel)
+            targets = sorted({r.targetName for r in recs if r.targetName})
+            for tn in targets:
+                subset = [r for r in recs if r.targetName == tn]
+                series = self._buildTrendSeries(subset, plotStart, endDate,
+                                                splitByShift=allShifts)
+                self._drawTrendPage(title, subtitle, f"Target: {tn}",
+                                    series, yLabel)
+        else:
+            series = self._buildTrendSeries(recs, plotStart, endDate,
+                                            splitByShift=allShifts)
+            self._drawTrendPage(title, subtitle, f"Target: {targetName}",
+                                series, yLabel)
+        self.pdf.save()
+
+    def _toolChangeTrendReport(self, shift: int | None,
+                               startDate: datetime.date,
+                               endDate: datetime.date):
+        # Tool Change has no rate/hr — "time spent" is the metric. We plot the
+        # 30-day rolling *sum* of hours so the y-axis reads as "hours spent on
+        # tool changes in the preceding 30 days." This mirrors Step 18's Tool
+        # Change collapse (which surfaces total hours by shift) and gives the
+        # team a trend line they can compare month-over-month.
+        plotStart = startDate + datetime.timedelta(days=TREND_WINDOW_DAYS - 1)
+        recs = self._filterProduction(startDate, endDate, action="Tool Change")
+        if shift is not None:
+            recs = [r for r in recs if r.shift == shift]
+
+        title = "TKG Tool Change Trend"
+        subtitleBits = []
+        if shift is not None:
+            subtitleBits.append(f"Shift {shift}")
+        subtitleBits.append(f"{startDate.isoformat()} through {endDate.isoformat()}")
+        subtitle = " — ".join(subtitleBits)
+
+        series = self._buildToolChangeTrendSeries(
+            recs, plotStart, endDate, splitByShift=(shift is None))
+        self._drawTrendPage(title, subtitle, "Time spent",
+                            series, "Hours (30-day total)")
+        self.pdf.save()
+
+    def _rollingRate(self, perDay: dict, startDate: datetime.date,
+                     endDate: datetime.date, mode: str | None = None):
+        # Given perDay: {date: (qty, hours)}, return [(date, rate_or_None), ...]
+        # for every date in [startDate, endDate]. rate is None when the window
+        # has no usable data (caller drops None points before plotting).
+        mode = mode if mode is not None else TREND_MODE
+        out: list[tuple[datetime.date, float | None]] = []
+        d = startDate
+        step = datetime.timedelta(days=1)
+        while d <= endDate:
+            windowStart = d - datetime.timedelta(days=TREND_WINDOW_DAYS - 1)
+            if mode == "ratioOfSums":
+                sumQ = 0.0
+                sumH = 0.0
+                wd = windowStart
+                while wd <= d:
+                    if wd in perDay:
+                        q, h = perDay[wd]
+                        sumQ += q
+                        sumH += h
+                    wd += step
+                rate = (sumQ / sumH) if sumH > 0 else None
+            elif mode == "meanOfRates":
+                rates = []
+                wd = windowStart
+                while wd <= d:
+                    if wd in perDay:
+                        q, h = perDay[wd]
+                        if q > 0 and h > 0:
+                            rates.append(q / h)
+                    wd += step
+                rate = (sum(rates) / len(rates)) if rates else None
+            else:
+                raise RuntimeError(f'unknown TREND_MODE {mode!r}')
+            out.append((d, rate))
+            d += step
+        return out
+
+    def _buildTrendSeries(self, recs, startDate, endDate, splitByShift):
+        # Build [(label, [(date, y_or_None), ...]), ...] for non-Tool-Change
+        # trends. When splitByShift is True, emit one series per shift plus
+        # a final "All shifts" aggregate.
+        def toPerDay(subset):
+            perDay: dict[datetime.date, tuple[float, float]] = {}
+            for r in subset:
+                if r.date is None:
+                    continue
+                q, h = perDay.get(r.date, (0.0, 0.0))
+                perDay[r.date] = (q + (r.quantity or 0), h + r.hours)
+            return perDay
+
+        if not splitByShift:
+            return [("Rate", self._rollingRate(toPerDay(recs), startDate, endDate))]
+
+        out = []
+        shifts = sorted({r.shift for r in recs if r.shift is not None})
+        for s in shifts:
+            subset = [r for r in recs if r.shift == s]
+            out.append((f"Shift {s}",
+                        self._rollingRate(toPerDay(subset), startDate, endDate)))
+        noneSubset = [r for r in recs if r.shift is None]
+        if len(noneSubset) > 0:
+            out.append(("Shift (none)",
+                        self._rollingRate(toPerDay(noneSubset), startDate, endDate)))
+        out.append(("All shifts",
+                    self._rollingRate(toPerDay(recs), startDate, endDate)))
+        return out
+
+    def _buildToolChangeTrendSeries(self, recs, startDate, endDate, splitByShift):
+        # Tool Change variant: 30-day rolling *sum* of hours instead of a rate.
+        def toPerDay(subset):
+            perDay: dict[datetime.date, float] = {}
+            for r in subset:
+                if r.date is None:
+                    continue
+                perDay[r.date] = perDay.get(r.date, 0.0) + r.hours
+            return perDay
+
+        def rollingSum(perDay):
+            out = []
+            d = startDate
+            step = datetime.timedelta(days=1)
+            while d <= endDate:
+                windowStart = d - datetime.timedelta(days=TREND_WINDOW_DAYS - 1)
+                total = 0.0
+                wd = windowStart
+                while wd <= d:
+                    if wd in perDay:
+                        total += perDay[wd]
+                    wd += step
+                out.append((d, total))
+                d += step
+            return out
+
+        if not splitByShift:
+            return [("Hours", rollingSum(toPerDay(recs)))]
+
+        out = []
+        shifts = sorted({r.shift for r in recs if r.shift is not None})
+        for s in shifts:
+            subset = [r for r in recs if r.shift == s]
+            out.append((f"Shift {s}", rollingSum(toPerDay(subset))))
+        noneSubset = [r for r in recs if r.shift is None]
+        if len(noneSubset) > 0:
+            out.append(("Shift (none)", rollingSum(toPerDay(noneSubset))))
+        out.append(("All shifts", rollingSum(toPerDay(recs))))
+        return out
+
+    def _drawTrendPage(self, title: str, subtitle: str, sectionLabel: str,
+                       series: list, yLabel: str):
+        # One trend chart per page. Header matches the productivity report's
+        # title/subtitle/section cadence so switching between the two reports
+        # feels consistent.
+        self.setupPage()
+        self.drawTitle(title)
+        self.drawSubtitle(subtitle)
+        self.skipLines(1)
+        self.drawSection(sectionLabel)
+
+        # Drop series whose every point is None (e.g., a shift with no data in
+        # the window). A series that's mostly data but has occasional None
+        # points is kept; those None points are filtered out before plotting,
+        # so the line connects across small gaps. Require >= 2 concrete points
+        # so reportlab has a line to draw.
+        cleaned = []
+        anyConcrete = False
+        for (label, pts) in series:
+            concrete = [(d, y) for (d, y) in pts if y is not None]
+            if len(concrete) > 0:
+                anyConcrete = True
+            if len(concrete) >= 2:
+                cleaned.append((label, concrete))
+
+        if len(cleaned) == 0:
+            self.skipLines(1)
+            if anyConcrete:
+                # Data exists but the range leaves < 2 full-window datapoints
+                # — i.e. the user picked the 30-day floor, which gives a
+                # single plot point. Tell them plainly.
+                self.drawText("Not enough data in this range to plot a trend line "
+                              "(try a longer date range).")
+            else:
+                self.drawText("No production recorded in this range.")
+            self.nextPage()
+            return
+
+        self.drawLinePlot(cleaned, yLabel)
+        self.nextPage()
+
+    def drawLinePlot(self, series: list, yLabel: str):
+        # Renders one LinePlot + Legend inside a single Drawing placed at
+        # self.lastLine. series is [(label, [(date, y), ...]), ...] with every
+        # y already non-None and every series having >= 2 points.
+        plotWidth = self.right - self.left
+        plotHeight = 3.5 * inch
+
+        drawing = Drawing(plotWidth, plotHeight)
+
+        lp = LinePlot()
+        lp.x = 55
+        lp.y = 55
+        lp.width = plotWidth - 180  # reserve space on the right for the legend
+        lp.height = plotHeight - 85
+
+        # x-axis in date ordinals so reportlab's numeric axis tick picker works.
+        # labelTextFormat converts back to an ISO date for display.
+        lp.data = [[(d.toordinal(), y) for (d, y) in pts]
+                   for (_, pts) in series]
+
+        for i in range(len(series)):
+            color = _TREND_LINE_COLORS[i % len(_TREND_LINE_COLORS)]
+            lp.lines[i].strokeColor = color
+            lp.lines[i].strokeWidth = 1.2
+
+        lp.xValueAxis.labelTextFormat = (
+            lambda x: datetime.date.fromordinal(int(x)).isoformat()
+        )
+        lp.xValueAxis.labels.angle = 45
+        lp.xValueAxis.labels.boxAnchor = 'e'
+        lp.xValueAxis.labels.fontSize = 7
+        lp.xValueAxis.visibleGrid = True
+        lp.xValueAxis.gridStrokeColor = colors.lightgrey
+
+        lp.yValueAxis.labels.fontSize = 8
+        lp.yValueAxis.visibleGrid = True
+        lp.yValueAxis.gridStrokeColor = colors.lightgrey
+
+        drawing.add(lp)
+
+        # Axis labels (non-rotated — keeps the helper simple and legible).
+        drawing.add(String(lp.x + lp.width / 2, 8,
+                           "Date", fontSize=9, textAnchor='middle'))
+        drawing.add(String(10, lp.y + lp.height + 6,
+                           yLabel, fontSize=9, textAnchor='start'))
+
+        legend = Legend()
+        legend.x = plotWidth - 110
+        legend.y = lp.y + lp.height - 10
+        legend.colorNamePairs = [
+            (_TREND_LINE_COLORS[i % len(_TREND_LINE_COLORS)], series[i][0])
+            for i in range(len(series))
+        ]
+        legend.fontSize = 8
+        legend.deltay = 11
+        legend.alignment = 'right'
+        legend.columnMaximum = 10
+        drawing.add(legend)
+
+        renderPDF.draw(drawing, self.pdf, self.left, self.lastLine - plotHeight)
+        self.lastLine -= plotHeight

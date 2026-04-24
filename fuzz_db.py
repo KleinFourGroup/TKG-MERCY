@@ -17,9 +17,9 @@ Usage:
 
 Scales (roughly):
     tiny    — 3 parts, 3 employees, 5 days production
-    small   — 6 parts, 6 employees, 30 days production
-    medium  — 20 parts, 15 employees, 90 days production  (default)
-    large   — 60 parts, 40 employees, 180 days production
+    small   — 6 parts, 6 employees, 60 days production
+    medium  — 20 parts, 15 employees, 180 days production  (default)
+    large   — 60 parts, 40 employees, 540 days production
 
 Not intended for committing generated DBs; fuzz*.db is gitignored.
 """
@@ -55,11 +55,11 @@ SCALES = {
     "tiny":   dict(materials=4,  mixtures=2,  packaging=5,  parts=3,
                    employees=3,  inventorySnapshots=1, productionDays=5),
     "small":  dict(materials=6,  mixtures=3,  packaging=6,  parts=6,
-                   employees=6,  inventorySnapshots=2, productionDays=30),
+                   employees=6,  inventorySnapshots=2, productionDays=60),
     "medium": dict(materials=12, mixtures=5,  packaging=10, parts=20,
-                   employees=15, inventorySnapshots=2, productionDays=90),
+                   employees=15, inventorySnapshots=2, productionDays=180),
     "large":  dict(materials=25, mixtures=10, packaging=18, parts=60,
-                   employees=40, inventorySnapshots=4, productionDays=180),
+                   employees=40, inventorySnapshots=4, productionDays=540),
 }
 
 

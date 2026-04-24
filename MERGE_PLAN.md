@@ -552,7 +552,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
 | 17 | ✅ Done | Merge plan Step 17: production hours field |
 | 18 | ✅ Done | Merge plan Step 18: productivity rate reports |
-| 19 | ⏳ Planning | trend reports (graphs, 30-day rolling averages) — see §13.6 |
+| 19 | ✅ Done | Merge plan Step 19: trend reports (graphs, 30-day rolling averages) — see §13.6 |
 | 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
 | 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
 | 22 | ✅ Done | Merge plan Step 22: add Tool Change production action — see §13.10 |
@@ -603,7 +603,11 @@ Landed 2026-04-21. Surfaced in Matthew's first post-release feedback session: th
 
 Landed 2026-04-24. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 18 for the team spec as delivered, the four-case layout, the Tool Change collapse, the bold-totals convention it surfaced (now in [`CONVENTIONS.md`](CONVENTIONS.md)), and verification details.
 
-### 13.6 Step 19 — trend reports (graphs, 30-day rolling averages) ⏳ Planning
+### 13.6 Step 19 — trend reports (graphs, 30-day rolling averages) ✅ Done
+
+Landed 2026-04-24, back-to-back with Step 18. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 19 for the team spec as delivered, the layout shapes across all four selection combos + Tool Change, the rolling-mode flag surface, the sum-vs-mean call on Tool Change time-spent (open for team confirmation), and verification details.
+
+*Planning notes (preserved; the spec they document shipped as-is).*
 
 **Motivation.** Second half of the 2026-04-21 feedback; detailed spec received 2026-04-24. Team wants graph-based trend reports that show how rates move over longer windows (quarter to year) — complements Step 18's static-snapshot productivity tables. Distinct report type, not a graph-alongside-table hybrid.
 

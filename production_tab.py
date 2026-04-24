@@ -492,6 +492,7 @@ class ProductionReportWindow(QWidget):
         "Per Target",
         "Per Employee",
         "Productivity",
+        "Trend",
     ]
 
     def __init__(self, parentTab: ProductionTab, mainApp: MainWindow,
@@ -586,9 +587,9 @@ class ProductionReportWindow(QWidget):
 
     def _onTargetTypeChanged(self, _idx: int):
         # Only the "Per Target" report uses the explicit targetType selector;
-        # in Productivity mode the target list is driven by the action instead
-        # (see _rebuildProductivityTargets).
-        if self.typeBox.currentText() == "Productivity":
+        # in Productivity / Trend modes the target list is driven by the action
+        # instead (see _rebuildProductivityTargets).
+        if self.typeBox.currentText() in ("Productivity", "Trend"):
             return
         targetType = self.targetTypeBox.currentData()
         self.targetNameBox.clear()
@@ -598,13 +599,15 @@ class ProductionReportWindow(QWidget):
             self.targetNameBox.addItems(sorted(self.mainApp.db.parts.keys()))
 
     def _onActionChanged(self, _text: str):
-        if self.typeBox.currentText() == "Productivity":
+        if self.typeBox.currentText() in ("Productivity", "Trend"):
             self._rebuildProductivityTargets()
             self._applyProductivityVisibility()
 
     def _rebuildProductivityTargets(self):
         # Populates targetNameBox with an "All" entry + every mix/part of the
         # action's target type. Tool Change is targetless and clears the box.
+        # Shared between the Productivity and Trend reports — the selector
+        # shape is identical.
         action = self.actionBox.currentText()
         targetType = PRODUCTION_ACTION_TARGET.get(action, "")
         self.targetNameBox.clear()
@@ -620,18 +623,19 @@ class ProductionReportWindow(QWidget):
 
     def _applyProductivityVisibility(self):
         # Tool Change has no target, so hide the target row when that action
-        # is selected even in Productivity mode.
+        # is selected even in Productivity / Trend mode.
         action = self.actionBox.currentText()
         hasTarget = PRODUCTION_ACTION_TARGET.get(action, "") != ""
         for w in (self.targetNameLabel, self.targetNameBox):
             w.setVisible(hasTarget)
 
     def _onTypeChanged(self, t: str):
-        showAction = (t == "Per Action") or (t == "Productivity")
+        isProdLike = (t == "Productivity") or (t == "Trend")
+        showAction = (t == "Per Action") or isProdLike
         showTargetType = (t == "Per Target")
-        showTargetName = (t == "Per Target") or (t == "Productivity")
+        showTargetName = (t == "Per Target") or isProdLike
         showEmployee = (t == "Per Employee")
-        showShift = (t == "Productivity")
+        showShift = isProdLike
         for w in (self.actionLabel, self.actionBox):
             w.setVisible(showAction)
         for w in (self.targetTypeLabel, self.targetTypeBox):
@@ -643,13 +647,25 @@ class ProductionReportWindow(QWidget):
         for w in (self.shiftLabel, self.shiftBox):
             w.setVisible(showShift)
         # Repopulate targetNameBox for the mode we're entering — each mode
-        # fills it differently (Per Target plain names; Productivity adds "All"
-        # and follows the action).
-        if t == "Productivity":
+        # fills it differently (Per Target plain names; Productivity / Trend
+        # add "All" and follow the action).
+        if isProdLike:
             self._rebuildProductivityTargets()
             self._applyProductivityVisibility()
         elif t == "Per Target":
             self._onTargetTypeChanged(self.targetTypeBox.currentIndex())
+
+        # Trend-specific default: widen to 90 days on mode entry if the
+        # current range is narrower. The records-table default (30 days)
+        # is right at the report's rejection floor and would give a
+        # single-point chart. Only widens; a user who has intentionally
+        # picked a longer range keeps it.
+        if t == "Trend":
+            curStart = fromQDate(self.startDateEdit.date())
+            curEnd = fromQDate(self.endDateEdit.date())
+            if (curEnd - curStart).days + 1 < 90:
+                self.startDateEdit.setDate(
+                    toQDate(curEnd - datetime.timedelta(days=89)))
 
     def generate(self):
         startDate = fromQDate(self.startDateEdit.date())
@@ -672,13 +688,23 @@ class ProductionReportWindow(QWidget):
             errorMessage(self, ["No employee selected."])
             return
 
-        # Productivity: read target as userData (None == "All"); read shift
-        # the same way. Tool Change forces target=None regardless of what the
-        # target combo happens to hold, since we hide the row for that action.
+        # Productivity / Trend: read target as userData (None == "All"); read
+        # shift the same way. Tool Change forces target=None regardless of
+        # what the target combo happens to hold, since we hide the row for
+        # that action.
         productivityTarget = self.targetNameBox.currentData()
         productivityShift = self.shiftBox.currentData()
-        if reportType == "Productivity" and action == "Tool Change":
+        if reportType in ("Productivity", "Trend") and action == "Tool Change":
             productivityTarget = None
+
+        # Trend reports need a window that fits the rolling-average lookback.
+        # Mirrors TREND_MIN_RANGE_DAYS in report.py; the diff is
+        # (min_days - 1) because both endpoints are inclusive.
+        if reportType == "Trend" and (endDate - startDate).days < 29:
+            errorMessage(self, [
+                "Trend reports require a date range of at least 30 days."
+            ])
+            return
 
         savePath = tempReportPath(self._defaultPrefix(
             reportType, action, targetName, employeeId,
@@ -696,6 +722,9 @@ class ProductionReportWindow(QWidget):
         elif reportType == "Productivity":
             pdf.productionProductivityReport(action, productivityTarget,
                                              productivityShift, startDate, endDate)
+        elif reportType == "Trend":
+            pdf.productionTrendReport(action, productivityTarget,
+                                      productivityShift, startDate, endDate)
         else:
             raise RuntimeError(f'unknown reportType {reportType!r}')
 
@@ -712,8 +741,9 @@ class ProductionReportWindow(QWidget):
             return f"production-{targetName or 'target'}"
         if reportType == "Per Employee":
             return f"production-employee-{employeeId}"
-        if reportType == "Productivity":
-            parts = ["productivity", action.lower().replace(" ", "-")]
+        if reportType in ("Productivity", "Trend"):
+            prefix = "productivity" if reportType == "Productivity" else "trend"
+            parts = [prefix, action.lower().replace(" ", "-")]
             if productivityTarget is not None:
                 parts.append(productivityTarget)
             if productivityShift is not None:
