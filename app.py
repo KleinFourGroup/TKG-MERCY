@@ -9,7 +9,7 @@ import os
 class MainWindow(QWidget):
     def __init__(self, db: Database | None = None):
         super().__init__()
-        self.setWindowTitle(f"Manufacturing and Employee Records: Costing and Yield v{VERSION}")
+        self.setWindowTitle(f"Manufacturing and Employee Records, Costing, and Yield v{VERSION}")
         if db == None:
             self.db = emptyDB()
         else:
