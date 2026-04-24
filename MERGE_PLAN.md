@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-22. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, and 20 have now landed. Each step was committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 20, 21, and 22 have landed. The second round of team feedback (2026-04-24) added Steps 23 (quantity positive-check) and 24 (per-employee reports, deferred) and finalized the scope of Steps 18 and 19. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -551,11 +551,13 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
 | 17 | ✅ Done | Merge plan Step 17: production hours field |
-| 18 | ⏳ Planning | productivity rate reports (feeds costing) — see §13.5 |
-| 19 | ⏳ Planning | graphs in reports (reportlab native) — see §13.6 |
+| 18 | ⏳ Planning | productivity rate reports (tables, feeds costing) — see §13.5 |
+| 19 | ⏳ Planning | trend reports (graphs, 30-day rolling averages) — see §13.6 |
 | 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
 | 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
 | 22 | ✅ Done | Merge plan Step 22: add Tool Change production action — see §13.10 |
+| 23 | ⏳ Planning | production quantity: positive check, not non-negative — see §13.11 |
+| 24 | ⏳ Deferred | per-employee reports (pending team confirmation) — see §13.12 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -597,47 +599,83 @@ Landed 2026-04-20. See [`plan_archive/implementation_notes.md`](plan_archive/imp
 
 Landed 2026-04-21. Surfaced in Matthew's first post-release feedback session: the team had forgotten to include duration/hours in the production schema. One-session add — new `hours REAL DEFAULT 0` column on `production`, wired through records / save / load / table / Quick Entry / Batch Entry / all four reports. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 17 for implementation notes, the Case-4 stamping fix it piggybacked, and the report-formatting decisions.
 
-### 13.5 Step 18 — productivity rate reports (feeds costing) ⏳ Planning
+### 13.5 Step 18 — productivity rate reports (tables, feeds costing) ⏳ Planning
 
-**Motivation.** Surfaced 2026-04-21 alongside Step 17. Team wants productivity drill-downs — rates per hour by part × action × employee × shift, with the ability to compare individuals to the fleet average. **Downstream consumer is the costing code, not HR.** They're gathering more precise labor data so they can refine the per-part cost estimates in the costing globals (the existing `pressing` / `turning` / `finishing` / etc. fields on `parts`). Not bonuses, not quotas, no targets stored on the record. This reframing matters: report shape should mirror the *inputs costing needs*, not a generic performance dashboard.
+**Motivation.** Surfaced 2026-04-21 alongside Step 17; detailed spec received in the 2026-04-24 feedback round. Team wants productivity drill-downs — rates per hour by action × target × shift, with per-employee breakdowns inside each target. **Downstream consumer is the costing code, not HR** — they're gathering more precise labor data to refine the per-part cost estimates in the costing globals (the existing `pressing` / `turning` / `finishing` / etc. fields on `parts`). Not bonuses, not quotas, no targets stored on the record.
 
-**Confirmed scope (from 2026-04-21 session).**
-- Rate = `quantity / hours`, aggregated across arbitrary slices.
-- Comparisons are individual-vs-average (per part, per employee). Nice-to-have, not required.
-- No target-rate column or threshold storage. If "vs. expected" ever becomes desirable, the expected rate is already in costing globals.
-- PDF deliverable, same `PDFReport` pipeline as the other production reports.
+**Team spec (2026-04-24).**
+- **Selection.** Action (required) + target (specific or "all") + shift (specific or "all") + user-picked date range. Same shape as the existing production reports' selector (action/target + date range already present in [production_tab.py:489](production_tab.py:489)'s `ProductionReportWindow`).
+- **Output is table-only.** Graphs are Step 19's separate report type. The productivity PDF has no charts.
+- **Columns.** Target | Total quantity | Total hours | Rate (qty/hr). Per-employee breakdown rows under each target with the same columns.
+- **Layout by selection.**
+  - *Specific target + specific shift:* one table — target row (totals + rate) followed by per-employee breakdown.
+  - *Specific target + all shifts:* same shape; target row aggregates across shifts.
+  - *All targets + specific shift:* summary table first (one row per target + total aggregate row), then per-target tables with per-employee breakdowns.
+  - *All targets + all shifts:* summary table, then a second overview table breaking the total aggregate down by shift (*aggregate only — per-shift × per-target matrix is explicitly rejected as too cluttered*), then per-target tables.
+- **Tool Change is special.** No rate/hr. No per-employee breakdown. Just total hours spent. Shift selector stays enabled — team joked that specific-shift Tool Change reports collapse to one-row tables; accepted as-is rather than special-casing disable logic.
+- **No scrap columns.** Confirmed 2026-04-24. Team will likely want a standalone scrap report later; tracked as pending-feedback, not part of Step 18.
 
-**Open questions — need team input before coding starts.**
-1. **Aggregation math.** `sum(qty) / sum(hours)` over the window, vs. mean of per-shift rates, vs. median. These diverge whenever shifts are uneven in length or in completeness. Pick wrong and the rates mislead.
-2. **Primary cut.** Probably per `(part, action)` since that's the costing-input granularity. But `(employee, part, action)` would let them see which employees are skewing the average — worth clarifying whether that's a separate report or a drill-down from the primary.
-3. **Windowing.** Rolling 30 days, user-picked range, or both? Filter UI can handle either.
-4. **Scrap rate.** `scrap / quantity` alongside the production rate in the same table, or a separate report?
-5. **Export.** Does the team want a CSV alongside the PDF so they can paste rates into the costing globals, or is reading-and-typing fine for the first iteration?
+**Resolved design decisions.**
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Aggregation math | `sum(qty) / sum(hours)` (ratio of sums) over the window. Chosen 2026-04-24 — more honest when shifts are uneven in length or completeness. No alternative mode planned for Step 18; if the team asks later, add a per-report toggle. |
+| 2 | Primary cut | `(action, target)` with `(action, target, shift)` and `(action, target, employee)` as drill-downs inside each target section. Action is always a selector (never an "all" option for productivity reports). |
+| 3 | Windowing | User-picked date range via the existing selector widgets. |
+| 4 | Export | Not in initial scope. Revisit if team wants to paste rates directly into costing globals. |
 
-**Tentative direction (subject to team answers).** New report type "Production Rates" as a fifth entry in `ProductionReportWindow.REPORT_TYPES`. Shape: grouped table (one row per `(part, action)`) with columns Quantity / Hours / Rate (qty/hr) / Scrap / Scrap-rate. When an employee is selected, add a "vs. average" column comparing the selected employee's rate to the fleet average for that `(part, action)`. Fleet average row at the bottom. Integrates with Step 19 (graphs) — this is the natural first customer.
+**Tentative implementation sketch.**
+- Add `"Productivity"` as a new entry in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`.
+- `ProductionReportWindow` grows target and shift combos with "all" options. Target combo rebuilds when action changes (reuse the action-cascade pattern from Step 16's batch dialog — [production_tab.py:733](production_tab.py:733) region).
+- New `PDFReport.productionProductivityReport(action, targetName|None, shift|None, startDate, endDate)` in [report.py](report.py). `None` for target or shift means "all". Internal branching picks the layout from the four cases above.
+- Tool Change branch: collapse to total-hours-only table, skip rate/hr and per-employee sections.
+- `fuzz_db.py` already produces plausible data for this; no generator changes needed.
 
-**Next session pickup.** Draft two or three example reports (mocked numbers) to send the team a concrete "pick one" doc — that unsticks scope faster than open-ended questions.
+**Open question.** Default date range for the selector when the report window opens. Options: last 30 days / last 90 days / year-to-date / blank. Call it during implementation unless the team surfaces a preference first.
 
-### 13.6 Step 19 — graphs in reports (reportlab native) ⏳ Planning
+**Verification.** Extend `smoke.py` with a productivity-report smoke that exercises all four shape cases (specific/all × specific/all) plus the Tool Change variant. Manual spot-check against the team's DB before shipping.
 
-**Motivation.** Second half of the 2026-04-21 feedback: team wants graphs alongside (or instead of) tables in the production reports.
+**Next session pickup.** Scope is clear enough to start coding. Recommend starting with the non-Tool-Change branch (three layout cases), then adding the Tool Change collapse. Mock one layout in `mock_reports.py` first if the all-targets-all-shifts shape feels uncertain — cheap sanity check before wiring into the real pipeline.
 
-**Confirmed decisions (2026-04-21 session).**
-- **PDF only.** No dashboard pivot — the app's deliverable stays a file you can email and archive.
-- **`reportlab.graphics.charts` first.** Native to the stack, zero new deps, vector into the PDF, keeps the PyInstaller binary lean. Matplotlib stays a latent escape hatch if the aesthetics fall short after seeing the first pass — decision deferred until we have team eyes on real output.
+### 13.6 Step 19 — trend reports (graphs, 30-day rolling averages) ⏳ Planning
+
+**Motivation.** Second half of the 2026-04-21 feedback; detailed spec received 2026-04-24. Team wants graph-based trend reports that show how rates move over longer windows (quarter to year) — complements Step 18's static-snapshot productivity tables. Distinct report type, not a graph-alongside-table hybrid.
+
+**Team spec (2026-04-24).**
+- **Selection.** Same shape as Step 18: action (required) + target (specific or "all") + shift (specific or "all") + user-picked date range. Reuse Step 18's selector once it lands.
+- **Range validation.** Reject date ranges shorter than 30 days — the 30-day rolling window can't be computed. Default range: 365 days (quarter-to-year is the expected usage; a sensible default matters here because tiny ranges are a real failure mode).
+- **Output is graph-only.** No tables. If the team wants numbers for the same window, they run the Step 18 productivity report.
+- **Graph shape.**
+  - *One graph per selected target*, y = 30-day rolling average of rate (qty/hr), x = date.
+  - *All shifts selected:* each graph shows one line per shift + an aggregate line across all shifts.
+  - *Specific shift selected:* each graph has a single line.
+  - *All targets selected:* lead with a graph of the total-aggregate rolling average across all targets; then one graph per target below it.
+- **Tool Change is special.** 30-day rolling average of *time spent*, not rate/hr. Target selector is moot (Tool Change is targetless per Step 22); shift selector still applies the same way.
+
+**Resolved design decisions.**
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Rolling average math | **Ratio of sums** over the 30-day window: `sum(qty in window) / sum(hours in window)`. Default. Matches Step 18's aggregation. Per Matthew 2026-04-24: also implement the alternative — mean of per-day rates, *excluding days with zero production* — and pick between them via a module-level flag in [report.py](report.py). Default is ratio-of-sums; flag lets us switch if the team prefers the other shape. |
+| 2 | Zero-production days | In per-day-mean mode, skip days where nothing was produced (don't drag the mean to zero). In ratio-of-sums mode this is automatically handled (zeros contribute zero to both numerator and denominator). |
+| 3 | Chart library | `reportlab.graphics.charts.lineplots.LinePlot`. Native to the stack, zero new deps, vector into the PDF. Matplotlib stays a latent escape hatch if the output aesthetics fall short. |
+| 4 | Chart-per-target layout | One chart per target, laid out sequentially. Leading aggregate chart when target=all. |
+| 5 | Deliverable | PDF only. No dashboard pivot. |
+
+**Tentative implementation sketch.**
+- Add `"Trend"` as a new entry in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`, after `"Productivity"`.
+- Reuse Step 18's selector UI (action/target/shift/range). Factor the selector into a small helper widget if practical — mutual reuse is the point.
+- Range-validate on Generate: if `(endDate - startDate).days < 30`, show an error dialog and don't render.
+- New `PDFReport.productionTrendReport(action, targetName|None, shift|None, startDate, endDate)` in [report.py](report.py). Branches on `action == "Tool Change"` for the time-spent variant.
+- New internal helper `PDFReport._rollingRate(records, windowDays=30, mode="ratioOfSums")` → list of `(date, rate)` points. `mode` is the module-level flag per decision 1. Callers pre-filter records by action/target/shift.
+- New chart helper `PDFReport.drawLinePlot(series, title, xLabel, yLabel)` where `series = [(label, [(date, y), ...]), ...]`. Mirrors `drawTable`'s API so a future chart helper can slot in the same way.
+- `fuzz_db.py`: add a `quarter` or `year` scale so trend reports have enough data to plot against. Alternative: document `fuzz_db.py --scale large` as the trend-report stress case.
 
 **Open questions.**
-1. **Which charts, for which reports?** Bar-per-employee-per-action in Summary? Line-over-time for a per-part report? Both? Team hasn't been specific — mock examples will help.
-2. **Replace tables or sit alongside?** Default: alongside, since the numbers themselves are the costing-input deliverable (§13.5). Losing them loses half the point.
-3. **Styling tolerance.** `reportlab.graphics.charts` gives frumpy-but-functional output. Before we over-invest in tick customization / legend placement / color schemes, see what the team says about the first pass.
+- **Rolling-average flag surface.** Module-level constant in [report.py](report.py) vs. keyword arg on the report function. Matthew's "flag in the code" language (2026-04-24) suggests module-level is fine; confirm when writing the code.
+- **Chart styling tolerance.** reportlab native charts are frumpy-but-functional. Ship a first cut, get team feedback, then invest in tick customization / legend placement / color schemes. Matplotlib escape hatch stays on the shelf.
 
-**Tentative direction.** Add chart helpers to `report.py` mirroring the existing `drawTable(data, headers)` API — e.g., `drawBarChart(groups, labels, values, title)`. Most plausible first charts:
-- **Grouped bar** — one group per employee, three bars (Batching / Pressing / Finishing rate). Companions the Summary report.
-- **Line over time** — one line per part, x = date, y = rate. Companions a per-part rate report.
+**Verification.** Extend `smoke.py` with a trend-report smoke that renders against fuzz data covering at least 60 days. Assert: (a) rolling-average series length matches expected count; (b) both rate modes produce values without crashing; (c) sub-30-day range raises the expected error; (d) Tool Change branch renders time-spent lines. Use `mock_reports.py` for first-cut styling evaluation before wiring into the live pipeline.
 
-Ship those two as exemplars inside §13.5's new "Production Rates" report, hand to the team, iterate.
-
-**Next session pickup.** Draft one report using mock rate data with both a table and a grouped-bar chart rendered side-by-side. That's the concrete deliverable to validate the approach before scaling to the other report types.
+**Next session pickup.** Depends on Step 18 landing first (shared selector UI). Once 18 is green, start with `mock_reports.py` trend-graph exemplars; send the team a screenshot for styling sign-off; then wire into `PDFReport`.
 
 ### 13.7 Step 20 — remember last DB, prompt to reopen on startup ✅ Done
 
@@ -691,7 +729,52 @@ Landed 2026-04-22. This doc had grown to ~1028 lines / ~51k tokens — `Read` wi
 **Verification.** `smoke.py` green — twelve checks pass. Added `production_tool_change_roundtrip` alongside the existing eleven: it seeds a Tool Change record with deliberately-garbage `targetName` / `scrapQuantity` args, asserts `setRecord` coerces them to the canonical empty-state, then saves / reloads / verifies the shape survives the SQLite roundtrip (`targetType == ""`, `targetName == ""`, `scrapQuantity == 0`, quantity + hours preserved as entered). Beyond smoke, verified interactively via `fuzz_db.py` (61/232 records were Tool Change with correct empty-state shape) and three inline headless probes against the edit dialog, batch dialog, and per-action report.
 
 **Known unknowns / open follow-ups.**
-- Productivity rate reporting (§13.5) will need to think about whether Tool Change rates (changes/hr) belong alongside the production-action rates or get a separate report. Flag for the Step 18 planning session.
+- ~~Productivity rate reporting (§13.5) will need to think about whether Tool Change rates (changes/hr) belong alongside the production-action rates or get a separate report. Flag for the Step 18 planning session.~~ **Resolved 2026-04-24:** Tool Change reports show total time spent — no rate/hr, no per-employee breakdown. Applies to both Step 18 (productivity tables) and Step 19 (trend graphs). See §13.5 / §13.6 for the specifics.
+
+### 13.11 Step 23 — production quantity: positive, not non-negative ⏳ Planning
+
+**Motivation.** Surfaced 2026-04-24 with the second round of team feedback. Production entry currently accepts `quantity = 0`, which has no meaning — a zero-produced record is just noise in the DB. Validation should reject zero as well as negatives.
+
+**Scope.** Swap the validation mode at both production entry sites:
+- [production_tab.py:428](production_tab.py:428) (`ProductionEditWindow.readData`, Quick Entry): `checkInput(..., float, "nonneg", errors, "Quantity")` → `checkInput(..., float, "pos", errors, "Quantity")`.
+- [production_tab.py:956](production_tab.py:956) (`ProductionBatchDialog._save`, Batch Entry): same swap for the `quantity` field.
+- Scrap stays `"nonneg"` — zero scrap is legitimate and the default.
+- `"pos"` mode already exists in [utils.py:42](utils.py:42)'s `checkInput`; no new validator to write.
+- `ProductionRecord.setRecord` has no quantity validation today and doesn't need any — the UI is the single validation boundary. If Matthew wants belt-and-suspenders, add `if quantity <= 0: raise ValueError(...)` there too; not doing so by default since it would double-fire the error path and the 7a philosophy prefers one source of truth.
+
+**Verification.** Extend `smoke.py` with a `production_quantity_validation` check: construct a `ProductionEditWindow` headlessly, drive `quantityEdit` with `"0"`, call `readData`, assert the returned errors list contains the Quantity-must-be-positive message. Spot-check Batch Entry via a synthetic row list driven through `_save`'s validation path. Existing Tool Change smoke (Step 22) is unaffected since Tool Change records still carry positive `quantity` (the user-entered count of changes).
+
+**Why tackle this first.** Smallest item in the backlog by a wide margin — two line changes, one smoke assertion. Shippable in one short session, which lets the next session start on the larger Step 18/19 work without stacked uncertainty. Matches §13's "smallest first" ordering principle.
+
+**Known unknowns.** None — specified crisply in the feedback.
+
+### 13.12 Step 24 — per-employee reports ⏳ Deferred
+
+**Status.** Skeleton plan only — **not approved by team yet.** Matthew (2026-04-24) thinks the team will want these once Steps 18/19 land, based on how they talk about the production data. Recorded here so the future work isn't a surprise; waiting on explicit team confirmation before building.
+
+**Motivation.** Step 18/19 reports slice by target/shift with per-employee rows as a drill-down. Per-employee reports invert that: pick an employee, see their whole production picture across all actions and targets. Matthew's read is that once the team sees 18/19 they'll ask for this, but it's better to confirm than to build speculatively.
+
+**Expected scope (Matthew's read, pending confirmation).**
+- **Two report types**, mirroring 18 and 19: a table-based *Employee Productivity* report and a graphical *Employee Trend* report.
+- **Selection.** Employee (required) + user-picked date range. No action/target/shift filters — the report is always all-action × all-target. *(Explicit exclusion: shift is not a filter here.)*
+- **Productivity variant (table).** Lead with one aggregate table per action (rows: action totals across all targets). Follow with per-target breakdown tables within each action. Tool Change gets its time-spent-only treatment (no rate/hr, no target rows since it's targetless per Step 22).
+- **Trend variant (graph).** 30-day rolling average per action. One graph per action, y = employee's rate/hr, x = date. Tool Change graph shows time-spent per period instead. Same rolling-average mode flag as Step 19.
+
+**Why deferred.**
+- Team hasn't actually asked for these; Matthew's inference. Building them speculatively risks missing what they actually want (which might be subtly different — e.g., the "employee vs. fleet average" comparison floated during earlier Step 18 planning but explicitly dropped from Step 18's 2026-04-24 scope).
+- Also: Steps 18 and 19 will exercise enough of the selector / aggregation / chart infrastructure that Step 24 becomes cheap after. No reason to build it out of order.
+
+**Tentative implementation shape (if approved as-sketched).**
+- Add `"Employee Productivity"` and `"Employee Trend"` as the 6th and 7th entries in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`.
+- Selector collapses to just the employee combo + date range. Hide action/target/shift widgets when these report types are selected.
+- `PDFReport.productionEmployeeProductivityReport(employeeId, startDate, endDate)` and `productionEmployeeTrendReport(employeeId, startDate, endDate)`. Both reuse the aggregation helpers and chart helper from Steps 18/19.
+
+**Open questions (to confirm with team before building).**
+- Productivity and Trend as two separate report types vs. a single combined PDF per employee?
+- Should a "vs. fleet average" column appear in the table variant? (Raised during Step 18 planning, not revisited 2026-04-24.)
+- Any Tool Change inclusion at all on per-employee reports, or skip it entirely since the team explicitly said Tool Change doesn't need per-employee data? Likely "skip", but worth asking.
+
+**Next session pickup.** Hold off until Steps 18/19 have shipped and the team has used them for a bit. Bring this skeleton back as a concrete proposal then — ideally with a mock in `mock_reports.py` rather than open-ended questions.
 
 ---
 
