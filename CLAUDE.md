@@ -9,7 +9,7 @@ MERCY is a PySide6 + SQLite desktop app: a three-way merge of **ANIKA** (part co
 
 ## Baseline sanity check
 
-Run `./Scripts/python.exe smoke.py` at the start and end of any invasive change — eleven offscreen checks, a few seconds total. It is the regression net.
+Run `./Scripts/python.exe smoke.py` at the start and end of any invasive change — thirteen offscreen checks, a few seconds total. It is the regression net.
 
 ## Workflow
 

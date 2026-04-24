@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 20, 21, and 22 have landed. The second round of team feedback (2026-04-24) added Steps 23 (quantity positive-check) and 24 (per-employee reports, deferred) and finalized the scope of Steps 18 and 19. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 20, 21, 22, and 23 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), and finalized the scope of Steps 18 and 19. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -556,7 +556,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
 | 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
 | 22 | ✅ Done | Merge plan Step 22: add Tool Change production action — see §13.10 |
-| 23 | ⏳ Planning | production quantity: positive check, not non-negative — see §13.11 |
+| 23 | ✅ Done | Merge plan Step 23: production quantity positive check — see §13.11 |
 | 24 | ⏳ Deferred | per-employee reports (pending team confirmation) — see §13.12 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -731,22 +731,28 @@ Landed 2026-04-22. This doc had grown to ~1028 lines / ~51k tokens — `Read` wi
 **Known unknowns / open follow-ups.**
 - ~~Productivity rate reporting (§13.5) will need to think about whether Tool Change rates (changes/hr) belong alongside the production-action rates or get a separate report. Flag for the Step 18 planning session.~~ **Resolved 2026-04-24:** Tool Change reports show total time spent — no rate/hr, no per-employee breakdown. Applies to both Step 18 (productivity tables) and Step 19 (trend graphs). See §13.5 / §13.6 for the specifics.
 
-### 13.11 Step 23 — production quantity: positive, not non-negative ⏳ Planning
+### 13.11 Step 23 — production quantity: positive, not non-negative ✅ Done
 
-**Motivation.** Surfaced 2026-04-24 with the second round of team feedback. Production entry currently accepts `quantity = 0`, which has no meaning — a zero-produced record is just noise in the DB. Validation should reject zero as well as negatives.
+**Landed 2026-04-24** alongside the backlog refresh. Two-line fix plus a new smoke check; `smoke.py` goes from 12 to 13 checks green.
 
-**Scope.** Swap the validation mode at both production entry sites:
+**Motivation.** Surfaced 2026-04-24 with the second round of team feedback. Production entry was accepting `quantity = 0`, which has no meaning — a zero-produced record is just noise in the DB. Validation needs to reject zero as well as negatives.
+
+**Scope as implemented.**
 - [production_tab.py:428](production_tab.py:428) (`ProductionEditWindow.readData`, Quick Entry): `checkInput(..., float, "nonneg", errors, "Quantity")` → `checkInput(..., float, "pos", errors, "Quantity")`.
 - [production_tab.py:956](production_tab.py:956) (`ProductionBatchDialog._save`, Batch Entry): same swap for the `quantity` field.
-- Scrap stays `"nonneg"` — zero scrap is legitimate and the default.
-- `"pos"` mode already exists in [utils.py:42](utils.py:42)'s `checkInput`; no new validator to write.
-- `ProductionRecord.setRecord` has no quantity validation today and doesn't need any — the UI is the single validation boundary. If Matthew wants belt-and-suspenders, add `if quantity <= 0: raise ValueError(...)` there too; not doing so by default since it would double-fire the error path and the 7a philosophy prefers one source of truth.
+- Scrap stays `"nonneg"` — zero scrap is legitimate and the default. Hours likewise stays `"nonneg"` for Tool Change's 0-hour edge case.
+- `"pos"` mode already existed in [utils.py:42](utils.py:42)'s `checkInput`; no new validator written.
+- `ProductionRecord.setRecord` deliberately left without a belt-and-suspenders `quantity <= 0` guard. The UI is the single validation boundary (7a philosophy); adding a record-layer check would double-fire the error path with no user-visible upside.
 
-**Verification.** Extend `smoke.py` with a `production_quantity_validation` check: construct a `ProductionEditWindow` headlessly, drive `quantityEdit` with `"0"`, call `readData`, assert the returned errors list contains the Quantity-must-be-positive message. Spot-check Batch Entry via a synthetic row list driven through `_save`'s validation path. Existing Tool Change smoke (Step 22) is unaffected since Tool Change records still carry positive `quantity` (the user-entered count of changes).
+**Verification.** New `production_quantity_validation` check in [smoke.py](smoke.py). Seeds an employee + a `MixA` mixture, then:
+- **Quick Entry:** builds a `ProductionEditWindow`, sets action=Batching + target=MixA + quantity=0 + scrap=0 + hours=1, calls `readData(isNew=True)`. Asserts the call returns `False`, the captured `errorMessage` payload contains a "Quantity ... positive" string, and `db.production` stays empty.
+- **Batch Entry:** builds a `ProductionBatchDialog`, fills row 0 with the same zero-quantity shape, calls `_save()`. Asserts `db.production` count is unchanged and the captured error payload mentions "quantity ... positive".
 
-**Why tackle this first.** Smallest item in the backlog by a wide margin — two line changes, one smoke assertion. Shippable in one short session, which lets the next session start on the larger Step 18/19 work without stacked uncertainty. Matches §13's "smallest first" ordering principle.
+`production_tab.errorMessage` is monkey-patched to capture error text (cleaner than sniffing `QMessageBox.critical` args — follows the batch smoke's structural pattern). Regression-caught via a `git stash` dance: reverting the two-line swap and re-running smoke surfaces the new check failing loudly (quantity=0 stored on Quick Entry, batch fails on an unrelated UNIQUE collision rather than the expected validation), confirming the test actually exercises what it claims.
 
-**Known unknowns.** None — specified crisply in the feedback.
+All 13 smoke checks pass after the fix. Existing Tool Change smoke (Step 22) unaffected since Tool Change records still carry positive `quantity` (the user-entered count of changes per shift).
+
+**Known unknowns.** None.
 
 ### 13.12 Step 24 — per-employee reports ⏳ Deferred
 

@@ -425,7 +425,7 @@ class ProductionEditWindow(QWidget):
                     errors.append(f"Part {targetName!r} no longer exists.")
             scrap = checkInput(self.scrapEdit.text(), float, "nonneg", errors, "Scrap")
 
-        quantity = checkInput(self.quantityEdit.text(), float, "nonneg", errors, "Quantity")
+        quantity = checkInput(self.quantityEdit.text(), float, "pos", errors, "Quantity")
         hours = checkInput(self.hoursEdit.text(), float, "nonneg", errors, "Hours")
 
         if errors:
@@ -953,7 +953,7 @@ class ProductionBatchDialog(QWidget):
                 rowErrs.append("quantity is blank")
                 quantity = 0.0
             else:
-                quantity = checkInput(qtyRaw, float, "nonneg", rowErrs, "quantity")
+                quantity = checkInput(qtyRaw, float, "pos", rowErrs, "quantity")
 
             hoursRaw = row.hoursEdit.text().strip()
             if not hoursRaw:
