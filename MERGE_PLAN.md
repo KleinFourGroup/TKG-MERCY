@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 20, 21, 22, and 23 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), and finalized the scope of Steps 18 and 19. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 20, 21, 22, and 23 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), and finalized the scope of Steps 18 and 19; Step 18 landed 2026-04-24. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -551,7 +551,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 15 | ✅ Done | Merge plan Step 15: production tab refresh when an employee is deleted |
 | 16 | ✅ Done | Merge plan Step 16: production batch entry dialog |
 | 17 | ✅ Done | Merge plan Step 17: production hours field |
-| 18 | ⏳ Planning | productivity rate reports (tables, feeds costing) — see §13.5 |
+| 18 | ✅ Done | Merge plan Step 18: productivity rate reports |
 | 19 | ⏳ Planning | trend reports (graphs, 30-day rolling averages) — see §13.6 |
 | 20 | ✅ Done | Merge plan Step 20: remember last DB, prompt to reopen on startup |
 | 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
@@ -599,42 +599,9 @@ Landed 2026-04-20. See [`plan_archive/implementation_notes.md`](plan_archive/imp
 
 Landed 2026-04-21. Surfaced in Matthew's first post-release feedback session: the team had forgotten to include duration/hours in the production schema. One-session add — new `hours REAL DEFAULT 0` column on `production`, wired through records / save / load / table / Quick Entry / Batch Entry / all four reports. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 17 for implementation notes, the Case-4 stamping fix it piggybacked, and the report-formatting decisions.
 
-### 13.5 Step 18 — productivity rate reports (tables, feeds costing) ⏳ Planning
+### 13.5 Step 18 — productivity rate reports (tables, feeds costing) ✅ Done
 
-**Motivation.** Surfaced 2026-04-21 alongside Step 17; detailed spec received in the 2026-04-24 feedback round. Team wants productivity drill-downs — rates per hour by action × target × shift, with per-employee breakdowns inside each target. **Downstream consumer is the costing code, not HR** — they're gathering more precise labor data to refine the per-part cost estimates in the costing globals (the existing `pressing` / `turning` / `finishing` / etc. fields on `parts`). Not bonuses, not quotas, no targets stored on the record.
-
-**Team spec (2026-04-24).**
-- **Selection.** Action (required) + target (specific or "all") + shift (specific or "all") + user-picked date range. Same shape as the existing production reports' selector (action/target + date range already present in [production_tab.py:489](production_tab.py:489)'s `ProductionReportWindow`).
-- **Output is table-only.** Graphs are Step 19's separate report type. The productivity PDF has no charts.
-- **Columns.** Target | Total quantity | Total hours | Rate (qty/hr). Per-employee breakdown rows under each target with the same columns.
-- **Layout by selection.**
-  - *Specific target + specific shift:* one table — target row (totals + rate) followed by per-employee breakdown.
-  - *Specific target + all shifts:* same shape; target row aggregates across shifts.
-  - *All targets + specific shift:* summary table first (one row per target + total aggregate row), then per-target tables with per-employee breakdowns.
-  - *All targets + all shifts:* summary table, then a second overview table breaking the total aggregate down by shift (*aggregate only — per-shift × per-target matrix is explicitly rejected as too cluttered*), then per-target tables.
-- **Tool Change is special.** No rate/hr. No per-employee breakdown. Just total hours spent. Shift selector stays enabled — team joked that specific-shift Tool Change reports collapse to one-row tables; accepted as-is rather than special-casing disable logic.
-- **No scrap columns.** Confirmed 2026-04-24. Team will likely want a standalone scrap report later; tracked as pending-feedback, not part of Step 18.
-
-**Resolved design decisions.**
-| # | Question | Decision |
-|---|----------|----------|
-| 1 | Aggregation math | `sum(qty) / sum(hours)` (ratio of sums) over the window. Chosen 2026-04-24 — more honest when shifts are uneven in length or completeness. No alternative mode planned for Step 18; if the team asks later, add a per-report toggle. |
-| 2 | Primary cut | `(action, target)` with `(action, target, shift)` and `(action, target, employee)` as drill-downs inside each target section. Action is always a selector (never an "all" option for productivity reports). |
-| 3 | Windowing | User-picked date range via the existing selector widgets. |
-| 4 | Export | Not in initial scope. Revisit if team wants to paste rates directly into costing globals. |
-
-**Tentative implementation sketch.**
-- Add `"Productivity"` as a new entry in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`.
-- `ProductionReportWindow` grows target and shift combos with "all" options. Target combo rebuilds when action changes (reuse the action-cascade pattern from Step 16's batch dialog — [production_tab.py:733](production_tab.py:733) region).
-- New `PDFReport.productionProductivityReport(action, targetName|None, shift|None, startDate, endDate)` in [report.py](report.py). `None` for target or shift means "all". Internal branching picks the layout from the four cases above.
-- Tool Change branch: collapse to total-hours-only table, skip rate/hr and per-employee sections.
-- `fuzz_db.py` already produces plausible data for this; no generator changes needed.
-
-**Open question.** Default date range for the selector when the report window opens. Options: last 30 days / last 90 days / year-to-date / blank. Call it during implementation unless the team surfaces a preference first.
-
-**Verification.** Extend `smoke.py` with a productivity-report smoke that exercises all four shape cases (specific/all × specific/all) plus the Tool Change variant. Manual spot-check against the team's DB before shipping.
-
-**Next session pickup.** Scope is clear enough to start coding. Recommend starting with the non-Tool-Change branch (three layout cases), then adding the Tool Change collapse. Mock one layout in `mock_reports.py` first if the all-targets-all-shifts shape feels uncertain — cheap sanity check before wiring into the real pipeline.
+Landed 2026-04-24. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 18 for the team spec as delivered, the four-case layout, the Tool Change collapse, the bold-totals convention it surfaced (now in [`CONVENTIONS.md`](CONVENTIONS.md)), and verification details.
 
 ### 13.6 Step 19 — trend reports (graphs, 30-day rolling averages) ⏳ Planning
 

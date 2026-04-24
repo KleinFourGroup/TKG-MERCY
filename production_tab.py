@@ -491,6 +491,7 @@ class ProductionReportWindow(QWidget):
         "Per Action",
         "Per Target",
         "Per Employee",
+        "Productivity",
     ]
 
     def __init__(self, parentTab: ProductionTab, mainApp: MainWindow,
@@ -520,6 +521,7 @@ class ProductionReportWindow(QWidget):
         self.actionBox = QComboBox()
         self.actionBox.setEditable(False)
         self.actionBox.addItems(PRODUCTION_ACTIONS)
+        self.actionBox.currentTextChanged.connect(self._onActionChanged)
 
         self.targetTypeBox = QComboBox()
         self.targetTypeBox.setEditable(False)
@@ -529,6 +531,15 @@ class ProductionReportWindow(QWidget):
 
         self.targetNameBox = QComboBox()
         self.targetNameBox.setEditable(False)
+
+        # Shift filter for the Productivity report. "All" maps to None so the
+        # generate() dispatch can branch without sentinel strings.
+        self.shiftBox = QComboBox()
+        self.shiftBox.setEditable(False)
+        self.shiftBox.addItem("All shifts", userData=None)
+        self.shiftBox.addItem("1", userData=1)
+        self.shiftBox.addItem("2", userData=2)
+        self.shiftBox.addItem("3", userData=3)
 
         self.employeeBox = QComboBox()
         self.employeeBox.setEditable(False)
@@ -549,6 +560,7 @@ class ProductionReportWindow(QWidget):
         self.targetTypeLabel = QLabel("Target type:")
         self.targetNameLabel = QLabel("Target:")
         self.employeeLabel = QLabel("Employee:")
+        self.shiftLabel = QLabel("Shift:")
 
         self.generateB = QPushButton("Generate")
         self.generateB.clicked.connect(self.generate)
@@ -560,6 +572,7 @@ class ProductionReportWindow(QWidget):
             [self.actionLabel, self.actionBox],
             [self.targetTypeLabel, self.targetTypeBox],
             [self.targetNameLabel, self.targetNameBox],
+            [self.shiftLabel, self.shiftBox],
             [self.employeeLabel, self.employeeBox],
             [self.generateB],
         ]
@@ -572,6 +585,11 @@ class ProductionReportWindow(QWidget):
         self.show()
 
     def _onTargetTypeChanged(self, _idx: int):
+        # Only the "Per Target" report uses the explicit targetType selector;
+        # in Productivity mode the target list is driven by the action instead
+        # (see _rebuildProductivityTargets).
+        if self.typeBox.currentText() == "Productivity":
+            return
         targetType = self.targetTypeBox.currentData()
         self.targetNameBox.clear()
         if targetType == "mix":
@@ -579,17 +597,59 @@ class ProductionReportWindow(QWidget):
         elif targetType == "part":
             self.targetNameBox.addItems(sorted(self.mainApp.db.parts.keys()))
 
+    def _onActionChanged(self, _text: str):
+        if self.typeBox.currentText() == "Productivity":
+            self._rebuildProductivityTargets()
+            self._applyProductivityVisibility()
+
+    def _rebuildProductivityTargets(self):
+        # Populates targetNameBox with an "All" entry + every mix/part of the
+        # action's target type. Tool Change is targetless and clears the box.
+        action = self.actionBox.currentText()
+        targetType = PRODUCTION_ACTION_TARGET.get(action, "")
+        self.targetNameBox.clear()
+        if targetType == "":
+            return
+        self.targetNameBox.addItem("All", userData=None)
+        if targetType == "mix":
+            names = sorted(self.mainApp.db.mixtures.keys())
+        else:
+            names = sorted(self.mainApp.db.parts.keys())
+        for n in names:
+            self.targetNameBox.addItem(n, userData=n)
+
+    def _applyProductivityVisibility(self):
+        # Tool Change has no target, so hide the target row when that action
+        # is selected even in Productivity mode.
+        action = self.actionBox.currentText()
+        hasTarget = PRODUCTION_ACTION_TARGET.get(action, "") != ""
+        for w in (self.targetNameLabel, self.targetNameBox):
+            w.setVisible(hasTarget)
+
     def _onTypeChanged(self, t: str):
-        showAction = (t == "Per Action")
-        showTarget = (t == "Per Target")
+        showAction = (t == "Per Action") or (t == "Productivity")
+        showTargetType = (t == "Per Target")
+        showTargetName = (t == "Per Target") or (t == "Productivity")
         showEmployee = (t == "Per Employee")
+        showShift = (t == "Productivity")
         for w in (self.actionLabel, self.actionBox):
             w.setVisible(showAction)
-        for w in (self.targetTypeLabel, self.targetTypeBox,
-                  self.targetNameLabel, self.targetNameBox):
-            w.setVisible(showTarget)
+        for w in (self.targetTypeLabel, self.targetTypeBox):
+            w.setVisible(showTargetType)
+        for w in (self.targetNameLabel, self.targetNameBox):
+            w.setVisible(showTargetName)
         for w in (self.employeeLabel, self.employeeBox):
             w.setVisible(showEmployee)
+        for w in (self.shiftLabel, self.shiftBox):
+            w.setVisible(showShift)
+        # Repopulate targetNameBox for the mode we're entering — each mode
+        # fills it differently (Per Target plain names; Productivity adds "All"
+        # and follows the action).
+        if t == "Productivity":
+            self._rebuildProductivityTargets()
+            self._applyProductivityVisibility()
+        elif t == "Per Target":
+            self._onTargetTypeChanged(self.targetTypeBox.currentIndex())
 
     def generate(self):
         startDate = fromQDate(self.startDateEdit.date())
@@ -612,7 +672,17 @@ class ProductionReportWindow(QWidget):
             errorMessage(self, ["No employee selected."])
             return
 
-        savePath = tempReportPath(self._defaultPrefix(reportType, action, targetName, employeeId))
+        # Productivity: read target as userData (None == "All"); read shift
+        # the same way. Tool Change forces target=None regardless of what the
+        # target combo happens to hold, since we hide the row for that action.
+        productivityTarget = self.targetNameBox.currentData()
+        productivityShift = self.shiftBox.currentData()
+        if reportType == "Productivity" and action == "Tool Change":
+            productivityTarget = None
+
+        savePath = tempReportPath(self._defaultPrefix(
+            reportType, action, targetName, employeeId,
+            productivityTarget, productivityShift))
 
         pdf = PDFReport(self.mainApp.db, savePath)
         if reportType == "Production Summary":
@@ -623,13 +693,17 @@ class ProductionReportWindow(QWidget):
             pdf.productionTargetReport(targetType, targetName, startDate, endDate)
         elif reportType == "Per Employee":
             pdf.productionEmployeeReport(employeeId, startDate, endDate)
+        elif reportType == "Productivity":
+            pdf.productionProductivityReport(action, productivityTarget,
+                                             productivityShift, startDate, endDate)
         else:
             raise RuntimeError(f'unknown reportType {reportType!r}')
 
         startfile(savePath)
         self.close()
 
-    def _defaultPrefix(self, reportType, action, targetName, employeeId) -> str:
+    def _defaultPrefix(self, reportType, action, targetName, employeeId,
+                       productivityTarget=None, productivityShift=None) -> str:
         if reportType == "Production Summary":
             return "production-summary"
         if reportType == "Per Action":
@@ -638,6 +712,13 @@ class ProductionReportWindow(QWidget):
             return f"production-{targetName or 'target'}"
         if reportType == "Per Employee":
             return f"production-employee-{employeeId}"
+        if reportType == "Productivity":
+            parts = ["productivity", action.lower().replace(" ", "-")]
+            if productivityTarget is not None:
+                parts.append(productivityTarget)
+            if productivityShift is not None:
+                parts.append(f"shift{productivityShift}")
+            return "-".join(parts)
         return "production-report"
 
 

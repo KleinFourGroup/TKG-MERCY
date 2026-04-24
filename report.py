@@ -946,3 +946,217 @@ class PDFReport:
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()
+
+    def productionProductivityReport(self, action: str,
+                                     targetName: str | None,
+                                     shift: int | None,
+                                     startDate: datetime.date,
+                                     endDate: datetime.date):
+        # Step 18: rate-per-hour drill-down feeding the costing code.
+        # targetName is None for "all targets"; shift is None for "all shifts".
+        # Tool Change has its own shape (no rate, no per-employee) and dispatches
+        # to a helper below.
+        if action not in PRODUCTION_ACTIONS:
+            raise RuntimeError(f'unknown action {action!r}')
+        if action == "Tool Change":
+            self._toolChangeProductivityReport(shift, startDate, endDate)
+            return
+
+        targetType = PRODUCTION_ACTION_TARGET[action]
+        unit = PRODUCTION_TARGET_UNIT[targetType]
+        allTargets = targetName is None
+        allShifts = shift is None
+
+        filterKwargs: dict = {"action": action}
+        if not allTargets:
+            filterKwargs["targetType"] = targetType
+            filterKwargs["targetName"] = targetName
+        recs = self._filterProduction(startDate, endDate, **filterKwargs)
+        if shift is not None:
+            recs = [r for r in recs if r.shift == shift]
+
+        perTarget: dict[str, tuple[float, float]] = {}
+        perTargetEmp: dict[tuple[str, int | None], tuple[float, float]] = {}
+        perShift: dict[int | None, tuple[float, float]] = {}
+        totalQ = 0.0
+        totalH = 0.0
+        for r in recs:
+            tn = r.targetName or ""
+            q = r.quantity or 0
+            h = r.hours
+            cq, ch = perTarget.get(tn, (0.0, 0.0))
+            perTarget[tn] = (cq + q, ch + h)
+            key = (tn, r.employeeId)
+            cq, ch = perTargetEmp.get(key, (0.0, 0.0))
+            perTargetEmp[key] = (cq + q, ch + h)
+            cq, ch = perShift.get(r.shift, (0.0, 0.0))
+            perShift[r.shift] = (cq + q, ch + h)
+            totalQ += q
+            totalH += h
+
+        title = f"TKG {action} Productivity"
+        subtitleBits = []
+        if not allTargets:
+            subtitleBits.append(str(targetName))
+        if not allShifts:
+            subtitleBits.append(f"Shift {shift}")
+        subtitleBits.append(f"{startDate.isoformat()} through {endDate.isoformat()}")
+        subtitle = " — ".join(subtitleBits)
+
+        def fmtRate(q: float, h: float) -> str:
+            if h <= 0:
+                return "—"
+            return f"{q / h:.2f}"
+
+        def fmtNum(x: float) -> str:
+            return f"{x:g}"
+
+        headersTarget = ["Target", f"Quantity ({unit})", "Hours", "Rate (per hr)"]
+        headersEmp = ["Employee", f"Quantity ({unit})", "Hours", "Rate (per hr)"]
+        headersShift = ["Shift", f"Quantity ({unit})", "Hours", "Rate (per hr)"]
+
+        if len(recs) == 0:
+            self.setupPage()
+            self.drawTitle(title)
+            self.drawSubtitle(subtitle)
+            self.skipLines(2)
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+            self.pdf.save()
+            return
+
+        def empSortKey(eid):
+            emp = self.db.employees.get(eid)
+            if emp is None:
+                return (1, "", "", eid if eid is not None else 0)
+            return (0, (emp.lastName or "").lower(),
+                    (emp.firstName or "").lower(), eid or 0)
+
+        def shiftSortKey(s):
+            return (s is None, s or 0)
+
+        def renderSection(sectionName: str, rows: list[list[str]],
+                          headers: list[str],
+                          totalsRow: list[str] | None = None):
+            # Totals render as their own pure-header table after the main rows
+            # so they come out bold — same pattern productionSummaryReport
+            # uses to emphasize its "Total" row.
+            olen = len(rows)
+            while len(rows) > 0:
+                self.setupPage()
+                self.drawTitle(title)
+                self.drawSubtitle(subtitle)
+                self.skipLines(2)
+                self.drawSection(sectionName if len(rows) == olen
+                                 else f"{sectionName} -- Continued")
+                drawn = self.drawTable(rows, headers)
+                if drawn == len(rows) and totalsRow is not None:
+                    self.drawTable([], totalsRow)
+                rows = rows[drawn:]
+                self.nextPage()
+
+        def renderTargetDetail(tn: str):
+            empsHere = sorted(
+                {eid for (t, eid) in perTargetEmp if t == tn},
+                key=empSortKey,
+            )
+            rows = []
+            for eid in empsHere:
+                eq, eh = perTargetEmp[(tn, eid)]
+                rows.append([self._employeeName(eid),
+                             fmtNum(eq), fmtNum(eh), fmtRate(eq, eh)])
+            tq, th = perTarget[tn]
+            totalsRow = ["Total", fmtNum(tq), fmtNum(th), fmtRate(tq, th)]
+            renderSection(f"{action}: {tn}", rows, headersEmp, totalsRow)
+
+        if allTargets:
+            sortedTargets = sorted(perTarget.keys())
+            summaryRows = []
+            for tn in sortedTargets:
+                tq, th = perTarget[tn]
+                summaryRows.append([tn, fmtNum(tq), fmtNum(th), fmtRate(tq, th)])
+            summaryTotals = ["Total", fmtNum(totalQ), fmtNum(totalH),
+                             fmtRate(totalQ, totalH)]
+            renderSection("Summary by Target", summaryRows, headersTarget,
+                          summaryTotals)
+
+            if allShifts:
+                shiftRows = []
+                for s in sorted(perShift.keys(), key=shiftSortKey):
+                    sq, sh = perShift[s]
+                    lbl = str(s) if s is not None else "(none)"
+                    shiftRows.append([lbl, fmtNum(sq), fmtNum(sh), fmtRate(sq, sh)])
+                shiftTotals = ["Total", fmtNum(totalQ), fmtNum(totalH),
+                               fmtRate(totalQ, totalH)]
+                renderSection("Overview by Shift", shiftRows, headersShift,
+                              shiftTotals)
+
+            for tn in sortedTargets:
+                renderTargetDetail(tn)
+        else:
+            renderTargetDetail(targetName)
+
+        self.pdf.save()
+
+    def _toolChangeProductivityReport(self, shift: int | None,
+                                      startDate: datetime.date,
+                                      endDate: datetime.date):
+        # Tool Change collapse: no rate/hr, no per-employee. Just total hours
+        # per shift (or a single row when a shift is selected). The shift
+        # selector stays active at the UI layer so "specific shift" is legal;
+        # it just produces a one-row table.
+        recs = self._filterProduction(startDate, endDate, action="Tool Change")
+        if shift is not None:
+            recs = [r for r in recs if r.shift == shift]
+
+        perShift: dict[int | None, float] = {}
+        totalH = 0.0
+        for r in recs:
+            perShift[r.shift] = perShift.get(r.shift, 0.0) + r.hours
+            totalH += r.hours
+
+        title = "TKG Tool Change Productivity"
+        subtitleBits = []
+        if shift is not None:
+            subtitleBits.append(f"Shift {shift}")
+        subtitleBits.append(f"{startDate.isoformat()} through {endDate.isoformat()}")
+        subtitle = " — ".join(subtitleBits)
+
+        if len(recs) == 0:
+            self.setupPage()
+            self.drawTitle(title)
+            self.drawSubtitle(subtitle)
+            self.skipLines(2)
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+            self.pdf.save()
+            return
+
+        headers = ["Shift", "Total Hours"]
+        rows: list[list[str]] = []
+        totalsRow: list[str] | None = None
+        if shift is None:
+            for s in sorted(perShift.keys(),
+                            key=lambda k: (k is None, k or 0)):
+                lbl = str(s) if s is not None else "(none)"
+                rows.append([lbl, f"{perShift[s]:g}"])
+            totalsRow = ["Total", f"{totalH:g}"]
+        else:
+            # Specific-shift: the single row is already the total; no separate
+            # totals row would add anything.
+            rows.append([str(shift), f"{totalH:g}"])
+
+        olen = len(rows)
+        while len(rows) > 0:
+            self.setupPage()
+            self.drawTitle(title)
+            self.drawSubtitle(subtitle)
+            self.skipLines(2)
+            self.drawSection("Hours by Shift" if len(rows) == olen
+                             else "Hours by Shift -- Continued")
+            drawn = self.drawTable(rows, headers)
+            if drawn == len(rows) and totalsRow is not None:
+                self.drawTable([], totalsRow)
+            rows = rows[drawn:]
+            self.nextPage()
+        self.pdf.save()

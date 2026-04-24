@@ -1047,6 +1047,119 @@ def production_report() -> list[str]:
     return errors
 
 
+def production_productivity_report() -> list[str]:
+    """Step 18: productivity report covers all four layout cases + Tool Change.
+
+    Seeds two employees and production records that span two targets and two
+    shifts so the aggregation paths have something to sum, then exercises the
+    productivity report in the four shape combinations:
+      - specific target + specific shift
+      - specific target + all shifts
+      - all targets    + specific shift
+      - all targets    + all shifts        (adds the by-shift overview table)
+    Tool Change gets its own two variants (specific shift, all shifts) since
+    its collapse skips rate/hr and per-employee entirely. The empty-range
+    path is exercised too — both non-Tool-Change and Tool Change.
+    Doesn't parse PDF content; success is generation without exception + a
+    non-empty file in each case.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord, Employee
+    from report import PDFReport
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        for idNum, first in [(101, "Alice"), (102, "Bob")]:
+            emp = Employee()
+            emp.idNum = idNum
+            emp.lastName = "Smith" if idNum == 101 else "Jones"
+            emp.firstName = first
+            emp.shift = 1
+            emp.fullTime = True
+            emp.status = True
+            emp.anniversary = datetime_date(2020, 1, 1)
+            w.db.employees[emp.idNum] = emp
+
+        d1 = datetime_date(2026, 4, 15)
+        d2 = datetime_date(2026, 4, 16)
+        # (employeeId, date, shift, action, targetName, quantity, scrap, hours)
+        seed = [
+            (101, d1, 1, "Pressing", "PartA", 250.0, 3, 4.0),
+            (101, d1, 2, "Pressing", "PartB", 100.0, 0, 2.5),
+            (102, d1, 1, "Pressing", "PartA",  80.0, 1, 1.5),
+            (102, d2, 2, "Pressing", "PartB", 140.0, 0, 3.0),
+            (101, d1, 1, "Tool Change", "",      2.0, 0, 0.5),
+            (102, d1, 2, "Tool Change", "",      1.0, 0, 0.75),
+            (101, d2, 3, "Tool Change", "",      3.0, 0, 1.25),
+        ]
+        for eid, date, shift, action, target, qty, scrap, hours in seed:
+            r = ProductionRecord()
+            r.setRecord(eid, date, shift, action, target, qty, scrap, hours)
+            w.db.production[r.key()] = r
+
+        start = datetime_date(2026, 4, 1)
+        end = datetime_date(2026, 4, 30)
+        emptyStart = datetime_date(2030, 1, 1)
+        emptyEnd = datetime_date(2030, 1, 31)
+
+        reports = [
+            ("productivity-specific-specific",
+             lambda p: p.productionProductivityReport("Pressing", "PartA", 1, start, end)),
+            ("productivity-specific-allshifts",
+             lambda p: p.productionProductivityReport("Pressing", "PartA", None, start, end)),
+            ("productivity-alltargets-specific",
+             lambda p: p.productionProductivityReport("Pressing", None, 2, start, end)),
+            ("productivity-alltargets-allshifts",
+             lambda p: p.productionProductivityReport("Pressing", None, None, start, end)),
+            ("productivity-toolchange-specific",
+             lambda p: p.productionProductivityReport("Tool Change", None, 2, start, end)),
+            ("productivity-toolchange-allshifts",
+             lambda p: p.productionProductivityReport("Tool Change", None, None, start, end)),
+            ("productivity-empty",
+             lambda p: p.productionProductivityReport("Pressing", None, None, emptyStart, emptyEnd)),
+            ("productivity-toolchange-empty",
+             lambda p: p.productionProductivityReport("Tool Change", None, None, emptyStart, emptyEnd)),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def production_refresh_on_delete() -> list[str]:
     """Step 15: deleting an employee must not leave the production tab stale.
 
@@ -1540,6 +1653,7 @@ def main() -> int:
                      ("production_roundtrip", production_roundtrip),
                      ("production_tool_change_roundtrip", production_tool_change_roundtrip),
                      ("production_report", production_report),
+                     ("production_productivity_report", production_productivity_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
                      ("production_batch_roundtrip", production_batch_roundtrip),
                      ("production_quantity_validation", production_quantity_validation),
