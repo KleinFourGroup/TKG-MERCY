@@ -6,6 +6,7 @@
 scripts/
 .claude/
 mock_reports/
+multiuser_briefs/
 
 # Auto-generated at PyInstaller build time (see main.spec + version.py).
 _version.py
