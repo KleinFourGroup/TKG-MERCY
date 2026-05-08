@@ -561,6 +561,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 | 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
+| 28 | ⏳ Deferred | split `records.py` into a `records/` package (gated on team OK'ing Steps 24/26/27) — see §13.16 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -786,6 +787,43 @@ Rate column is still `"—"` for Tool Change rows everywhere — the count *isn'
 No smoke change required; existing `production_employee_productivity_report` already exercises every overview branch and only checks for non-empty PDF + no exception.
 
 **Not in scope.** The legacy `productionSummaryReport` (Step 12) renders Tool Change cells as `"0 (Xh)"` — also not great, but Matthew explicitly called out "the overview table when all is selected" which only the Step 24 EP report has. Leaving the Step 12 cell formatter alone until/unless the team flags it.
+
+### 13.16 Step 28 — split `records.py` into a `records/` package ⏳ Deferred
+
+**Status.** Sketched plan only — **gated on the team OK'ing Steps 24/26/27**. Reorganizing while user-visible report changes might still need follow-ups would muddy `git blame` for no functional gain. Once the report changes are blessed, this is the next step.
+
+**Motivation.** [`records.py`](records.py) is 1738 lines. Most of it is independent class clusters that already align with the existing tab structure and the original ANIKA + BECKY split. Splitting into a package with one file per domain trims the scrolling cost and makes blame-on-class clearer without changing behavior.
+
+**Class inventory** (current [`records.py`](records.py)):
+
+| Domain | Approx. lines | Classes |
+|---|---|---|
+| Products | 8–591 (~580) | `Material`, `Package`, `Mixture`, `Globals`, `Part`, `MaterialInventoryRecord`, `PartInventoryRecord`, `Inventory` |
+| Employees | 592–1187 (~595) | `Employee`, `EmployeeReview`, `EmployeeTrainingDate`, `EmployeePTORange`, `EmployeeNote`, `EmployeePoint`, `HolidayObservance`, plus the per-employee `*DB` helpers (`EmployeeReviewsDB`, `EmployeeTrainingDB`, `EmployeePointsDB`, `EmployeeNotesDB`, `EmployeePTODB`, `ObservancesDB`) |
+| Production | 1188–1271 (~83) | `ProductionRecord` |
+| Shared | 1272–1738 (~466) | `Database`, `emptyDB` |
+
+**Proposed shape.**
+```
+records/
+  __init__.py       # re-exports everything records.py currently exports
+  products.py       # Products domain (~580 lines)
+  employees.py      # Employees domain (~595 lines)
+  production.py     # Production domain (~83 lines, room to grow)
+  database.py       # Database + emptyDB (the orchestrator)
+```
+
+**Backwards compatibility.** `records/__init__.py` re-exports every name `records.py` currently exports, so existing import sites — there are 23 of them across `app.py`, the tab files, `file_manager.py`, `report.py`, `fuzz_db.py`, and `smoke.py` — keep working unchanged. This commit is purely a file-shuffle plus the re-export shim. Future code can import more specifically (`from records.production import ProductionRecord`) if it wants; existing code stays put.
+
+**Risk.** Low. No behavior change; pure file move plus a re-export shim. Largest hazard is `Database`'s internal references to every model class — those become intra-package imports inside `records/database.py`. As long as `__init__.py` exports the same surface, nothing outside the package needs to know.
+
+**Verification.** [`smoke.py`](smoke.py) is the safety net — all 17 checks must stay green. `compile_all` catches any broken `from records import` line at import time; the migration / roundtrip / report checks catch any deeper structural breakage.
+
+**Tentative shape of the work.**
+1. Step 28 itself: create `records/` package, move classes, set up `__init__.py` re-exports, rewrite internal references inside `records/` to use intra-package imports. Smoke green. One commit.
+2. Optional Step 28.1 (low-priority cleanup): simplify the bundled `from records import (...)` sites in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports. Cosmetic; no rush.
+
+**Why not also split `report.py`?** Same length (1757 lines), harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until Step 28 lands and we see whether the smaller-files instinct still feels strong; that becomes a future Step 29 if so.
 
 ---
 
