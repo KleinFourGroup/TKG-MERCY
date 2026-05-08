@@ -1179,6 +1179,125 @@ def production_productivity_report() -> list[str]:
     return errors
 
 
+def production_employee_productivity_report() -> list[str]:
+    """Step 24: per-employee productivity report covers all four selection
+    combos (action specific|all × employee specific|all) + Tool Change.
+
+    Seeds two employees and production records covering multiple actions,
+    targets, and shifts so each aggregation path has content. Exercises:
+      - specific action + specific employee  (Case A)
+      - specific action + all employees      (Case C)
+      - all actions    + specific employee   (Case B)
+      - all actions    + all employees       (Case D, the deepest layout)
+      - Tool Change    + specific employee
+      - Tool Change    + all employees
+      - empty range (no records)
+    Doesn't parse PDF content; success is generation without exception +
+    non-empty file.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records import ProductionRecord, Employee
+    from report import PDFReport
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        # Two employees so the all-employees aggregate has multiple rows.
+        ids = []
+        for idNum, last, first in [(201, "Smith", "Alice"),
+                                   (202, "Jones", "Bob")]:
+            emp = Employee()
+            emp.idNum = idNum
+            emp.lastName = last
+            emp.firstName = first
+            emp.shift = 1
+            emp.fullTime = True
+            emp.status = True
+            emp.anniversary = datetime_date(2020, 1, 1)
+            w.db.employees[emp.idNum] = emp
+            ids.append(idNum)
+
+        d = datetime_date(2026, 4, 15)
+        # Spans multiple actions / targets / shifts per employee so the
+        # per-target detail and the cross-action overview both have data.
+        # Tool Change records exercise the rate-suppressed path; the second
+        # employee's missing Batching action exercises the case where an
+        # employee's per-action breakdown is sparse.
+        records = [
+            (ids[0], d, 1, "Batching",   "MixA",  7.5,  0, 1.5),
+            (ids[0], d, 1, "Pressing",   "PartA", 250., 3, 8.0),
+            (ids[0], d, 2, "Finishing",  "PartB", 125.5, 0, 6.5),
+            (ids[0], d, 1, "Tool Change", "",     0,    0, 4.0),
+            (ids[1], d, 2, "Pressing",   "PartA", 180., 1, 6.0),
+            (ids[1], d, 2, "Finishing",  "PartA", 200., 2, 7.0),
+            (ids[1], d, 3, "Tool Change", "",     0,    0, 2.0),
+        ]
+        for spec in records:
+            r = ProductionRecord()
+            r.setRecord(*spec)
+            w.db.production[r.key()] = r
+
+        start = datetime_date(2026, 4, 1)
+        end = datetime_date(2026, 4, 30)
+        emptyStart = datetime_date(2030, 1, 1)
+        emptyEnd = datetime_date(2030, 1, 31)
+        e0 = ids[0]
+
+        reports = [
+            ("emp-prod-specific-action-specific-emp",
+             lambda p: p.productionEmployeeProductivityReport("Pressing", e0, start, end)),
+            ("emp-prod-specific-action-all-emps",
+             lambda p: p.productionEmployeeProductivityReport("Pressing", None, start, end)),
+            ("emp-prod-all-actions-specific-emp",
+             lambda p: p.productionEmployeeProductivityReport(None, e0, start, end)),
+            ("emp-prod-all-actions-all-emps",
+             lambda p: p.productionEmployeeProductivityReport(None, None, start, end)),
+            ("emp-prod-toolchange-specific-emp",
+             lambda p: p.productionEmployeeProductivityReport("Tool Change", e0, start, end)),
+            ("emp-prod-toolchange-all-emps",
+             lambda p: p.productionEmployeeProductivityReport("Tool Change", None, start, end)),
+            ("emp-prod-empty-range",
+             lambda p: p.productionEmployeeProductivityReport(None, None, emptyStart, emptyEnd)),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def production_trend_report() -> list[str]:
     """Step 19: trend report covers all four layout cases + Tool Change + both
     rolling modes, and rejects ranges shorter than 30 days.
@@ -1917,6 +2036,7 @@ def main() -> int:
                      ("production_tool_change_roundtrip", production_tool_change_roundtrip),
                      ("production_report", production_report),
                      ("production_productivity_report", production_productivity_report),
+                     ("production_employee_productivity_report", production_employee_productivity_report),
                      ("production_trend_report", production_trend_report),
                      ("production_refresh_on_delete", production_refresh_on_delete),
                      ("production_batch_roundtrip", production_batch_roundtrip),

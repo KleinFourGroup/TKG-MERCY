@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, and 26 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports, landed same day) to address persistent team confusion between the production and productivity reports. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23, 25, and 26 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, and confirmed the spec for Step 24 — both landed same-day. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -557,7 +557,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 21 | ✅ Done | Split MERGE_PLAN.md: move §12.2/§12.4/§12.5 bodies into plan_archive/, extract live conventions into CONVENTIONS.md |
 | 22 | ✅ Done | Merge plan Step 22: add Tool Change production action — see §13.10 |
 | 23 | ✅ Done | Merge plan Step 23: production quantity positive check — see §13.11 |
-| 24 | ⏳ Deferred | per-employee reports (pending team confirmation) — see §13.12 |
+| 24 | ✅ Done | Merge plan Step 24: per-employee productivity report — see §13.12 |
 | 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 
@@ -676,9 +676,35 @@ Landed 2026-04-22 alongside a VERSION bump to `1.0rc3`. See [`plan_archive/imple
 
 Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 23 for the two-line fix, why `ProductionRecord.setRecord` deliberately doesn't get a belt-and-suspenders guard, and the new `production_quantity_validation` smoke check (regression-verified via stash dance).
 
-### 13.12 Step 24 — per-employee reports ⏳ Deferred
+### 13.12 Step 24 — per-employee productivity report ✅ Done
 
-**Status.** Skeleton plan only — **not approved by team yet.** Matthew (2026-04-24) thinks the team will want these once Steps 18/19 land, based on how they talk about the production data. Recorded here so the future work isn't a surprise; waiting on explicit team confirmation before building.
+Landed 2026-05-08, table-only first cut (Trend variant deferred — see open questions below). Team confirmed the spec in the third feedback round: the report covers all shifts unconditionally, with action and employee both filterable as "specific or all" and detailed breakdowns by part. Tool Change is included to preempt "Tool Change report missing" tickets when a specific employee is selected.
+
+**Shape as shipped.** New `PDFReport.productionEmployeeProductivityReport(action, employeeId, startDate, endDate)` in [`report.py`](report.py) where `action=None`/`employeeId=None` mean "all". Four selection-shape cases:
+
+| action | employee | Aggregate overview | Detail sections |
+|---|---|---|---|
+| specific | specific | (skipped — single employee × single action) | One section: Summary by Target (or Hours by Shift for Tool Change). |
+| specific | all | Summary by Employee | Per-employee sections, each Summary by Target (or Hours by Shift for Tool Change). |
+| all | specific | Summary by Action | Per-action sections, each Summary by Target (or Hours by Shift for Tool Change). |
+| all | all | Summary by Action **and** Summary by Employee (two stacked overview tables) | Per-employee sections, each containing per-action subsections (Summary by Target / Hours by Shift). |
+
+Tool Change rows in the overview tables show hours only with `"—"` in the rate column. Cross-action total rows also show `"—"` for rate, since mixing produced-action hours with Tool Change hours into a single denominator is misleading.
+
+**Selector wiring** ([`production_tab.py`](production_tab.py)). New `"Employee Productivity"` entry in `REPORT_TYPES` between `"Productivity"` and `"Trend"`. Action and Employee combos gain an `"All actions"` / `"All employees"` entry **only** in this mode — `_rebuildActionBox(includeAll)` and `_rebuildEmployeeBox(includeAll)` rebuild on every type-change so other modes (Per Action, Per Employee, Productivity, Trend) can never see the sentinel. Visibility: action + employee shown; target / target-type / shift hidden (covers all shifts unconditionally per team spec). `userData=None` on the "All" entries makes the dispatch a one-line `currentData()` read.
+
+**Smoke** ([`smoke.py`](smoke.py)). New `production_employee_productivity_report` exercises all four selection combos plus Tool Change × specific/all and the empty-range path. Two seeded employees with overlapping but non-identical action sets so the per-employee-aggregate and the per-action-detail both have variety. Now 17 checks green (was 16 after Step 26).
+
+**Deviations from §13.12's pre-confirmation skeleton** (preserved below). The pre-confirmation skeleton assumed *no* action/target/shift filters and that the report would always be all-action × all-target. Team's actual ask during confirmation broadened to **action filter (specific or all)** and stayed with **all shifts unconditionally** + **all targets unconditionally**. Tool Change inclusion was confirmed (skeleton had leaned skip). The Trend variant was held off this round — team hasn't put in enough data for trends to mean anything yet.
+
+**Open questions still open.**
+- **Trend variant.** Skeleton sketched a per-employee Trend report mirroring Step 19. Held off until the team has more longitudinal data; revisit in a future session.
+- **Vs.-fleet-average column.** Raised during Step 18 planning, not requested in this round either. Could land as a column on the per-target detail table or as a separate aggregate table; probably waits for the team to ask.
+- **Cross-action rate suppression.** Currently shows `"—"` when actions are mixed (overview Total row, all-actions per-employee row). Alternative: compute a rate excluding Tool Change hours. Not asked for; revisit if the team finds the dashes confusing.
+
+*Pre-confirmation planning notes (preserved for the record; the spec they document was tweaked when the team confirmed — see "Deviations" above).*
+
+**Status (pre-confirmation).** Skeleton plan only — **not approved by team yet.** Matthew (2026-04-24) thinks the team will want these once Steps 18/19 land, based on how they talk about the production data. Recorded here so the future work isn't a surprise; waiting on explicit team confirmation before building.
 
 **Motivation.** Step 18/19 reports slice by target/shift with per-employee rows as a drill-down. Per-employee reports invert that: pick an employee, see their whole production picture across all actions and targets. Matthew's read is that once the team sees 18/19 they'll ask for this, but it's better to confirm than to build speculatively.
 
@@ -696,13 +722,6 @@ Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`pla
 - Add `"Employee Productivity"` and `"Employee Trend"` as the 6th and 7th entries in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`.
 - Selector collapses to just the employee combo + date range. Hide action/target/shift widgets when these report types are selected.
 - `PDFReport.productionEmployeeProductivityReport(employeeId, startDate, endDate)` and `productionEmployeeTrendReport(employeeId, startDate, endDate)`. Both reuse the aggregation helpers and chart helper from Steps 18/19.
-
-**Open questions (to confirm with team before building).**
-- Productivity and Trend as two separate report types vs. a single combined PDF per employee?
-- Should a "vs. fleet average" column appear in the table variant? (Raised during Step 18 planning, not revisited 2026-04-24.)
-- Any Tool Change inclusion at all on per-employee reports, or skip it entirely since the team explicitly said Tool Change doesn't need per-employee data? Likely "skip", but worth asking.
-
-**Next session pickup.** Hold off until Steps 18/19 have shipped and the team has used them for a bit. Bring this skeleton back as a concrete proposal then — ideally with a mock in `mock_reports.py` rather than open-ended questions.
 
 ### 13.13 Step 25 — confirm-on-close dialog (Save / Don't Save / Cancel) ✅ Done
 

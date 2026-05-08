@@ -1214,6 +1214,229 @@ class PDFReport:
             self.nextPage()
         self.pdf.save()
 
+    def productionEmployeeProductivityReport(self,
+                                             action: str | None,
+                                             employeeId: int | None,
+                                             startDate: datetime.date,
+                                             endDate: datetime.date):
+        # Step 24: per-employee productivity report. Mirrors Step 18's structure
+        # but pivots on employee instead of target. action=None means "all
+        # actions"; employeeId=None means "all employees". Tool Change is
+        # included to preempt "the Tool Change report is missing" tickets when
+        # users have a specific employee selected; it rolls up by shift instead
+        # of per-target, matching the productivity-report convention. Cross-
+        # action rate totals show "—" because mixing Tool Change hours into a
+        # rate denominator is misleading.
+        if action is not None and action not in PRODUCTION_ACTIONS:
+            raise RuntimeError(f'unknown action {action!r}')
+        if employeeId is not None and employeeId not in self.db.employees:
+            raise RuntimeError(f'employeeId {employeeId} not in self.db.employees')
+
+        filterKwargs: dict = {}
+        if action is not None:
+            filterKwargs["action"] = action
+        if employeeId is not None:
+            filterKwargs["employeeId"] = employeeId
+        recs = self._filterProduction(startDate, endDate, **filterKwargs)
+
+        allEmps = employeeId is None
+        allActions = action is None
+
+        if allEmps and allActions:
+            title = "TKG Productivity by Employee"
+        elif allEmps:
+            title = f"TKG {action} Productivity by Employee"
+        elif allActions:
+            title = f"TKG Productivity: {self._employeeName(employeeId)}"
+        else:
+            title = f"TKG {action} Productivity: {self._employeeName(employeeId)}"
+        subtitle = f"{startDate.isoformat()} through {endDate.isoformat()}"
+
+        if len(recs) == 0:
+            self.setupPage()
+            self.drawTitle(title)
+            self.drawSubtitle(subtitle)
+            self.skipLines(2)
+            self.drawText("No production recorded in this range.")
+            self.nextPage()
+            self.pdf.save()
+            return
+
+        perAction: dict[str, tuple[float, float]] = {}
+        perEmployee: dict[int | None, tuple[float, float]] = {}
+        perEmpAction: dict[tuple[int | None, str], tuple[float, float]] = {}
+        perEmpActionTarget: dict[tuple[int | None, str, str],
+                                 tuple[float, float]] = {}
+        perEmpToolChangeShift: dict[tuple[int | None, int | None], float] = {}
+        totalQ = 0.0
+        totalH = 0.0
+        for r in recs:
+            a = r.action or ""
+            eid = r.employeeId
+            q = r.quantity or 0
+            h = r.hours
+            tn = r.targetName or ""
+            s = r.shift
+            totalQ += q
+            totalH += h
+            cq, ch = perAction.get(a, (0.0, 0.0))
+            perAction[a] = (cq + q, ch + h)
+            cq, ch = perEmployee.get(eid, (0.0, 0.0))
+            perEmployee[eid] = (cq + q, ch + h)
+            cq, ch = perEmpAction.get((eid, a), (0.0, 0.0))
+            perEmpAction[(eid, a)] = (cq + q, ch + h)
+            cq, ch = perEmpActionTarget.get((eid, a, tn), (0.0, 0.0))
+            perEmpActionTarget[(eid, a, tn)] = (cq + q, ch + h)
+            if a == "Tool Change":
+                perEmpToolChangeShift[(eid, s)] = (
+                    perEmpToolChangeShift.get((eid, s), 0.0) + h)
+
+        def fmtNum(x: float) -> str:
+            return f"{x:g}"
+
+        def empSortKey(eid):
+            emp = self.db.employees.get(eid)
+            if emp is None:
+                return (1, "", "", eid if eid is not None else 0)
+            return (0, (emp.lastName or "").lower(),
+                    (emp.firstName or "").lower(), eid or 0)
+
+        def shiftSortKey(s):
+            return (s is None, s or 0)
+
+        def renderSection(sectionName: str, rows: list[list[str]],
+                          headers: list[str],
+                          totalsRow: list[str] | None = None):
+            olen = len(rows)
+            while len(rows) > 0:
+                self.setupPage()
+                self.drawTitle(title)
+                self.drawSubtitle(subtitle)
+                self.skipLines(2)
+                self.drawSection(sectionName if len(rows) == olen
+                                 else f"{sectionName} -- Continued")
+                drawn = self.drawTable(rows, headers)
+                if drawn == len(rows) and totalsRow is not None:
+                    self.drawTable([], totalsRow)
+                rows = rows[drawn:]
+                self.nextPage()
+
+        # Aggregate overviews. Each is shown only when the dimension is
+        # actually multi-valued in the filtered recordset — a single-row
+        # summary table is just noise.
+        if allActions and len(perAction) > 1:
+            rows = []
+            for a in PRODUCTION_ACTIONS:
+                if a not in perAction:
+                    continue
+                q, h = perAction[a]
+                if PRODUCTION_ACTION_TARGET[a] == "":
+                    rows.append([a, "—", fmtNum(h), "—"])
+                else:
+                    rows.append([a, fmtNum(q), fmtNum(h), self._fmtRate(q, h)])
+            # Cross-action total: rate suppressed (would mix produced hours
+            # with Tool Change hours).
+            totalsRow = ["Total", "—", fmtNum(totalH), "—"]
+            renderSection("Summary by Action", rows,
+                          ["Action", "Quantity", "Hours", "Rate (per hr)"],
+                          totalsRow)
+
+        if allEmps and len(perEmployee) > 1:
+            sortedEmps = sorted(perEmployee.keys(), key=empSortKey)
+            rows = []
+            actionIsTC = (not allActions
+                          and PRODUCTION_ACTION_TARGET[action] == "")
+            for eid in sortedEmps:
+                q, h = perEmployee[eid]
+                if actionIsTC:
+                    rows.append([self._employeeName(eid), "—", fmtNum(h), "—"])
+                elif not allActions:
+                    rows.append([self._employeeName(eid), fmtNum(q),
+                                 fmtNum(h), self._fmtRate(q, h)])
+                else:
+                    # All actions — rate would mix Tool Change hours, leave "—".
+                    rows.append([self._employeeName(eid), fmtNum(q),
+                                 fmtNum(h), "—"])
+            if actionIsTC:
+                totalsRow = ["Total", "—", fmtNum(totalH), "—"]
+            elif not allActions:
+                totalsRow = ["Total", fmtNum(totalQ), fmtNum(totalH),
+                             self._fmtRate(totalQ, totalH)]
+            else:
+                totalsRow = ["Total", fmtNum(totalQ), fmtNum(totalH), "—"]
+            renderSection("Summary by Employee", rows,
+                          ["Employee", "Quantity", "Hours", "Rate (per hr)"],
+                          totalsRow)
+
+        # Detail sections.
+        def renderToolChangeDetail(eid, sectionName: str):
+            shiftKeys = sorted(
+                {s for (e, s) in perEmpToolChangeShift if e == eid},
+                key=shiftSortKey,
+            )
+            rows = []
+            empTotalH = 0.0
+            for s in shiftKeys:
+                h = perEmpToolChangeShift[(eid, s)]
+                empTotalH += h
+                lbl = str(s) if s is not None else "(none)"
+                rows.append([lbl, fmtNum(h)])
+            totalsRow = ["Total", fmtNum(empTotalH)]
+            renderSection(sectionName, rows, ["Shift", "Hours"], totalsRow)
+
+        def renderTargetDetail(eid, a: str, sectionName: str):
+            unit = PRODUCTION_TARGET_UNIT[PRODUCTION_ACTION_TARGET[a]]
+            targetsHere = sorted(
+                {tn for (e, ax, tn) in perEmpActionTarget
+                 if e == eid and ax == a}
+            )
+            rows = []
+            actionQ = 0.0
+            actionH = 0.0
+            for tn in targetsHere:
+                q, h = perEmpActionTarget[(eid, a, tn)]
+                actionQ += q
+                actionH += h
+                rows.append([tn, fmtNum(q), fmtNum(h), self._fmtRate(q, h)])
+            totalsRow = ["Total", fmtNum(actionQ), fmtNum(actionH),
+                         self._fmtRate(actionQ, actionH)]
+            renderSection(sectionName, rows,
+                          ["Target", f"Quantity ({unit})", "Hours",
+                           "Rate (per hr)"],
+                          totalsRow)
+
+        def actionsForEmployee(eid):
+            return [a for a in PRODUCTION_ACTIONS if (eid, a) in perEmpAction]
+
+        if allEmps:
+            sortedEmps = sorted(perEmployee.keys(), key=empSortKey)
+            for eid in sortedEmps:
+                empName = self._employeeName(eid)
+                for a in actionsForEmployee(eid):
+                    if PRODUCTION_ACTION_TARGET[a] == "":
+                        sectionName = (f"{empName} — Tool Change: Hours by Shift"
+                                       if allActions
+                                       else f"{empName}: Hours by Shift")
+                        renderToolChangeDetail(eid, sectionName)
+                    else:
+                        sectionName = (f"{empName} — {a}: by Target"
+                                       if allActions
+                                       else f"{empName}: by Target")
+                        renderTargetDetail(eid, a, sectionName)
+        else:
+            for a in actionsForEmployee(employeeId):
+                if PRODUCTION_ACTION_TARGET[a] == "":
+                    sectionName = ("Tool Change: Hours by Shift"
+                                   if allActions
+                                   else "Hours by Shift")
+                    renderToolChangeDetail(employeeId, sectionName)
+                else:
+                    sectionName = (f"{a}: by Target" if allActions
+                                   else "Summary by Target")
+                    renderTargetDetail(employeeId, a, sectionName)
+
+        self.pdf.save()
+
     def productionTrendReport(self, action: str,
                               targetName: str | None,
                               shift: int | None,

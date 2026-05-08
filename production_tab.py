@@ -492,6 +492,7 @@ class ProductionReportWindow(QWidget):
         "Per Target",
         "Per Employee",
         "Productivity",
+        "Employee Productivity",
         "Trend",
     ]
 
@@ -521,8 +522,8 @@ class ProductionReportWindow(QWidget):
 
         self.actionBox = QComboBox()
         self.actionBox.setEditable(False)
-        self.actionBox.addItems(PRODUCTION_ACTIONS)
         self.actionBox.currentTextChanged.connect(self._onActionChanged)
+        self._rebuildActionBox(includeAll=False)
 
         self.targetTypeBox = QComboBox()
         self.targetTypeBox.setEditable(False)
@@ -544,13 +545,7 @@ class ProductionReportWindow(QWidget):
 
         self.employeeBox = QComboBox()
         self.employeeBox.setEditable(False)
-        emps = list(self.mainApp.db.employees.values())
-        emps.sort(key=lambda e: (0 if e.status else 1,
-                                 (e.lastName or "").lower(),
-                                 (e.firstName or "").lower()))
-        for emp in emps:
-            suffix = "" if emp.status else " [inactive]"
-            self.employeeBox.addItem(_employeeLabel(emp) + suffix, userData=emp.idNum)
+        self._rebuildEmployeeBox(includeAll=False)
         if initialEmployeeId is not None:
             for i in range(self.employeeBox.count()):
                 if self.employeeBox.itemData(i) == initialEmployeeId:
@@ -629,12 +624,53 @@ class ProductionReportWindow(QWidget):
         for w in (self.targetNameLabel, self.targetNameBox):
             w.setVisible(hasTarget)
 
+    def _rebuildActionBox(self, includeAll: bool):
+        # The "All actions" entry is only meaningful for the Step 24 Employee
+        # Productivity report; other modes (Per Action, Productivity, Trend)
+        # require a specific action. Rebuild on every type change so a stale
+        # "All actions" selection can't leak into a mode that doesn't accept it.
+        prev = self.actionBox.currentData()
+        self.actionBox.blockSignals(True)
+        self.actionBox.clear()
+        if includeAll:
+            self.actionBox.addItem("All actions", userData=None)
+        for a in PRODUCTION_ACTIONS:
+            self.actionBox.addItem(a, userData=a)
+        for i in range(self.actionBox.count()):
+            if self.actionBox.itemData(i) == prev:
+                self.actionBox.setCurrentIndex(i)
+                break
+        self.actionBox.blockSignals(False)
+
+    def _rebuildEmployeeBox(self, includeAll: bool):
+        # Mirror of _rebuildActionBox: the "All employees" entry is only valid
+        # in Employee Productivity mode. Per Employee requires a specific id.
+        prev = self.employeeBox.currentData()
+        self.employeeBox.blockSignals(True)
+        self.employeeBox.clear()
+        if includeAll:
+            self.employeeBox.addItem("All employees", userData=None)
+        emps = list(self.mainApp.db.employees.values())
+        emps.sort(key=lambda e: (0 if e.status else 1,
+                                 (e.lastName or "").lower(),
+                                 (e.firstName or "").lower()))
+        for emp in emps:
+            suffix = "" if emp.status else " [inactive]"
+            self.employeeBox.addItem(_employeeLabel(emp) + suffix,
+                                     userData=emp.idNum)
+        for i in range(self.employeeBox.count()):
+            if self.employeeBox.itemData(i) == prev:
+                self.employeeBox.setCurrentIndex(i)
+                break
+        self.employeeBox.blockSignals(False)
+
     def _onTypeChanged(self, t: str):
         isProdLike = (t == "Productivity") or (t == "Trend")
-        showAction = (t == "Per Action") or isProdLike
+        isEmpProd = (t == "Employee Productivity")
+        showAction = (t == "Per Action") or isProdLike or isEmpProd
         showTargetType = (t == "Per Target")
         showTargetName = (t == "Per Target") or isProdLike
-        showEmployee = (t == "Per Employee")
+        showEmployee = (t == "Per Employee") or isEmpProd
         showShift = isProdLike
         for w in (self.actionLabel, self.actionBox):
             w.setVisible(showAction)
@@ -646,6 +682,11 @@ class ProductionReportWindow(QWidget):
             w.setVisible(showEmployee)
         for w in (self.shiftLabel, self.shiftBox):
             w.setVisible(showShift)
+        # Action + employee boxes carry an extra "All" entry only for
+        # Employee Productivity. Rebuild on every mode switch so the other
+        # modes (which require a specific selection) can't see it.
+        self._rebuildActionBox(includeAll=isEmpProd)
+        self._rebuildEmployeeBox(includeAll=isEmpProd)
         # Repopulate targetNameBox for the mode we're entering — each mode
         # fills it differently (Per Target plain names; Productivity / Trend
         # add "All" and follow the action).
@@ -697,6 +738,15 @@ class ProductionReportWindow(QWidget):
         if reportType in ("Productivity", "Trend") and action == "Tool Change":
             productivityTarget = None
 
+        # Employee Productivity: action and employee both accept None as
+        # "all". Read userData so the "All actions" / "All employees"
+        # sentinels cleanly map to None.
+        epAction: str | None = None
+        epEmployeeId: int | None = None
+        if reportType == "Employee Productivity":
+            epAction = self.actionBox.currentData()
+            epEmployeeId = self.employeeBox.currentData()
+
         # Trend reports need a window that fits the rolling-average lookback.
         # Mirrors TREND_MIN_RANGE_DAYS in report.py; the diff is
         # (min_days - 1) because both endpoints are inclusive.
@@ -722,6 +772,9 @@ class ProductionReportWindow(QWidget):
         elif reportType == "Productivity":
             pdf.productionProductivityReport(action, productivityTarget,
                                              productivityShift, startDate, endDate)
+        elif reportType == "Employee Productivity":
+            pdf.productionEmployeeProductivityReport(
+                epAction, epEmployeeId, startDate, endDate)
         elif reportType == "Trend":
             pdf.productionTrendReport(action, productivityTarget,
                                       productivityShift, startDate, endDate)
@@ -749,6 +802,11 @@ class ProductionReportWindow(QWidget):
             if productivityShift is not None:
                 parts.append(f"shift{productivityShift}")
             return "-".join(parts)
+        if reportType == "Employee Productivity":
+            aSlug = ("all" if action == "All actions"
+                     else action.lower().replace(" ", "-"))
+            eSlug = "all" if employeeId is None else f"emp{employeeId}"
+            return f"employee-productivity-{aSlug}-{eSlug}"
         return "production-report"
 
 
