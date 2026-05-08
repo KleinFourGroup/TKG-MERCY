@@ -1337,14 +1337,7 @@ class PDFReport:
                 if a not in perAction:
                     continue
                 q, h = perAction[a]
-                if PRODUCTION_ACTION_TARGET[a] == "":
-                    # Tool Change: Quantity column shows event count (one per
-                    # record); rate column stays "—" since there's no produced
-                    # quantity to rate against.
-                    rows.append([a, str(perActionCount.get(a, 0)),
-                                 fmtNum(h), "—"])
-                else:
-                    rows.append([a, fmtNum(q), fmtNum(h), self._fmtRate(q, h)])
+                rows.append([a, fmtNum(q), fmtNum(h), self._fmtRate(q, h)])
             # Cross-action total: rate suppressed (would mix produced hours
             # with Tool Change hours); Quantity also "—" because the column
             # mixes units across rows (drops, parts, count of changes).
