@@ -629,39 +629,57 @@ class ProductionReportWindow(QWidget):
         # Productivity report; other modes (Per Action, Productivity, Trend)
         # require a specific action. Rebuild on every type change so a stale
         # "All actions" selection can't leak into a mode that doesn't accept it.
-        prev = self.actionBox.currentData()
+        # In Employee-Productivity (includeAll=True) we default to the "All"
+        # entry rather than restoring the prior specific action — the broader
+        # report is what users want first; specific action is one click away.
+        # In other modes we restore the prior selection so re-entering the
+        # mode lands you back where you were.
         self.actionBox.blockSignals(True)
-        self.actionBox.clear()
         if includeAll:
+            self.actionBox.clear()
             self.actionBox.addItem("All actions", userData=None)
-        for a in PRODUCTION_ACTIONS:
-            self.actionBox.addItem(a, userData=a)
-        for i in range(self.actionBox.count()):
-            if self.actionBox.itemData(i) == prev:
-                self.actionBox.setCurrentIndex(i)
-                break
+            for a in PRODUCTION_ACTIONS:
+                self.actionBox.addItem(a, userData=a)
+            self.actionBox.setCurrentIndex(0)
+        else:
+            prev = self.actionBox.currentData()
+            self.actionBox.clear()
+            for a in PRODUCTION_ACTIONS:
+                self.actionBox.addItem(a, userData=a)
+            for i in range(self.actionBox.count()):
+                if self.actionBox.itemData(i) == prev:
+                    self.actionBox.setCurrentIndex(i)
+                    break
         self.actionBox.blockSignals(False)
 
     def _rebuildEmployeeBox(self, includeAll: bool):
         # Mirror of _rebuildActionBox: the "All employees" entry is only valid
         # in Employee Productivity mode. Per Employee requires a specific id.
-        prev = self.employeeBox.currentData()
+        # Same default-to-All-on-entry / restore-prev-otherwise rationale.
         self.employeeBox.blockSignals(True)
-        self.employeeBox.clear()
-        if includeAll:
-            self.employeeBox.addItem("All employees", userData=None)
         emps = list(self.mainApp.db.employees.values())
         emps.sort(key=lambda e: (0 if e.status else 1,
                                  (e.lastName or "").lower(),
                                  (e.firstName or "").lower()))
-        for emp in emps:
-            suffix = "" if emp.status else " [inactive]"
-            self.employeeBox.addItem(_employeeLabel(emp) + suffix,
-                                     userData=emp.idNum)
-        for i in range(self.employeeBox.count()):
-            if self.employeeBox.itemData(i) == prev:
-                self.employeeBox.setCurrentIndex(i)
-                break
+        if includeAll:
+            self.employeeBox.clear()
+            self.employeeBox.addItem("All employees", userData=None)
+            for emp in emps:
+                suffix = "" if emp.status else " [inactive]"
+                self.employeeBox.addItem(_employeeLabel(emp) + suffix,
+                                         userData=emp.idNum)
+            self.employeeBox.setCurrentIndex(0)
+        else:
+            prev = self.employeeBox.currentData()
+            self.employeeBox.clear()
+            for emp in emps:
+                suffix = "" if emp.status else " [inactive]"
+                self.employeeBox.addItem(_employeeLabel(emp) + suffix,
+                                         userData=emp.idNum)
+            for i in range(self.employeeBox.count()):
+                if self.employeeBox.itemData(i) == prev:
+                    self.employeeBox.setCurrentIndex(i)
+                    break
         self.employeeBox.blockSignals(False)
 
     def _onTypeChanged(self, t: str):

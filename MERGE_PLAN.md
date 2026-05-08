@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23, 25, and 26 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, and confirmed the spec for Step 24 — both landed same-day. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -560,6 +560,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 24 | ✅ Done | Merge plan Step 24: per-employee productivity report — see §13.12 |
 | 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
+| 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -767,6 +768,24 @@ Landed 2026-05-08. Third-round team feedback: users were persistently confusing 
 `productionProductivityReport`'s local `fmtRate` is left in place — refactoring it to call `self._fmtRate` is mechanical and out of scope for this step.
 
 [`smoke.py`](smoke.py)'s `production_report` seeds gained nonzero hours plus a Tool Change record, so the rate-on / rate-suppressed paths both render. Direct assertions on `_fmtRate(100, 4) == "25.00"`, `_fmtRate(100, 0) == "—"`, and `_fmtRate(0, 8) == "0.00"` cover the formatting contract since PDF binary content is otherwise opaque to smoke. All 16 smoke checks pass post-change.
+
+### 13.15 Step 27 — Employee Productivity polish ✅ Done
+
+Landed 2026-05-08, same-session follow-up to Step 24 after Matthew did a manual UI test of the Step 24 build and surfaced two paper-cuts.
+
+**Glitch 1: Action and Employee combos defaulted to the alphabetically-first specific entry instead of "All".** [`ProductionReportWindow._rebuildActionBox`](production_tab.py) and `_rebuildEmployeeBox` were preserving the prior `currentData()` selection across mode switches, so first-entry into Employee Productivity mode landed on whatever was selected before (typically "Batching" / first employee) — with the freshly-added "All" entry visible at index 0 but unselected.
+
+Fix: branch on `includeAll`. When entering Employee Productivity (`includeAll=True`), default to index 0 ("All actions" / "All employees") regardless of the prior selection — the broader report is the right first impression. When rebuilding for non-EP modes (`includeAll=False`), keep the existing restore-prev-selection behavior so e.g. switching from Productivity to Trend still preserves the action choice.
+
+**Glitch 2: Tool Change row in the "Summary by Action" overview showed `"—"` in the Quantity column.** Step 24 left the cell as `"—"` on the rationale that Tool Change has no produced quantity to report. But the team's natural read of that column for a Tool Change row is "how many tool changes happened" — i.e., the record count.
+
+Fix: aggregate `perActionCount` and `perEmpActionCount` (one increment per record) alongside the existing `perAction` / `perEmpAction` quantity-and-hours sums, then use those counts for Tool Change rows in the two overview tables — "Summary by Action" (Tool Change row) and "Summary by Employee" when `action == "Tool Change"` (every row). The "Summary by Employee" Total row when filtered to Tool Change uses `perActionCount["Tool Change"]` for the same purpose. Cross-action total rows still show `"—"` in Quantity because the column then mixes units across rows (drops + parts + parts + change-count); summing those is meaningless.
+
+Rate column is still `"—"` for Tool Change rows everywhere — the count *isn't* a rate-able quantity, and a per-hour rate of tool-change events isn't what the team is asking for.
+
+No smoke change required; existing `production_employee_productivity_report` already exercises every overview branch and only checks for non-empty PDF + no exception.
+
+**Not in scope.** The legacy `productionSummaryReport` (Step 12) renders Tool Change cells as `"0 (Xh)"` — also not great, but Matthew explicitly called out "the overview table when all is selected" which only the Step 24 EP report has. Leaving the Step 12 cell formatter alone until/unless the team flags it.
 
 ---
 

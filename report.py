@@ -1268,6 +1268,11 @@ class PDFReport:
         perEmpActionTarget: dict[tuple[int | None, str, str],
                                  tuple[float, float]] = {}
         perEmpToolChangeShift: dict[tuple[int | None, int | None], float] = {}
+        # Record counts per action / per (employee, action). Used in overview
+        # rows to give Tool Change a meaningful Quantity-column value (the
+        # number of tool change events) rather than "—".
+        perActionCount: dict[str, int] = {}
+        perEmpActionCount: dict[tuple[int | None, str], int] = {}
         totalQ = 0.0
         totalH = 0.0
         for r in recs:
@@ -1287,6 +1292,8 @@ class PDFReport:
             perEmpAction[(eid, a)] = (cq + q, ch + h)
             cq, ch = perEmpActionTarget.get((eid, a, tn), (0.0, 0.0))
             perEmpActionTarget[(eid, a, tn)] = (cq + q, ch + h)
+            perActionCount[a] = perActionCount.get(a, 0) + 1
+            perEmpActionCount[(eid, a)] = perEmpActionCount.get((eid, a), 0) + 1
             if a == "Tool Change":
                 perEmpToolChangeShift[(eid, s)] = (
                     perEmpToolChangeShift.get((eid, s), 0.0) + h)
@@ -1331,11 +1338,16 @@ class PDFReport:
                     continue
                 q, h = perAction[a]
                 if PRODUCTION_ACTION_TARGET[a] == "":
-                    rows.append([a, "—", fmtNum(h), "—"])
+                    # Tool Change: Quantity column shows event count (one per
+                    # record); rate column stays "—" since there's no produced
+                    # quantity to rate against.
+                    rows.append([a, str(perActionCount.get(a, 0)),
+                                 fmtNum(h), "—"])
                 else:
                     rows.append([a, fmtNum(q), fmtNum(h), self._fmtRate(q, h)])
             # Cross-action total: rate suppressed (would mix produced hours
-            # with Tool Change hours).
+            # with Tool Change hours); Quantity also "—" because the column
+            # mixes units across rows (drops, parts, count of changes).
             totalsRow = ["Total", "—", fmtNum(totalH), "—"]
             renderSection("Summary by Action", rows,
                           ["Action", "Quantity", "Hours", "Rate (per hr)"],
@@ -1349,7 +1361,10 @@ class PDFReport:
             for eid in sortedEmps:
                 q, h = perEmployee[eid]
                 if actionIsTC:
-                    rows.append([self._employeeName(eid), "—", fmtNum(h), "—"])
+                    # Tool Change: per-employee event count.
+                    count = perEmpActionCount.get((eid, action), 0)
+                    rows.append([self._employeeName(eid), str(count),
+                                 fmtNum(h), "—"])
                 elif not allActions:
                     rows.append([self._employeeName(eid), fmtNum(q),
                                  fmtNum(h), self._fmtRate(q, h)])
@@ -1358,7 +1373,9 @@ class PDFReport:
                     rows.append([self._employeeName(eid), fmtNum(q),
                                  fmtNum(h), "—"])
             if actionIsTC:
-                totalsRow = ["Total", "—", fmtNum(totalH), "—"]
+                totalsRow = ["Total",
+                             str(perActionCount.get(action, 0)),
+                             fmtNum(totalH), "—"]
             elif not allActions:
                 totalsRow = ["Total", fmtNum(totalQ), fmtNum(totalH),
                              self._fmtRate(totalQ, totalH)]
