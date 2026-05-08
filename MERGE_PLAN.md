@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-04-24. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, and 25 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, and 26 have landed. The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports, landed same day) to address persistent team confusion between the production and productivity reports. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -559,6 +559,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 23 | ✅ Done | Merge plan Step 23: production quantity positive check — see §13.11 |
 | 24 | ⏳ Deferred | per-employee reports (pending team confirmation) — see §13.12 |
 | 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
+| 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -705,7 +706,7 @@ Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`pla
 
 ### 13.13 Step 25 — confirm-on-close dialog (Save / Don't Save / Cancel) ✅ Done
 
-Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 25 for the shipped shape, the smoke-check factoring, and the Step 26 dirty-tracking follow-up.
+Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 25 for the shipped shape, the smoke-check factoring, and the dirty-tracking follow-up.
 
 *Planning notes (preserved; the spec they document shipped as-is).*
 
@@ -732,8 +733,21 @@ Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive
 **Verification.** New smoke check covers: (a) Save → event accepted + saveFile called, (b) Don't Save → event accepted + saveFile NOT called, (c) Cancel → event ignored, (d) no file loaded → event accepted without invoking the prompt.
 
 **Follow-up / known unknowns.**
-- **Step 26 — proper dirty tracking.** Flag per-mutation in every tab's edit/save path and `fileManager.saveFile` / `loadFile` clear it. Only prompt when the flag is set. Deferred per Matthew 2026-04-24.
-- **Never-saved empty DB edge case.** Current gate silently accepts close, so a user who entered a bunch of data but never saved-as will still lose it. Hand-in-hand with Step 26 (once dirty tracking exists, the gate becomes `dirty and (filePath is not None or hasAnyData)` with a save-as dialog for the filePath-None branch). Not worth the complexity on this first pass.
+- **Proper dirty tracking** (future step, number TBD — Step 26 originally floated here, now claimed by the rate-columns work in §13.14). Flag per-mutation in every tab's edit/save path and `fileManager.saveFile` / `loadFile` clear it. Only prompt when the flag is set. Deferred per Matthew 2026-04-24.
+- **Never-saved empty DB edge case.** Current gate silently accepts close, so a user who entered a bunch of data but never saved-as will still lose it. Hand-in-hand with the dirty-tracking work above (once dirty tracking exists, the gate becomes `dirty and (filePath is not None or hasAnyData)` with a save-as dialog for the filePath-None branch). Not worth the complexity on this first pass.
+
+### 13.14 Step 26 — rate columns on production reports ✅ Done
+
+Landed 2026-05-08. Third-round team feedback: users were persistently confusing the four "production" reports (Summary, Per Action, Per Target, Per Employee) with the productivity report and complaining that rate-per-hour was missing. Cheap fix per Matthew's call — push rate-per-hour into the production-family reports where the team is already looking, sidestepping a rename. Scope:
+
+- New [`PDFReport._fmtRate(q, h)`](report.py) class helper (`"—"` when `h <= 0`, else `f"{q/h:.2f}"`). Mirrors the local `fmtRate` already in `productionProductivityReport`.
+- New "Rate (per hr)" column in [`productionActionReport`](report.py) (targeted branch only; Tool Change branch is unchanged since it has no quantity), [`productionTargetReport`](report.py), and [`productionEmployeeReport`](report.py). Per-row rates use `_fmtRate`; per-action totals append the same.
+- [`productionSummaryReport`](report.py) cell formatter `_format(q, s, h, action)` extends its extras with `f"{q/h:.2f}/h"` — gated on `PRODUCTION_ACTION_TARGET[action] != "" and q > 0` so Tool Change cells / empty cells stay clean.
+- Tool Change rows in `productionEmployeeReport` and Tool Change action totals there render `"—"` for rate (action-targetless gate).
+
+`productionProductivityReport`'s local `fmtRate` is left in place — refactoring it to call `self._fmtRate` is mechanical and out of scope for this step.
+
+[`smoke.py`](smoke.py)'s `production_report` seeds gained nonzero hours plus a Tool Change record, so the rate-on / rate-suppressed paths both render. Direct assertions on `_fmtRate(100, 4) == "25.00"`, `_fmtRate(100, 0) == "—"`, and `_fmtRate(0, 8) == "0.00"` cover the formatting contract since PDF binary content is otherwise opaque to smoke. All 16 smoke checks pass post-change.
 
 ---
 

@@ -706,6 +706,11 @@ class PDFReport:
         first = emp.firstName or ""
         return f"{last} {first} ({employeeId})"
 
+    def _fmtRate(self, q: float, h: float) -> str:
+        if h <= 0:
+            return "—"
+        return f"{q / h:.2f}"
+
     def productionSummaryReport(self, startDate: datetime.date, endDate: datetime.date):
         recs = self._filterProduction(startDate, endDate)
 
@@ -730,7 +735,7 @@ class PDFReport:
             for a in PRODUCTION_ACTIONS
         ]
 
-        def _format(q: float, s: float, h: float) -> str:
+        def _format(q: float, s: float, h: float, action: str) -> str:
             if q == 0 and s == 0 and h == 0:
                 return "—"
             extras = []
@@ -738,11 +743,13 @@ class PDFReport:
                 extras.append(f"scrap: {s:g}")
             if h > 0:
                 extras.append(f"{h:g}h")
+                if PRODUCTION_ACTION_TARGET[action] != "" and q > 0:
+                    extras.append(f"{q / h:.2f}/h")
             return f"{q:g} ({', '.join(extras)})" if extras else f"{q:g}"
 
         def cell(eid, action) -> str:
             q, s, h = grid.get((eid, action), (0.0, 0.0, 0.0))
-            return _format(q, s, h)
+            return _format(q, s, h, action)
 
         data = [[self._employeeName(eid)] + [cell(eid, a) for a in PRODUCTION_ACTIONS]
                 for eid in sortedIds]
@@ -752,7 +759,7 @@ class PDFReport:
             tq = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[0] for eid in empIds)
             ts = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[1] for eid in empIds)
             th = sum(grid.get((eid, a), (0.0, 0.0, 0.0))[2] for eid in empIds)
-            totalsRow.append(_format(tq, ts, th))
+            totalsRow.append(_format(tq, ts, th, a))
 
         olen = len(data)
         rangeText = f"{startDate.isoformat()} through {endDate.isoformat()}"
@@ -798,7 +805,8 @@ class PDFReport:
 
         if hasTarget:
             headers = ["Date", "Shift", "Employee", targetLabel,
-                       f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
+                       f"Quantity ({unit})", f"Scrap ({unit})", "Hours",
+                       "Rate (per hr)"]
             data = [[
                 r.date.isoformat() if r.date else "",
                 str(r.shift) if r.shift is not None else "",
@@ -807,6 +815,7 @@ class PDFReport:
                 f"{r.quantity:g}" if r.quantity is not None else "",
                 f"{r.scrapQuantity:g}",
                 f"{r.hours:g}",
+                self._fmtRate(r.quantity or 0, r.hours),
             ] for r in recs]
         else:
             headers = ["Date", "Shift", "Employee",
@@ -845,7 +854,8 @@ class PDFReport:
                 if drawn == len(data):
                     if hasTarget:
                         self.drawTable([], ["", "", "", "Total",
-                                            f"{totalQ:g}", f"{totalS:g}", f"{totalH:g}"])
+                                            f"{totalQ:g}", f"{totalS:g}", f"{totalH:g}",
+                                            self._fmtRate(totalQ, totalH)])
                     else:
                         self.drawTable([], ["", "", "Total",
                                             f"{totalQ:g}", f"{totalH:g}"])
@@ -868,7 +878,8 @@ class PDFReport:
         targetLabel = "Mixture" if targetType == "mix" else "Part"
 
         headers = ["Date", "Shift", "Employee", "Action",
-                   f"Quantity ({unit})", f"Scrap ({unit})", "Hours"]
+                   f"Quantity ({unit})", f"Scrap ({unit})", "Hours",
+                   "Rate (per hr)"]
         data = [[
             r.date.isoformat() if r.date else "",
             str(r.shift) if r.shift is not None else "",
@@ -877,6 +888,7 @@ class PDFReport:
             f"{r.quantity:g}" if r.quantity is not None else "",
             f"{r.scrapQuantity:g}",
             f"{r.hours:g}",
+            self._fmtRate(r.quantity or 0, r.hours),
         ] for r in recs]
         olen = len(data)
 
@@ -908,7 +920,8 @@ class PDFReport:
                     for a in PRODUCTION_ACTIONS:
                         if a in perAction:
                             q, s, h = perAction[a]
-                            self.drawTable([], ["", "", "", f"Total {a}", f"{q:g}", f"{s:g}", f"{h:g}"])
+                            self.drawTable([], ["", "", "", f"Total {a}", f"{q:g}", f"{s:g}", f"{h:g}",
+                                                self._fmtRate(q, h)])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()
@@ -922,7 +935,15 @@ class PDFReport:
         recs.sort(key=lambda r: (r.date, r.shift if r.shift is not None else 0,
                                  r.action or "", r.targetName or ""))
 
-        headers = ["Date", "Shift", "Action", "Target", "Quantity", "Unit", "Scrap", "Hours"]
+        # Tool Change rows are targetless and have no produced quantity, so
+        # rate-per-hour is meaningless for them — render "—" rather than 0.00.
+        def rowRate(r) -> str:
+            if PRODUCTION_ACTION_TARGET.get(r.action or "", "") == "":
+                return "—"
+            return self._fmtRate(r.quantity or 0, r.hours)
+
+        headers = ["Date", "Shift", "Action", "Target", "Quantity", "Unit",
+                   "Scrap", "Hours", "Rate (per hr)"]
         data = [[
             r.date.isoformat() if r.date else "",
             str(r.shift) if r.shift is not None else "",
@@ -932,6 +953,7 @@ class PDFReport:
             PRODUCTION_TARGET_UNIT.get(r.targetType or "", ""),
             f"{r.scrapQuantity:g}",
             f"{r.hours:g}",
+            rowRate(r),
         ] for r in recs]
         olen = len(data)
 
@@ -969,8 +991,11 @@ class PDFReport:
                         if a in perAction:
                             q, s, h = perAction[a]
                             unit = PRODUCTION_TARGET_UNIT[PRODUCTION_ACTION_TARGET[a]]
+                            rate = ("—" if PRODUCTION_ACTION_TARGET[a] == ""
+                                    else self._fmtRate(q, h))
                             self.drawTable([], ["", "", f"Total {a}", "",
-                                                f"{q:g}", unit, f"{s:g}", f"{h:g}"])
+                                                f"{q:g}", unit, f"{s:g}", f"{h:g}",
+                                                rate])
                 data = data[drawn:]
                 self.nextPage()
         self.pdf.save()

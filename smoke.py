@@ -1000,9 +1000,13 @@ def production_report() -> list[str]:
         w.db.employees[emp.idNum] = emp
 
         d = datetime_date(2026, 4, 15)
-        for spec in [(d, 1, "Batching", "MixA", 7.5, 0),
-                     (d, 2, "Pressing", "PartA", 250.0, 3),
-                     (d, 3, "Finishing", "PartB", 125.5, 0)]:
+        # Hours nonzero so the Step 26 rate columns are exercised; the Tool
+        # Change record exercises the rate-suppressed path (no rate cell on
+        # targetless actions).
+        for spec in [(d, 1, "Batching", "MixA", 7.5, 0, 1.5),
+                     (d, 2, "Pressing", "PartA", 250.0, 3, 8.0),
+                     (d, 3, "Finishing", "PartB", 125.5, 0, 6.5),
+                     (d, 1, "Tool Change", "", 0, 0, 4.0)]:
             r = ProductionRecord()
             r.setRecord(emp.idNum, *spec)
             w.db.production[r.key()] = r
@@ -1019,6 +1023,7 @@ def production_report() -> list[str]:
             ("employee", lambda p: p.productionEmployeeReport(emp.idNum, start, end)),
             ("empty",   lambda p: p.productionSummaryReport(emptyStart, emptyEnd)),
         ]
+        pdf = None
         for name, fn in reports:
             tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
             tmpPdf.close()
@@ -1031,6 +1036,20 @@ def production_report() -> list[str]:
                 continue
             if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
                 errors.append(f"report {name} produced empty/missing file")
+
+        # Step 26: spot-check the rate helper directly. PDFReport methods are
+        # otherwise opaque (output is PDF binary), so this asserts the
+        # formatting contract that the report tables rely on.
+        if pdf is not None:
+            if pdf._fmtRate(100, 4) != "25.00":
+                errors.append(
+                    f"_fmtRate(100, 4) returned {pdf._fmtRate(100, 4)!r}, expected '25.00'")
+            if pdf._fmtRate(100, 0) != "—":
+                errors.append(
+                    f"_fmtRate(100, 0) returned {pdf._fmtRate(100, 0)!r}, expected '—'")
+            if pdf._fmtRate(0, 8) != "0.00":
+                errors.append(
+                    f"_fmtRate(0, 8) returned {pdf._fmtRate(0, 8)!r}, expected '0.00'")
     finally:
         if w is not None and w.fileManager.dbFile is not None:
             w.fileManager.dbFile.close()
