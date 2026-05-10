@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-08. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-09. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -562,6 +562,10 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 | 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
 | 28 | ⏳ Deferred | split `records.py` into a `records/` package (gated on team OK'ing Steps 24/26/27) — see §13.16 |
+| 29 | ⏳ Deferred | code hygiene sweep (5 mechanical fixes from §12.3 + recent steps) — see §13.17 |
+| 30 | ⏳ Deferred | selector helper widget (factor `ProductionReportWindow`'s combo logic) — see §13.18 |
+| 31 | ⏳ Deferred | split `smoke.py` into a `smoke/` package — see §13.19 |
+| 32 | ⏳ Deferred | split `file_manager.py` (mixin or pure-helper extraction) — see §13.20 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -823,7 +827,100 @@ records/
 1. Step 28 itself: create `records/` package, move classes, set up `__init__.py` re-exports, rewrite internal references inside `records/` to use intra-package imports. Smoke green. One commit.
 2. Optional Step 28.1 (low-priority cleanup): simplify the bundled `from records import (...)` sites in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports. Cosmetic; no rush.
 
-**Why not also split `report.py`?** Same length (1757 lines), harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until Step 28 lands and we see whether the smaller-files instinct still feels strong; that becomes a future Step 29 if so.
+**Why not also split `report.py`?** Same length (1757 lines), harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until Step 28 (and the intervening Steps 29-32 sketched below) land and we see whether the smaller-files instinct still feels strong; that becomes a future Step 33 if so.
+
+### 13.17 Step 29 — code hygiene sweep ⏳ Deferred
+
+**Status.** Sketched plan only — **gated on the team OK'ing Steps 24/26/27**, same as Step 28. Useful as a low-risk warmup once the reports are blessed, or interleavable with Step 28 if it makes sense to bundle.
+
+**Motivation.** Five mechanical fixes accumulated across [§12.3](#123-known-deferred-issues-visible-in-the-current-build) and the recent step commits. Bundling mirrors the Step 7c-1 / 7c-2 / 7c-3 pattern of focused mechanical sweeps.
+
+**Items.**
+1. **Delete [`mock_reports.py`](mock_reports.py).** Per §13.8 it was a Step 18 planning artifact, "deletable once the team picks a design." Steps 18 and 19 shipped; the artifact has done its job.
+2. **`productionProductivityReport`'s local `fmtRate` → `self._fmtRate`.** Step 26 introduced the class helper but called the older method's local copy out-of-scope. Two-line consolidation.
+3. **Bare `x == None` / `x != None` sweep.** §12.3 known deferred since Step 7c-3. Replace with `is None` / `is not None` — more Pythonic and marginally faster.
+4. **DeMorgan cleanup at [`file_manager.py:176`](file_manager.py:176) and [`:447`](file_manager.py:447).** §12.3 — `if not ((A is not None) and (B is not None)):` reads better as `if A is None or B is None:`. Style-only.
+5. **`MainTab` → `EmployeeOverviewTab` class rename.** Step 5 renamed the file; §12.3 notes the class kept its old name. Rename the class + update the handful of instantiation sites.
+
+**Risk.** Very low. Each item is well-scoped; smoke covers the rendering paths and `compile_all` catches missed references.
+
+**Verification.** smoke green.
+
+**Tentative commits.** One umbrella commit if all five fit cleanly; sub-number (29a, 29b, ...) if any one grows. Item #5 is the most likely candidate to split out since it touches multiple tab files.
+
+### 13.18 Step 30 — selector helper widget ⏳ Deferred
+
+**Status.** Sketched plan only. Most leverage AFTER Step 28 (records split) lands so any imports stay tidy from the start.
+
+**Motivation.** [`ProductionReportWindow`](production_tab.py)'s action / target / shift / employee combo logic is now used three ways for the productivity-family reports — Productivity, Trend, and Employee Productivity. Each shares pieces of the visibility logic in `_onTypeChanged` and the per-mode rebuild helpers (`_rebuildActionBox`, `_rebuildEmployeeBox`, `_rebuildProductivityTargets`). [§13.6](#136-step-19--trend-reports-graphs-30-day-rolling-averages-) hinted at the factor when Step 19 landed; we punted to ship. The case is stronger now that Step 24 added a third user — the next report variant the team asks for will benefit even more.
+
+**Tentative shape.** A `ProductionReportSelector(QWidget)` that takes a mode-spec at construction time and exposes resolved selections via properties:
+
+```python
+selector = ProductionReportSelector(
+    mainApp, fields={"action": "with-all", "employee": "with-all"},
+)
+selector.setMode(...)
+action = selector.action          # None for "All actions" else str
+employeeId = selector.employeeId  # None for "All employees" else int
+```
+
+The widget owns the combos, labels, visibility logic, and the rebuild-on-mode-change behavior currently spread across `ProductionReportWindow`. `ProductionReportWindow` becomes a thin shell that picks a mode and reads resolved values off the selector.
+
+**Risk.** Medium. The interaction state (target rebuilds when action changes, "All" sentinels per mode, initial-employeeId restore) is non-trivial; the refactor must preserve exact existing behavior. Best done as a behavior-equivalent refactor, then verified against smoke for every report path.
+
+**Verification.** smoke green. Manual UI sweep of each report mode (open dialog, switch types, generate one report per type) to confirm combo show/hide and selection persistence matches the pre-refactor build.
+
+**Open questions.**
+- Whether the helper lives in [`production_tab.py`](production_tab.py) or its own `production_report_selector.py`.
+- Whether to expose set/get methods or Qt signals for mode/value changes.
+
+### 13.19 Step 31 — `smoke.py` split ⏳ Deferred
+
+**Status.** Sketched plan only. Gated on Step 28 landing so the records-split pattern is established before applying it elsewhere.
+
+**Motivation.** [`smoke.py`](smoke.py) is 2058 lines: 17 check functions plus a `main()` dispatcher. Same package-with-re-exports trick that Step 28 will validate slices it cleanly by domain.
+
+**Proposed shape.**
+```
+smoke/
+  __init__.py     # re-exports each check function for backwards compat
+  __main__.py     # main() dispatcher (lets `python -m smoke` work)
+  records.py      # compile_all + roundtrip checks (empty, production, tool change, quantity validation)
+  migrations.py   # legacy_anika, legacy_becky, legacy_merge, mercy_v3_to_v4
+  reports.py      # production_report + the three productivity-family reports
+  ui.py           # production_refresh_on_delete, production_batch_roundtrip, qsettings_reopen, close_confirm
+```
+
+CLI invocation shifts from `./Scripts/python.exe smoke.py` to `./Scripts/python.exe -m smoke`. [`CONVENTIONS.md`](CONVENTIONS.md) "Baseline workflow" gets a one-line update.
+
+**Risk.** Low-medium. Check functions are independent; the main risks are shared module-level imports and the dispatcher's ordering (`compile_all` should still run first).
+
+**Verification.** smoke green via the new entry point.
+
+### 13.20 Step 32 — `file_manager.py` split ⏳ Deferred
+
+**Status.** Sketched plan only. Most-deferred among the proposed splits because `file_manager.py` is the most intertwined of the long files. Do AFTER Step 31 — and only if the smaller-files instinct still feels strong by then.
+
+**Motivation.** [`file_manager.py`](file_manager.py) is 1123 lines covering: init / open / setFile / loadFile / saveFile / per-version migrations (ANIKA, BECKY, MERCY) / cross-DB import. Splitting would benefit readability, but the methods are tightly cross-referencing — `loadFile` dispatches into per-version migrations; `saveFile` writes everything in one transaction; `setFile` sets up the WAL pragma.
+
+**Tentative shape — needs a closer read before committing.** One option: `FileManager` becomes a class assembled from per-domain mixins:
+```
+file_manager/
+  __init__.py     # FileManager = base + load + save + migrate + import (mixin composition)
+  base.py         # init, setFile, _connect, transaction plumbing
+  load.py         # loadFile + per-table readers
+  save.py         # saveFile + per-table writers
+  migrate.py      # ANIKA / BECKY / MERCY-version migrations
+  import_db.py    # cross-DB merge
+```
+Alternative: keep `FileManager` a single class and extract pure helpers (per-table readers/writers, migration helpers) into submodule-level functions. Decide after closer reading.
+
+**Risk.** Medium-high. `file_manager.py` is the data-integrity layer; a refactor that misorders save/load operations or breaks transaction boundaries could corrupt user DBs. Smoke's migration tests (`legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `mercy_v3_to_v4_migration`) are the primary safety net; they must stay green.
+
+**Verification.** smoke green PLUS a manual roundtrip against Matthew's real-world legacy DBs before shipping (load → save → reload, byte-compare populated tables — same fuzz_db.py technique used in Step 13).
+
+**Why this is hardest.** Unlike records / smoke, the boundary between init / load / save / migrate isn't clean — `load` and `migrate` co-mingle (`initFile` decides which migration to run based on schema sniffing); `save` calls into per-table writers; `setFile` triggers loads. A prep pass to map and document the cross-method dependencies would make the split safer; might be worth a Step 32a prep commit.
 
 ---
 
