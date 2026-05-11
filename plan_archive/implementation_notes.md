@@ -593,3 +593,29 @@ No smoke change required; existing `production_employee_productivity_report` alr
 
 *Known unknowns (at time of sketching).*
 - `ProductionTab` has a second entry-dialog-ish class starting around `production_tab.py:458` (not fully read during planning — it's about an "EmployeeBox + targetTypeBox + targetNameBox + actionBox" flow, so probably the "Quick Entry" alternative already). Worth skimming before starting: if it already does something batch-like, the new work may be incremental rather than greenfield.
+
+**Step 28 — split `records.py` into a `records/` package.** Landed 2026-05-11. Smoke 17 PASS pre- and post-change, on the first try. First of the deferred refactor backlog (Steps 28-32 sketched 2026-05-09).
+
+*Shape as shipped.* Old `records.py` (1738 lines) replaced by a four-file package:
+
+| File | Lines | Contents |
+|---|---|---|
+| `records/products.py` | 587 | `LBS_PER_TON`, `Material`, `Package`, `Mixture`, `Globals`, `Part`, `MaterialInventoryRecord`, `PartInventoryRecord`, `Inventory` |
+| `records/employees.py` | 598 | `Employee`, `EmployeeReview`, `EmployeeTrainingDate`, `EmployeePTORange`, `EmployeeNote`, `EmployeePoint`, `HolidayObservance`, `EmployeeReviewsDB`, `EmployeeTrainingDB`, `EmployeePointsDB`, `EmployeeNotesDB`, `EmployeePTODB`, `ObservancesDB` |
+| `records/production.py` | 86 | `ProductionRecord` |
+| `records/database.py` | 482 | `Database`, `emptyDB` (the orchestrator) |
+| `records/__init__.py` | 28 | Re-exports every name the old `records.py` exposed, including `LBS_PER_TON`. |
+
+Domain split matches the plan inventory exactly; line totals also matched the plan estimates (Products ~580/587, Employees ~595/598, Production ~83/86, Database ~466/482 — the slight overs on database.py are the new intra-package imports header).
+
+*Backwards compatibility.* `records/__init__.py` re-exports every name. All ~20 existing `from records import …` sites across `app.py`, the tab files, `file_manager.py`, `report.py`, `fuzz_db.py`, and `smoke.py` (including the bundled multi-line imports) kept working unchanged. No site outside the new package needed editing. Future code can import per-module (`from records.production import ProductionRecord`) but no rush — see Step 28.1 in §13.16.
+
+*Intra-package imports.* `records/database.py` is the only file with cross-domain imports — it pulls every model class from `records.products`, `records.employees`, `records.production` because `Database.__init__`'s parameter annotations reference all of them and parameter annotations *are* evaluated at class-body processing time. The other three files are self-contained within their domain (Inventory references MaterialInventoryRecord/PartInventoryRecord, EmployeePTODB references EmployeePointsDB, etc. — all intra-file).
+
+*Annotation gotcha that turned out not to matter.* Model classes have `self.db: Database | None = None` lines inside `__init__`, which look like they need `Database` in scope at instance-creation time. I dug into PEP 526 / CPython behavior before splitting and found that **Python does not evaluate annotations on complex targets** (i.e. `self.x: T = v` where the target is an attribute reference, not a bare name). Empirical check confirmed: `class A:` with `def __init__(self): self.x: Foo | None = None` instantiates without `Foo` ever being defined. So no string-forward-reference dance or `TYPE_CHECKING` block needed — the move was a pure file shuffle.
+
+*Dead import dropped.* The original `records.py` had `import sqlite3` at the top, unused. Not carried over.
+
+*Smoke.* All 17 checks green on the first run after the split. `compile_all` catches the cheap class of error (any broken `from records import X` line); the migration/roundtrip/report checks catch deeper structural breakage. Neither fired.
+
+*Deferred follow-up.* Step 28.1 (simplifying the bundled `from records import (X, Y, Z, ...)` lines in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports) is cosmetic and not urgent; left for a future hygiene pass.

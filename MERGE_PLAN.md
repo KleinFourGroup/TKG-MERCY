@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -561,7 +561,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 25 | ✅ Done | Merge plan Step 25: confirm-on-close dialog (Save / Don't Save / Cancel) — see §13.13 |
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 | 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
-| 28 | ⏳ Deferred | split `records.py` into a `records/` package (gated on team OK'ing Steps 24/26/27) — see §13.16 |
+| 28 | ✅ Done | Merge plan Step 28: split `records.py` into a `records/` package — see §13.16 |
 | 29 | ✅ Done | Merge plan Step 29: code hygiene sweep — see §13.17 |
 | 30 | ⏳ Deferred | selector helper widget (factor `ProductionReportWindow`'s combo logic) — see §13.18 |
 | 31 | ⏳ Deferred | split `smoke.py` into a `smoke/` package — see §13.19 |
@@ -656,42 +656,13 @@ Landed 2026-05-08. See [`plan_archive/implementation_notes.md`](plan_archive/imp
 
 Landed 2026-05-08, same-session follow-up to Step 24. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 27 for the two paper-cuts fixed (default-to-All on mode entry; Tool Change quantity rendered as record count in overview tables) and the rationale for the cross-action total dashes.
 
-### 13.16 Step 28 — split `records.py` into a `records/` package ⏳ Deferred
+### 13.16 Step 28 — split `records.py` into a `records/` package ✅ Done
 
-**Status.** Sketched plan only — **gated on the team OK'ing Steps 24/26/27**. Reorganizing while user-visible report changes might still need follow-ups would muddy `git blame` for no functional gain. Once the report changes are blessed, this is the next step.
+Landed 2026-05-11. Smoke 17 PASS pre- and post-change, on the first run. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 28 for the four-file shape (`products.py` / `employees.py` / `production.py` / `database.py`), the `__init__.py` re-export shim that keeps all ~20 existing `from records import X` sites working unchanged, and the annotation-evaluation gotcha that turned out not to matter (function-body annotations on complex targets like `self.db: Database | None = None` aren't evaluated at runtime, so there's no circular-import problem to manage).
 
-**Motivation.** [`records.py`](records.py) is 1738 lines. Most of it is independent class clusters that already align with the existing tab structure and the original ANIKA + BECKY split. Splitting into a package with one file per domain trims the scrolling cost and makes blame-on-class clearer without changing behavior.
+The follow-up Step 28.1 ("simplify the bundled `from records import (...)` lines in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports") was sketched in the original plan but is purely cosmetic and remains deferred.
 
-**Class inventory** (current [`records.py`](records.py)):
-
-| Domain | Approx. lines | Classes |
-|---|---|---|
-| Products | 8–591 (~580) | `Material`, `Package`, `Mixture`, `Globals`, `Part`, `MaterialInventoryRecord`, `PartInventoryRecord`, `Inventory` |
-| Employees | 592–1187 (~595) | `Employee`, `EmployeeReview`, `EmployeeTrainingDate`, `EmployeePTORange`, `EmployeeNote`, `EmployeePoint`, `HolidayObservance`, plus the per-employee `*DB` helpers (`EmployeeReviewsDB`, `EmployeeTrainingDB`, `EmployeePointsDB`, `EmployeeNotesDB`, `EmployeePTODB`, `ObservancesDB`) |
-| Production | 1188–1271 (~83) | `ProductionRecord` |
-| Shared | 1272–1738 (~466) | `Database`, `emptyDB` |
-
-**Proposed shape.**
-```
-records/
-  __init__.py       # re-exports everything records.py currently exports
-  products.py       # Products domain (~580 lines)
-  employees.py      # Employees domain (~595 lines)
-  production.py     # Production domain (~83 lines, room to grow)
-  database.py       # Database + emptyDB (the orchestrator)
-```
-
-**Backwards compatibility.** `records/__init__.py` re-exports every name `records.py` currently exports, so existing import sites — there are 23 of them across `app.py`, the tab files, `file_manager.py`, `report.py`, `fuzz_db.py`, and `smoke.py` — keep working unchanged. This commit is purely a file-shuffle plus the re-export shim. Future code can import more specifically (`from records.production import ProductionRecord`) if it wants; existing code stays put.
-
-**Risk.** Low. No behavior change; pure file move plus a re-export shim. Largest hazard is `Database`'s internal references to every model class — those become intra-package imports inside `records/database.py`. As long as `__init__.py` exports the same surface, nothing outside the package needs to know.
-
-**Verification.** [`smoke.py`](smoke.py) is the safety net — all 17 checks must stay green. `compile_all` catches any broken `from records import` line at import time; the migration / roundtrip / report checks catch any deeper structural breakage.
-
-**Tentative shape of the work.**
-1. Step 28 itself: create `records/` package, move classes, set up `__init__.py` re-exports, rewrite internal references inside `records/` to use intra-package imports. Smoke green. One commit.
-2. Optional Step 28.1 (low-priority cleanup): simplify the bundled `from records import (...)` sites in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports. Cosmetic; no rush.
-
-**Why not also split `report.py`?** Same length (1757 lines), harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until Step 28 (and the intervening Steps 29-32 sketched below) land and we see whether the smaller-files instinct still feels strong; that becomes a future Step 33 if so.
+**Why not also split `report.py`?** Same length, harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until the smaller-files instinct still feels strong after Steps 30/31/32 land; that becomes a future Step 33 if so.
 
 ### 13.17 Step 29 — code hygiene sweep ✅ Done
 
