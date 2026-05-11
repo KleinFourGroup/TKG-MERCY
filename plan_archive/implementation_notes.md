@@ -619,3 +619,31 @@ Domain split matches the plan inventory exactly; line totals also matched the pl
 *Smoke.* All 17 checks green on the first run after the split. `compile_all` catches the cheap class of error (any broken `from records import X` line); the migration/roundtrip/report checks catch deeper structural breakage. Neither fired.
 
 *Deferred follow-up.* Step 28.1 (simplifying the bundled `from records import (X, Y, Z, ...)` lines in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports) is cosmetic and not urgent; left for a future hygiene pass.
+
+**Step 30 — selector helper widget.** Landed 2026-05-11, immediately after Step 28. Smoke 17 PASS post-refactor; manual UI sweep across all seven report modes confirmed visibility / rebuild / selection-persistence behavior identical to the pre-refactor build.
+
+*Shape as shipped.* New file [`production_report_selector.py`](../production_report_selector.py) with a single `ProductionReportSelector(QWidget)` class. The five-combo cluster (action / targetType / targetName / shift / employee) plus their labels, the visibility logic, the rebuild-on-mode-change behavior, and the action→target cascade all live there. The selector is a sub-widget of `ProductionReportWindow`, placed as a single row in the parent's vertical layout between the date pickers and the Generate button.
+
+*API.* The parent constructs once with `mainApp` + an optional `initialEmployeeId`, then calls `setMode(reportType)` on every report-type-combo change. At click time, `generate()` reads resolved values via property getters:
+
+| Property | Returns |
+|---|---|
+| `action` | `currentData()` of action combo — `None` for "All actions" sentinel, specific action string otherwise. |
+| `actionText` | `currentText()` of action combo. Returns literal `"All actions"` when sentinel is selected. Used for `_defaultPrefix` slugging. |
+| `targetType` | `currentData()` of targetType combo (`"mix"` / `"part"`). |
+| `targetName` | Mode-dependent: `currentText()` for Per Target (always a specific name, no "All" entry); `currentData()` for Productivity/Trend (`None` for the "All" entry). Tool Change action forces `None` regardless of combo state. |
+| `targetNameText` | `currentText()` of target combo, unconditional. Used by `_defaultPrefix`. |
+| `shift` | `currentData()` of shift combo — `None` for "All shifts" sentinel. |
+| `employeeId` | `currentData()` of employee combo — `None` for "All employees" sentinel. |
+
+The mode-dependent branching in `targetName` is the one property where the selector hides asymmetry from the parent. Worth it: callers can just write `pdf.productionTargetReport(sel.targetType, sel.targetName, ...)` and `pdf.productionProductivityReport(sel.actionText, sel.targetName, sel.shift, ...)` without re-implementing the "is this Tool Change?" check at each call site.
+
+*Resolved open questions.*
+- **Separate file vs. inline in `production_tab.py`.** Picked separate file. `production_tab.py` was already 1177 lines pre-refactor — the selector adds ~270 lines of orthogonal logic, so splitting reads cleaner than further inflating production_tab. Also matches the precedent set by Step 28 (records package): when a chunk of logic has a clean conceptual boundary, give it its own file.
+- **Getter properties vs. Qt signals.** Picked getter properties. `ProductionReportWindow.generate()` reads everything at click time, not reactively — there's nothing to subscribe to. Signals would have added ceremony for no benefit. (If a future report variant needs to react to combo changes in real time, swap in `Signal(...)` then.)
+
+*Line-count impact.* `production_tab.py` dropped from 1177 → 983 lines (–194). `production_report_selector.py` is 270 lines new. `ProductionReportWindow` itself dropped from ~345 to ~150 lines, now strictly responsible for report-type dispatch + date validation + the Trend auto-widen rule + filename-prefix slugging. The combo plumbing it used to own is gone.
+
+*Smoke vs. manual.* The 17-check smoke battery only exercises the four report-rendering paths headlessly — it has no coverage for combo visibility, rebuild order, "All" sentinel handling, or selection persistence across mode switches. Those are the parts the refactor actually changed, so the manual UI sweep across all seven modes was the load-bearing verification (smoke staying green just confirmed no rendering-path regression).
+
+*Verification details (manual).* Each of the seven modes opened cleanly with the right combos visible / hidden; switching Productivity ↔ Trend preserved the action choice; switching into Employee Productivity defaulted to "All actions" / "All employees" even if specific selections had been made in other modes; switching out of Employee Productivity dropped the sentinels (rebuild semantics preserved); Tool Change action correctly hid the Target row in Productivity / Trend; filename prefixes on generated PDFs matched the pre-refactor format across all modes.

@@ -16,6 +16,7 @@ from report import PDFReport
 from utils import (
     widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen,
 )
+from production_report_selector import ProductionReportSelector
 
 
 def _employeeLabel(emp):
@@ -520,43 +521,7 @@ class ProductionReportWindow(QWidget):
         self.endDateEdit.setDisplayFormat("yyyy-MM-dd")
         self.endDateEdit.setDate(toQDate(initialEnd))
 
-        self.actionBox = QComboBox()
-        self.actionBox.setEditable(False)
-        self.actionBox.currentTextChanged.connect(self._onActionChanged)
-        self._rebuildActionBox(includeAll=False)
-
-        self.targetTypeBox = QComboBox()
-        self.targetTypeBox.setEditable(False)
-        self.targetTypeBox.addItem("Mixture", userData="mix")
-        self.targetTypeBox.addItem("Part", userData="part")
-        self.targetTypeBox.currentIndexChanged.connect(self._onTargetTypeChanged)
-
-        self.targetNameBox = QComboBox()
-        self.targetNameBox.setEditable(False)
-
-        # Shift filter for the Productivity report. "All" maps to None so the
-        # generate() dispatch can branch without sentinel strings.
-        self.shiftBox = QComboBox()
-        self.shiftBox.setEditable(False)
-        self.shiftBox.addItem("All shifts", userData=None)
-        self.shiftBox.addItem("1", userData=1)
-        self.shiftBox.addItem("2", userData=2)
-        self.shiftBox.addItem("3", userData=3)
-
-        self.employeeBox = QComboBox()
-        self.employeeBox.setEditable(False)
-        self._rebuildEmployeeBox(includeAll=False)
-        if initialEmployeeId is not None:
-            for i in range(self.employeeBox.count()):
-                if self.employeeBox.itemData(i) == initialEmployeeId:
-                    self.employeeBox.setCurrentIndex(i)
-                    break
-
-        self.actionLabel = QLabel("Action:")
-        self.targetTypeLabel = QLabel("Target type:")
-        self.targetNameLabel = QLabel("Target:")
-        self.employeeLabel = QLabel("Employee:")
-        self.shiftLabel = QLabel("Shift:")
+        self.selector = ProductionReportSelector(mainApp, initialEmployeeId)
 
         self.generateB = QPushButton("Generate")
         self.generateB.clicked.connect(self.generate)
@@ -565,155 +530,18 @@ class ProductionReportWindow(QWidget):
             [QLabel("Report type:"), self.typeBox],
             [QLabel("From:"), self.startDateEdit],
             [QLabel("To:"), self.endDateEdit],
-            [self.actionLabel, self.actionBox],
-            [self.targetTypeLabel, self.targetTypeBox],
-            [self.targetNameLabel, self.targetNameBox],
-            [self.shiftLabel, self.shiftBox],
-            [self.employeeLabel, self.employeeBox],
+            [self.selector],
             [self.generateB],
         ]
         widgetFromList(self, self.mainLayout)
 
-        self._onTargetTypeChanged(self.targetTypeBox.currentIndex())
         self._onTypeChanged(self.typeBox.currentText())
 
         centerOnScreen(self)
         self.show()
 
-    def _onTargetTypeChanged(self, _idx: int):
-        # Only the "Per Target" report uses the explicit targetType selector;
-        # in Productivity / Trend modes the target list is driven by the action
-        # instead (see _rebuildProductivityTargets).
-        if self.typeBox.currentText() in ("Productivity", "Trend"):
-            return
-        targetType = self.targetTypeBox.currentData()
-        self.targetNameBox.clear()
-        if targetType == "mix":
-            self.targetNameBox.addItems(sorted(self.mainApp.db.mixtures.keys()))
-        elif targetType == "part":
-            self.targetNameBox.addItems(sorted(self.mainApp.db.parts.keys()))
-
-    def _onActionChanged(self, _text: str):
-        if self.typeBox.currentText() in ("Productivity", "Trend"):
-            self._rebuildProductivityTargets()
-            self._applyProductivityVisibility()
-
-    def _rebuildProductivityTargets(self):
-        # Populates targetNameBox with an "All" entry + every mix/part of the
-        # action's target type. Tool Change is targetless and clears the box.
-        # Shared between the Productivity and Trend reports — the selector
-        # shape is identical.
-        action = self.actionBox.currentText()
-        targetType = PRODUCTION_ACTION_TARGET.get(action, "")
-        self.targetNameBox.clear()
-        if targetType == "":
-            return
-        self.targetNameBox.addItem("All", userData=None)
-        if targetType == "mix":
-            names = sorted(self.mainApp.db.mixtures.keys())
-        else:
-            names = sorted(self.mainApp.db.parts.keys())
-        for n in names:
-            self.targetNameBox.addItem(n, userData=n)
-
-    def _applyProductivityVisibility(self):
-        # Tool Change has no target, so hide the target row when that action
-        # is selected even in Productivity / Trend mode.
-        action = self.actionBox.currentText()
-        hasTarget = PRODUCTION_ACTION_TARGET.get(action, "") != ""
-        for w in (self.targetNameLabel, self.targetNameBox):
-            w.setVisible(hasTarget)
-
-    def _rebuildActionBox(self, includeAll: bool):
-        # The "All actions" entry is only meaningful for the Step 24 Employee
-        # Productivity report; other modes (Per Action, Productivity, Trend)
-        # require a specific action. Rebuild on every type change so a stale
-        # "All actions" selection can't leak into a mode that doesn't accept it.
-        # In Employee-Productivity (includeAll=True) we default to the "All"
-        # entry rather than restoring the prior specific action — the broader
-        # report is what users want first; specific action is one click away.
-        # In other modes we restore the prior selection so re-entering the
-        # mode lands you back where you were.
-        self.actionBox.blockSignals(True)
-        if includeAll:
-            self.actionBox.clear()
-            self.actionBox.addItem("All actions", userData=None)
-            for a in PRODUCTION_ACTIONS:
-                self.actionBox.addItem(a, userData=a)
-            self.actionBox.setCurrentIndex(0)
-        else:
-            prev = self.actionBox.currentData()
-            self.actionBox.clear()
-            for a in PRODUCTION_ACTIONS:
-                self.actionBox.addItem(a, userData=a)
-            for i in range(self.actionBox.count()):
-                if self.actionBox.itemData(i) == prev:
-                    self.actionBox.setCurrentIndex(i)
-                    break
-        self.actionBox.blockSignals(False)
-
-    def _rebuildEmployeeBox(self, includeAll: bool):
-        # Mirror of _rebuildActionBox: the "All employees" entry is only valid
-        # in Employee Productivity mode. Per Employee requires a specific id.
-        # Same default-to-All-on-entry / restore-prev-otherwise rationale.
-        self.employeeBox.blockSignals(True)
-        emps = list(self.mainApp.db.employees.values())
-        emps.sort(key=lambda e: (0 if e.status else 1,
-                                 (e.lastName or "").lower(),
-                                 (e.firstName or "").lower()))
-        if includeAll:
-            self.employeeBox.clear()
-            self.employeeBox.addItem("All employees", userData=None)
-            for emp in emps:
-                suffix = "" if emp.status else " [inactive]"
-                self.employeeBox.addItem(_employeeLabel(emp) + suffix,
-                                         userData=emp.idNum)
-            self.employeeBox.setCurrentIndex(0)
-        else:
-            prev = self.employeeBox.currentData()
-            self.employeeBox.clear()
-            for emp in emps:
-                suffix = "" if emp.status else " [inactive]"
-                self.employeeBox.addItem(_employeeLabel(emp) + suffix,
-                                         userData=emp.idNum)
-            for i in range(self.employeeBox.count()):
-                if self.employeeBox.itemData(i) == prev:
-                    self.employeeBox.setCurrentIndex(i)
-                    break
-        self.employeeBox.blockSignals(False)
-
     def _onTypeChanged(self, t: str):
-        isProdLike = (t == "Productivity") or (t == "Trend")
-        isEmpProd = (t == "Employee Productivity")
-        showAction = (t == "Per Action") or isProdLike or isEmpProd
-        showTargetType = (t == "Per Target")
-        showTargetName = (t == "Per Target") or isProdLike
-        showEmployee = (t == "Per Employee") or isEmpProd
-        showShift = isProdLike
-        for w in (self.actionLabel, self.actionBox):
-            w.setVisible(showAction)
-        for w in (self.targetTypeLabel, self.targetTypeBox):
-            w.setVisible(showTargetType)
-        for w in (self.targetNameLabel, self.targetNameBox):
-            w.setVisible(showTargetName)
-        for w in (self.employeeLabel, self.employeeBox):
-            w.setVisible(showEmployee)
-        for w in (self.shiftLabel, self.shiftBox):
-            w.setVisible(showShift)
-        # Action + employee boxes carry an extra "All" entry only for
-        # Employee Productivity. Rebuild on every mode switch so the other
-        # modes (which require a specific selection) can't see it.
-        self._rebuildActionBox(includeAll=isEmpProd)
-        self._rebuildEmployeeBox(includeAll=isEmpProd)
-        # Repopulate targetNameBox for the mode we're entering — each mode
-        # fills it differently (Per Target plain names; Productivity / Trend
-        # add "All" and follow the action).
-        if isProdLike:
-            self._rebuildProductivityTargets()
-            self._applyProductivityVisibility()
-        elif t == "Per Target":
-            self._onTargetTypeChanged(self.targetTypeBox.currentIndex())
-
+        self.selector.setMode(t)
         # Trend-specific default: widen to 90 days on mode entry if the
         # current range is narrower. The records-table default (30 days)
         # is right at the report's rejection floor and would give a
@@ -734,36 +562,15 @@ class ProductionReportWindow(QWidget):
             return
 
         reportType = self.typeBox.currentText()
-        action = self.actionBox.currentText()
-        targetType = self.targetTypeBox.currentData()
-        targetName = self.targetNameBox.currentText()
-        employeeId = self.employeeBox.currentData()
+        sel = self.selector
 
-        if reportType == "Per Target" and not targetName:
-            label = "mixtures" if targetType == "mix" else "parts"
+        if reportType == "Per Target" and not sel.targetName:
+            label = "mixtures" if sel.targetType == "mix" else "parts"
             errorMessage(self, [f"No {label} available to report on."])
             return
-        if reportType == "Per Employee" and employeeId is None:
+        if reportType == "Per Employee" and sel.employeeId is None:
             errorMessage(self, ["No employee selected."])
             return
-
-        # Productivity / Trend: read target as userData (None == "All"); read
-        # shift the same way. Tool Change forces target=None regardless of
-        # what the target combo happens to hold, since we hide the row for
-        # that action.
-        productivityTarget = self.targetNameBox.currentData()
-        productivityShift = self.shiftBox.currentData()
-        if reportType in ("Productivity", "Trend") and action == "Tool Change":
-            productivityTarget = None
-
-        # Employee Productivity: action and employee both accept None as
-        # "all". Read userData so the "All actions" / "All employees"
-        # sentinels cleanly map to None.
-        epAction: str | None = None
-        epEmployeeId: int | None = None
-        if reportType == "Employee Productivity":
-            epAction = self.actionBox.currentData()
-            epEmployeeId = self.employeeBox.currentData()
 
         # Trend reports need a window that fits the rolling-average lookback.
         # Mirrors TREND_MIN_RANGE_DAYS in report.py; the diff is
@@ -774,56 +581,55 @@ class ProductionReportWindow(QWidget):
             ])
             return
 
-        savePath = tempReportPath(self._defaultPrefix(
-            reportType, action, targetName, employeeId,
-            productivityTarget, productivityShift))
+        savePath = tempReportPath(self._defaultPrefix(reportType))
 
         pdf = PDFReport(self.mainApp.db, savePath)
         if reportType == "Production Summary":
             pdf.productionSummaryReport(startDate, endDate)
         elif reportType == "Per Action":
-            pdf.productionActionReport(action, startDate, endDate)
+            pdf.productionActionReport(sel.actionText, startDate, endDate)
         elif reportType == "Per Target":
-            pdf.productionTargetReport(targetType, targetName, startDate, endDate)
+            pdf.productionTargetReport(sel.targetType, sel.targetName,
+                                       startDate, endDate)
         elif reportType == "Per Employee":
-            pdf.productionEmployeeReport(employeeId, startDate, endDate)
+            pdf.productionEmployeeReport(sel.employeeId, startDate, endDate)
         elif reportType == "Productivity":
-            pdf.productionProductivityReport(action, productivityTarget,
-                                             productivityShift, startDate, endDate)
+            pdf.productionProductivityReport(sel.actionText, sel.targetName,
+                                             sel.shift, startDate, endDate)
         elif reportType == "Employee Productivity":
             pdf.productionEmployeeProductivityReport(
-                epAction, epEmployeeId, startDate, endDate)
+                sel.action, sel.employeeId, startDate, endDate)
         elif reportType == "Trend":
-            pdf.productionTrendReport(action, productivityTarget,
-                                      productivityShift, startDate, endDate)
+            pdf.productionTrendReport(sel.actionText, sel.targetName,
+                                      sel.shift, startDate, endDate)
         else:
             raise RuntimeError(f'unknown reportType {reportType!r}')
 
         startfile(savePath)
         self.close()
 
-    def _defaultPrefix(self, reportType, action, targetName, employeeId,
-                       productivityTarget=None, productivityShift=None) -> str:
+    def _defaultPrefix(self, reportType: str) -> str:
+        sel = self.selector
         if reportType == "Production Summary":
             return "production-summary"
         if reportType == "Per Action":
-            return f"production-{action.lower()}"
+            return f"production-{sel.actionText.lower()}"
         if reportType == "Per Target":
-            return f"production-{targetName or 'target'}"
+            return f"production-{sel.targetNameText or 'target'}"
         if reportType == "Per Employee":
-            return f"production-employee-{employeeId}"
+            return f"production-employee-{sel.employeeId}"
         if reportType in ("Productivity", "Trend"):
             prefix = "productivity" if reportType == "Productivity" else "trend"
-            parts = [prefix, action.lower().replace(" ", "-")]
-            if productivityTarget is not None:
-                parts.append(productivityTarget)
-            if productivityShift is not None:
-                parts.append(f"shift{productivityShift}")
+            parts = [prefix, sel.actionText.lower().replace(" ", "-")]
+            if sel.targetName is not None:
+                parts.append(sel.targetName)
+            if sel.shift is not None:
+                parts.append(f"shift{sel.shift}")
             return "-".join(parts)
         if reportType == "Employee Productivity":
-            aSlug = ("all" if action == "All actions"
-                     else action.lower().replace(" ", "-"))
-            eSlug = "all" if employeeId is None else f"emp{employeeId}"
+            aSlug = ("all" if sel.actionText == "All actions"
+                     else sel.actionText.lower().replace(" ", "-"))
+            eSlug = "all" if sel.employeeId is None else f"emp{sel.employeeId}"
             return f"employee-productivity-{aSlug}-{eSlug}"
         return "production-report"
 

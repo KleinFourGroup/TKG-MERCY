@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Step 30 (selector helper widget) landed same day, factoring the five-combo cluster out of `ProductionReportWindow` into a new `production_report_selector.py`. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -563,7 +563,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
 | 28 | ✅ Done | Merge plan Step 28: split `records.py` into a `records/` package — see §13.16 |
 | 29 | ✅ Done | Merge plan Step 29: code hygiene sweep — see §13.17 |
-| 30 | ⏳ Deferred | selector helper widget (factor `ProductionReportWindow`'s combo logic) — see §13.18 |
+| 30 | ✅ Done | Merge plan Step 30: selector helper widget — see §13.18 |
 | 31 | ⏳ Deferred | split `smoke.py` into a `smoke/` package — see §13.19 |
 | 32 | ⏳ Deferred | split `file_manager.py` (mixin or pure-helper extraction) — see §13.20 |
 
@@ -668,32 +668,9 @@ The follow-up Step 28.1 ("simplify the bundled `from records import (...)` lines
 
 Landed 2026-05-10 as one umbrella commit; 17 PASS pre- and post-change. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 29 for the five-item rundown — `mock_reports.py` deletion, `fmtRate` consolidation, `== None` sweep, DeMorgan cleanup, and the `MainTab` → `EmployeeDetailTab` rename (which deviated from the planned `EmployeeOverviewTab` due to a collision in `employees_tab.py`).
 
-### 13.18 Step 30 — selector helper widget ⏳ Deferred
+### 13.18 Step 30 — selector helper widget ✅ Done
 
-**Status.** Sketched plan only. Most leverage AFTER Step 28 (records split) lands so any imports stay tidy from the start.
-
-**Motivation.** [`ProductionReportWindow`](production_tab.py)'s action / target / shift / employee combo logic is now used three ways for the productivity-family reports — Productivity, Trend, and Employee Productivity. Each shares pieces of the visibility logic in `_onTypeChanged` and the per-mode rebuild helpers (`_rebuildActionBox`, `_rebuildEmployeeBox`, `_rebuildProductivityTargets`). [§13.6](#136-step-19--trend-reports-graphs-30-day-rolling-averages-) hinted at the factor when Step 19 landed; we punted to ship. The case is stronger now that Step 24 added a third user — the next report variant the team asks for will benefit even more.
-
-**Tentative shape.** A `ProductionReportSelector(QWidget)` that takes a mode-spec at construction time and exposes resolved selections via properties:
-
-```python
-selector = ProductionReportSelector(
-    mainApp, fields={"action": "with-all", "employee": "with-all"},
-)
-selector.setMode(...)
-action = selector.action          # None for "All actions" else str
-employeeId = selector.employeeId  # None for "All employees" else int
-```
-
-The widget owns the combos, labels, visibility logic, and the rebuild-on-mode-change behavior currently spread across `ProductionReportWindow`. `ProductionReportWindow` becomes a thin shell that picks a mode and reads resolved values off the selector.
-
-**Risk.** Medium. The interaction state (target rebuilds when action changes, "All" sentinels per mode, initial-employeeId restore) is non-trivial; the refactor must preserve exact existing behavior. Best done as a behavior-equivalent refactor, then verified against smoke for every report path.
-
-**Verification.** smoke green. Manual UI sweep of each report mode (open dialog, switch types, generate one report per type) to confirm combo show/hide and selection persistence matches the pre-refactor build.
-
-**Open questions.**
-- Whether the helper lives in [`production_tab.py`](production_tab.py) or its own `production_report_selector.py`.
-- Whether to expose set/get methods or Qt signals for mode/value changes.
+Landed 2026-05-11, immediately after Step 28. Smoke 17 PASS post-refactor; manual UI sweep across all seven modes confirmed visibility / rebuild / selection-persistence behavior identical to the pre-refactor build. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 30 for the shipped API shape, the two resolved open questions (separate file; getter properties not Qt signals), and the line-count savings.
 
 ### 13.19 Step 31 — `smoke.py` split ⏳ Deferred
 
