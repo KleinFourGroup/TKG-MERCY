@@ -23,6 +23,10 @@ from datetime import date as datetime_date
 
 
 def compile_all() -> list[str]:
+    """py_compile every .py at repo root (except smoke.py itself). Catches
+    syntax errors from mechanical rewrites (e.g. the Step 7c-1 / 7c-2 / 7c-3
+    sweeps and the Step 29 hygiene sweep) before the heavier checks try to
+    import them. ~1s."""
     errors = []
     for path in sorted(glob.glob("*.py")):
         if path == "smoke.py":
@@ -35,6 +39,11 @@ def compile_all() -> list[str]:
 
 
 def empty_roundtrip() -> list[str]:
+    """Build a fresh MainWindow against an empty DB, save to a tmp path, reload
+    into a second MainWindow, and assert all expected collections survive as
+    empty containers. Catches regressions in setFile / saveFile / loadFile for
+    the no-data case. Closes sqlite handles before os.unlink because Windows
+    file-locks open connections."""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
 

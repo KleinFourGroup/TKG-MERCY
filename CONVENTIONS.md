@@ -6,7 +6,7 @@
 
 ## Baseline workflow
 
-- **Run `smoke.py` at the start and end of any invasive step.** The twelve checks in `smoke.py` are the always-on regression net. Start-of-step confirms you're building on a clean base; end-of-step confirms you didn't break anything before you commit. Offscreen, fast (~few seconds total), so there's no excuse to skip it.
+- **Run `smoke.py` at the start and end of any invasive step.** All checks in `smoke.py` are the always-on regression net. Start-of-step confirms you're building on a clean base; end-of-step confirms you didn't break anything before you commit. Offscreen, fast (~few seconds total), so there's no excuse to skip it. Each check function carries a docstring describing what it covers — that's the live source of truth (the historical list in [`plan_archive/test_conventions.md`](plan_archive/test_conventions.md) is frozen at the eleven checks present at the 2026-04-22 split).
 - **Keep `fuzz_db.py` in sync as `records.py` / the schema evolves.** When a new record type lands or an existing one gains fields, update the fuzz generator so it continues to produce fully-populated DBs. Cataloged in `MERGE_PLAN.md` §13.8 as landed, but the tool is a live dependency of any report-stress or migration-rehearsal work — let it rot and the generated DBs quietly diverge from the real schema.
 
 ## Gotchas
