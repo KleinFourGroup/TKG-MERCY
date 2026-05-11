@@ -5,11 +5,11 @@ MERCY is a PySide6 + SQLite desktop app: a three-way merge of **ANIKA** (part co
 ## Read these first, cold, every session
 
 - **[`MERGE_PLAN.md`](MERGE_PLAN.md)** — authoritative plan doc. Start at **§12.1** (step status table) and **§13** (post-release feature backlog). Historical narratives live in [`plan_archive/`](plan_archive/).
-- **[`CONVENTIONS.md`](CONVENTIONS.md)** — live dev conventions and gotchas (smoke.py baseline, `fuzz_db.py` upkeep, headless Qt pitfalls).
+- **[`CONVENTIONS.md`](CONVENTIONS.md)** — live dev conventions and gotchas (smoke baseline, `fuzz_db.py` upkeep, headless Qt pitfalls).
 
 ## Baseline sanity check
 
-Run `./Scripts/python.exe smoke.py` at the start and end of any invasive change — the offscreen check battery runs in a few seconds and is the regression net. Each check function in `smoke.py` has a docstring describing what it covers.
+Run `./Scripts/python.exe -m smoke` at the start and end of any invasive change — the offscreen check battery runs in a few seconds and is the regression net. The `smoke/` package re-exports every check function; each carries a docstring describing what it covers.
 
 ## Workflow
 

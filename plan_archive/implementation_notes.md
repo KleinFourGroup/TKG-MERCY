@@ -647,3 +647,28 @@ The mode-dependent branching in `targetName` is the one property where the selec
 *Smoke vs. manual.* The 17-check smoke battery only exercises the four report-rendering paths headlessly — it has no coverage for combo visibility, rebuild order, "All" sentinel handling, or selection persistence across mode switches. Those are the parts the refactor actually changed, so the manual UI sweep across all seven modes was the load-bearing verification (smoke staying green just confirmed no rendering-path regression).
 
 *Verification details (manual).* Each of the seven modes opened cleanly with the right combos visible / hidden; switching Productivity ↔ Trend preserved the action choice; switching into Employee Productivity defaulted to "All actions" / "All employees" even if specific selections had been made in other modes; switching out of Employee Productivity dropped the sentinels (rebuild semantics preserved); Tool Change action correctly hid the Target row in Productivity / Trend; filename prefixes on generated PDFs matched the pre-refactor format across all modes.
+
+**Step 31 — `smoke.py` split.** Landed 2026-05-11, immediately after Step 30. CLI shifted from `./Scripts/python.exe smoke.py` to `./Scripts/python.exe -m smoke`; smoke 17 PASS via the new entry point.
+
+*Shape as shipped.* The 2068-line `smoke.py` replaced by a six-file package along the domain split called out in §13.19:
+
+| File | Contents | Funcs |
+|---|---|---|
+| `smoke/__init__.py` | Sets `QT_QPA_PLATFORM=offscreen` (must precede any Qt import), then re-exports every check function so `from smoke import production_report` still works. | — |
+| `smoke/__main__.py` | The `main()` dispatcher loop. Lets `python -m smoke` invoke the full battery. | — |
+| `smoke/records.py` | Schema + roundtrip checks. | `compile_all`, `empty_roundtrip`, `production_roundtrip`, `production_tool_change_roundtrip`, `production_quantity_validation` |
+| `smoke/migrations.py` | Legacy DB migration checks. | `legacy_anika_migration`, `legacy_becky_migration`, `legacy_merge`, `mercy_v3_to_v4_migration` |
+| `smoke/reports.py` | PDF rendering checks. | `production_report`, `production_productivity_report`, `production_employee_productivity_report`, `production_trend_report` |
+| `smoke/ui.py` | UI-path checks. | `production_refresh_on_delete`, `production_batch_roundtrip`, `qsettings_reopen`, `close_confirm` |
+
+The check-function bodies were relocated verbatim — they each inline their Qt / app / records imports inside the function body (the pattern that protects the offscreen-Qt requirement), so no per-function import surgery was needed. Module-level imports per submodule are just stdlib (`glob`, `os`, `py_compile`, `sys`, `tempfile`, `datetime`).
+
+*Mechanical splitter.* The relocation used a throwaway `_split_smoke.py` script that parses `smoke.py` via `ast`, finds each top-level function's `lineno → next_func.lineno` range, slices the lines verbatim, and writes each function into its assigned submodule. Sticking with raw line slicing (rather than reconstructing from the AST) preserved formatting, comments, and any quirks like trailing whitespace exactly. The script printed function counts per submodule as it ran — instant sanity check that nothing was dropped or duplicated. Deleted after the verification smoke passed; lives only in git history.
+
+*Bug surfaced + fixed.* The first run of `python -m smoke` after the relocation failed `legacy_becky_migration` with `NameError: name 'datetime_date' is not defined`. The throwaway splitter's per-submodule import dictionary had only added `from datetime import date as datetime_date` to `reports.py` and `ui.py` (where I'd spot-checked usage); it was actually used by all four submodules. Fixed the splitter dict and re-ran. Worth noting: smoke catching this is exactly why this was a "splitter + smoke" workflow rather than a "trust the splitter" workflow.
+
+*compile_all coverage gap (noted, not fixed).* `compile_all` lives in `smoke/records.py` now and still globs `*.py` from the current working directory, which only finds top-level files. After the Step 28 records split and now the Step 31 smoke split, syntax errors inside `records/*.py` or `smoke/*.py` would not be caught by `compile_all` directly — they'd surface when one of the other checks imports the broken package, which is good enough in practice (and how Step 31's verification actually worked). The function's docstring was updated to call out the transitive-coverage assumption. Removing the old `if path == "smoke.py": continue` dead clause (now-vestigial since the file no longer exists) was the only behavior change to `compile_all` itself. Extending coverage to walk the packages explicitly is a small follow-up but not urgent.
+
+*Docs updated.* CLAUDE.md "Baseline sanity check" and CONVENTIONS.md "Baseline workflow" + "Gotchas" sections all now reference `./Scripts/python.exe -m smoke` rather than the old file-style invocation. The historical archive note in `plan_archive/test_conventions.md` stays frozen at its 2026-04-22 11-check snapshot; CONVENTIONS.md flags the predate explicitly.
+
+*Step 28.1 also resolved.* The bundled multi-line `from records import (...)` block at the old `smoke.py`'s top went away in the split — each `smoke/` submodule's check functions inline the records imports they need at call time. So the Step 28.1 follow-up note (per-module imports in smoke.py) is satisfied by Step 31 for smoke specifically. The same follow-up for `fuzz_db.py` and `file_manager.py` remains open.

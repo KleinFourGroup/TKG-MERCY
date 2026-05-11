@@ -5,7 +5,7 @@
 **Author:** Matthew Kilgore  
 **Status:** Implementation complete — all 13 planned steps landed as of 2026-04-19, plus Step 9.5 (vestigial `Part` attribute cleanup). Step 7 was run as sub-steps (7a correctness → 7b signature → 7c-1 asserts → 7c-2 logging → 7c-3 polish → 7d double-negation → 7e window centering); Step 13 verified the build end-to-end against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog requested by the team during Step 13 is tracked in §13.
 
-**See also:** [`CONVENTIONS.md`](CONVENTIONS.md) — live dev conventions and gotchas (smoke.py baseline, `fuzz_db.py` upkeep, headless Qt + `Employee` construction pitfalls).
+**See also:** [`CONVENTIONS.md`](CONVENTIONS.md) — live dev conventions and gotchas (smoke baseline, `fuzz_db.py` upkeep, headless Qt + `Employee` construction pitfalls).
 
 ---
 
@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Step 30 (selector helper widget) landed same day, factoring the five-combo cluster out of `ProductionReportWindow` into a new `production_report_selector.py`. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Step 30 (selector helper widget) landed same day, factoring the five-combo cluster out of `ProductionReportWindow` into a new `production_report_selector.py`. Step 31 (smoke.py split) followed the same day, slicing the 2068-line `smoke.py` into a `smoke/` package along the records/migrations/reports/ui domain split called out in §13.19; CLI shifted to `./Scripts/python.exe -m smoke`. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -564,7 +564,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 28 | ✅ Done | Merge plan Step 28: split `records.py` into a `records/` package — see §13.16 |
 | 29 | ✅ Done | Merge plan Step 29: code hygiene sweep — see §13.17 |
 | 30 | ✅ Done | Merge plan Step 30: selector helper widget — see §13.18 |
-| 31 | ⏳ Deferred | split `smoke.py` into a `smoke/` package — see §13.19 |
+| 31 | ✅ Done | Merge plan Step 31: split `smoke.py` into a `smoke/` package — see §13.19 |
 | 32 | ⏳ Deferred | split `file_manager.py` (mixin or pure-helper extraction) — see §13.20 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -578,7 +578,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 
 ### 12.4 Test conventions used so far
 
-*Historical smoke-check list moved to [`plan_archive/test_conventions.md`](plan_archive/test_conventions.md) on 2026-04-22. Live dev conventions (always-on `smoke.py` baseline, `fuzz_db.py` upkeep, headless-construction gotchas) now live in [`CONVENTIONS.md`](CONVENTIONS.md) at repo root.*
+*Historical smoke-check list moved to [`plan_archive/test_conventions.md`](plan_archive/test_conventions.md) on 2026-04-22. Live dev conventions (always-on smoke baseline, `fuzz_db.py` upkeep, headless-construction gotchas) now live in [`CONVENTIONS.md`](CONVENTIONS.md) at repo root.*
 
 ### 12.5 Step 13 — end-to-end verification on real data (findings)
 
@@ -672,28 +672,9 @@ Landed 2026-05-10 as one umbrella commit; 17 PASS pre- and post-change. See [`pl
 
 Landed 2026-05-11, immediately after Step 28. Smoke 17 PASS post-refactor; manual UI sweep across all seven modes confirmed visibility / rebuild / selection-persistence behavior identical to the pre-refactor build. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 30 for the shipped API shape, the two resolved open questions (separate file; getter properties not Qt signals), and the line-count savings.
 
-### 13.19 Step 31 — `smoke.py` split ⏳ Deferred
+### 13.19 Step 31 — `smoke.py` split ✅ Done
 
-**Status.** Sketched plan only. Gated on Step 28 landing so the records-split pattern is established before applying it elsewhere.
-
-**Motivation.** [`smoke.py`](smoke.py) is 2058 lines: 17 check functions plus a `main()` dispatcher. Same package-with-re-exports trick that Step 28 will validate slices it cleanly by domain.
-
-**Proposed shape.**
-```
-smoke/
-  __init__.py     # re-exports each check function for backwards compat
-  __main__.py     # main() dispatcher (lets `python -m smoke` work)
-  records.py      # compile_all + roundtrip checks (empty, production, tool change, quantity validation)
-  migrations.py   # legacy_anika, legacy_becky, legacy_merge, mercy_v3_to_v4
-  reports.py      # production_report + the three productivity-family reports
-  ui.py           # production_refresh_on_delete, production_batch_roundtrip, qsettings_reopen, close_confirm
-```
-
-CLI invocation shifts from `./Scripts/python.exe smoke.py` to `./Scripts/python.exe -m smoke`. [`CONVENTIONS.md`](CONVENTIONS.md) "Baseline workflow" gets a one-line update.
-
-**Risk.** Low-medium. Check functions are independent; the main risks are shared module-level imports and the dispatcher's ordering (`compile_all` should still run first).
-
-**Verification.** smoke green via the new entry point.
+Landed 2026-05-11, immediately after Step 30. CLI shifted from `./Scripts/python.exe smoke.py` to `./Scripts/python.exe -m smoke`; CLAUDE.md and CONVENTIONS.md updated to match. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 31 for the four-file shape, the throwaway AST-based splitter that was used to relocate the 17 check functions verbatim, and the one fix that surfaced during verification (the original splitter under-imported `datetime_date` for two submodules; smoke caught it on the first run).
 
 ### 13.20 Step 32 — `file_manager.py` split ⏳ Deferred
 
