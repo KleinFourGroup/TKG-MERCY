@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-10. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-11. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -612,48 +612,7 @@ Landed 2026-04-24. See [`plan_archive/implementation_notes.md`](plan_archive/imp
 
 ### 13.6 Step 19 — trend reports (graphs, 30-day rolling averages) ✅ Done
 
-Landed 2026-04-24, back-to-back with Step 18. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 19 for the team spec as delivered, the layout shapes across all four selection combos + Tool Change, the rolling-mode flag surface, the sum-vs-mean call on Tool Change time-spent (open for team confirmation), and verification details.
-
-*Planning notes (preserved; the spec they document shipped as-is).*
-
-**Motivation.** Second half of the 2026-04-21 feedback; detailed spec received 2026-04-24. Team wants graph-based trend reports that show how rates move over longer windows (quarter to year) — complements Step 18's static-snapshot productivity tables. Distinct report type, not a graph-alongside-table hybrid.
-
-**Team spec (2026-04-24).**
-- **Selection.** Same shape as Step 18: action (required) + target (specific or "all") + shift (specific or "all") + user-picked date range. Reuse Step 18's selector once it lands.
-- **Range validation.** Reject date ranges shorter than 30 days — the 30-day rolling window can't be computed. Default range: 365 days (quarter-to-year is the expected usage; a sensible default matters here because tiny ranges are a real failure mode).
-- **Output is graph-only.** No tables. If the team wants numbers for the same window, they run the Step 18 productivity report.
-- **Graph shape.**
-  - *One graph per selected target*, y = 30-day rolling average of rate (qty/hr), x = date.
-  - *All shifts selected:* each graph shows one line per shift + an aggregate line across all shifts.
-  - *Specific shift selected:* each graph has a single line.
-  - *All targets selected:* lead with a graph of the total-aggregate rolling average across all targets; then one graph per target below it.
-- **Tool Change is special.** 30-day rolling average of *time spent*, not rate/hr. Target selector is moot (Tool Change is targetless per Step 22); shift selector still applies the same way.
-
-**Resolved design decisions.**
-| # | Question | Decision |
-|---|----------|----------|
-| 1 | Rolling average math | **Ratio of sums** over the 30-day window: `sum(qty in window) / sum(hours in window)`. Default. Matches Step 18's aggregation. Per Matthew 2026-04-24: also implement the alternative — mean of per-day rates, *excluding days with zero production* — and pick between them via a module-level flag in [report.py](report.py). Default is ratio-of-sums; flag lets us switch if the team prefers the other shape. |
-| 2 | Zero-production days | In per-day-mean mode, skip days where nothing was produced (don't drag the mean to zero). In ratio-of-sums mode this is automatically handled (zeros contribute zero to both numerator and denominator). |
-| 3 | Chart library | `reportlab.graphics.charts.lineplots.LinePlot`. Native to the stack, zero new deps, vector into the PDF. Matplotlib stays a latent escape hatch if the output aesthetics fall short. |
-| 4 | Chart-per-target layout | One chart per target, laid out sequentially. Leading aggregate chart when target=all. |
-| 5 | Deliverable | PDF only. No dashboard pivot. |
-
-**Tentative implementation sketch.**
-- Add `"Trend"` as a new entry in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`, after `"Productivity"`.
-- Reuse Step 18's selector UI (action/target/shift/range). Factor the selector into a small helper widget if practical — mutual reuse is the point.
-- Range-validate on Generate: if `(endDate - startDate).days < 30`, show an error dialog and don't render.
-- New `PDFReport.productionTrendReport(action, targetName|None, shift|None, startDate, endDate)` in [report.py](report.py). Branches on `action == "Tool Change"` for the time-spent variant.
-- New internal helper `PDFReport._rollingRate(records, windowDays=30, mode="ratioOfSums")` → list of `(date, rate)` points. `mode` is the module-level flag per decision 1. Callers pre-filter records by action/target/shift.
-- New chart helper `PDFReport.drawLinePlot(series, title, xLabel, yLabel)` where `series = [(label, [(date, y), ...]), ...]`. Mirrors `drawTable`'s API so a future chart helper can slot in the same way.
-- `fuzz_db.py`: add a `quarter` or `year` scale so trend reports have enough data to plot against. Alternative: document `fuzz_db.py --scale large` as the trend-report stress case.
-
-**Open questions.**
-- **Rolling-average flag surface.** Module-level constant in [report.py](report.py) vs. keyword arg on the report function. Matthew's "flag in the code" language (2026-04-24) suggests module-level is fine; confirm when writing the code.
-- **Chart styling tolerance.** reportlab native charts are frumpy-but-functional. Ship a first cut, get team feedback, then invest in tick customization / legend placement / color schemes. Matplotlib escape hatch stays on the shelf.
-
-**Verification.** Extend `smoke.py` with a trend-report smoke that renders against fuzz data covering at least 60 days. Assert: (a) rolling-average series length matches expected count; (b) both rate modes produce values without crashing; (c) sub-30-day range raises the expected error; (d) Tool Change branch renders time-spent lines. Use `mock_reports.py` for first-cut styling evaluation before wiring into the live pipeline.
-
-**Next session pickup.** Depends on Step 18 landing first (shared selector UI). Once 18 is green, start with `mock_reports.py` trend-graph exemplars; send the team a screenshot for styling sign-off; then wire into `PDFReport`.
+Landed 2026-04-24, back-to-back with Step 18. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 19 for the team spec as delivered, the layout shapes across all four selection combos + Tool Change, the rolling-mode flag surface, the sum-vs-mean call on Tool Change time-spent (open for team confirmation), and verification details. Pre-implementation planning notes preserved in the same archive entry under "Step 19 planning notes (preserved)".
 
 ### 13.7 Step 20 — remember last DB, prompt to reopen on startup ✅ Done
 
@@ -683,113 +642,19 @@ Landed 2026-04-24 alongside the second-feedback-round backlog refresh. See [`pla
 
 ### 13.12 Step 24 — per-employee productivity report ✅ Done
 
-Landed 2026-05-08, table-only first cut (Trend variant deferred — see open questions below). Team confirmed the spec in the third feedback round: the report covers all shifts unconditionally, with action and employee both filterable as "specific or all" and detailed breakdowns by part. Tool Change is included to preempt "Tool Change report missing" tickets when a specific employee is selected.
-
-**Shape as shipped.** New `PDFReport.productionEmployeeProductivityReport(action, employeeId, startDate, endDate)` in [`report.py`](report.py) where `action=None`/`employeeId=None` mean "all". Four selection-shape cases:
-
-| action | employee | Aggregate overview | Detail sections |
-|---|---|---|---|
-| specific | specific | (skipped — single employee × single action) | One section: Summary by Target (or Hours by Shift for Tool Change). |
-| specific | all | Summary by Employee | Per-employee sections, each Summary by Target (or Hours by Shift for Tool Change). |
-| all | specific | Summary by Action | Per-action sections, each Summary by Target (or Hours by Shift for Tool Change). |
-| all | all | Summary by Action **and** Summary by Employee (two stacked overview tables) | Per-employee sections, each containing per-action subsections (Summary by Target / Hours by Shift). |
-
-Tool Change rows in the overview tables show hours only with `"—"` in the rate column. Cross-action total rows also show `"—"` for rate, since mixing produced-action hours with Tool Change hours into a single denominator is misleading.
-
-**Selector wiring** ([`production_tab.py`](production_tab.py)). New `"Employee Productivity"` entry in `REPORT_TYPES` between `"Productivity"` and `"Trend"`. Action and Employee combos gain an `"All actions"` / `"All employees"` entry **only** in this mode — `_rebuildActionBox(includeAll)` and `_rebuildEmployeeBox(includeAll)` rebuild on every type-change so other modes (Per Action, Per Employee, Productivity, Trend) can never see the sentinel. Visibility: action + employee shown; target / target-type / shift hidden (covers all shifts unconditionally per team spec). `userData=None` on the "All" entries makes the dispatch a one-line `currentData()` read.
-
-**Smoke** ([`smoke.py`](smoke.py)). New `production_employee_productivity_report` exercises all four selection combos plus Tool Change × specific/all and the empty-range path. Two seeded employees with overlapping but non-identical action sets so the per-employee-aggregate and the per-action-detail both have variety. Now 17 checks green (was 16 after Step 26).
-
-**Deviations from §13.12's pre-confirmation skeleton** (preserved below). The pre-confirmation skeleton assumed *no* action/target/shift filters and that the report would always be all-action × all-target. Team's actual ask during confirmation broadened to **action filter (specific or all)** and stayed with **all shifts unconditionally** + **all targets unconditionally**. Tool Change inclusion was confirmed (skeleton had leaned skip). The Trend variant was held off this round — team hasn't put in enough data for trends to mean anything yet.
-
-**Open questions still open.**
-- **Trend variant.** Skeleton sketched a per-employee Trend report mirroring Step 19. Held off until the team has more longitudinal data; revisit in a future session.
-- **Vs.-fleet-average column.** Raised during Step 18 planning, not requested in this round either. Could land as a column on the per-target detail table or as a separate aggregate table; probably waits for the team to ask.
-- **Cross-action rate suppression.** Currently shows `"—"` when actions are mixed (overview Total row, all-actions per-employee row). Alternative: compute a rate excluding Tool Change hours. Not asked for; revisit if the team finds the dashes confusing.
-
-*Pre-confirmation planning notes (preserved for the record; the spec they document was tweaked when the team confirmed — see "Deviations" above).*
-
-**Status (pre-confirmation).** Skeleton plan only — **not approved by team yet.** Matthew (2026-04-24) thinks the team will want these once Steps 18/19 land, based on how they talk about the production data. Recorded here so the future work isn't a surprise; waiting on explicit team confirmation before building.
-
-**Motivation.** Step 18/19 reports slice by target/shift with per-employee rows as a drill-down. Per-employee reports invert that: pick an employee, see their whole production picture across all actions and targets. Matthew's read is that once the team sees 18/19 they'll ask for this, but it's better to confirm than to build speculatively.
-
-**Expected scope (Matthew's read, pending confirmation).**
-- **Two report types**, mirroring 18 and 19: a table-based *Employee Productivity* report and a graphical *Employee Trend* report.
-- **Selection.** Employee (required) + user-picked date range. No action/target/shift filters — the report is always all-action × all-target. *(Explicit exclusion: shift is not a filter here.)*
-- **Productivity variant (table).** Lead with one aggregate table per action (rows: action totals across all targets). Follow with per-target breakdown tables within each action. Tool Change gets its time-spent-only treatment (no rate/hr, no target rows since it's targetless per Step 22).
-- **Trend variant (graph).** 30-day rolling average per action. One graph per action, y = employee's rate/hr, x = date. Tool Change graph shows time-spent per period instead. Same rolling-average mode flag as Step 19.
-
-**Why deferred.**
-- Team hasn't actually asked for these; Matthew's inference. Building them speculatively risks missing what they actually want (which might be subtly different — e.g., the "employee vs. fleet average" comparison floated during earlier Step 18 planning but explicitly dropped from Step 18's 2026-04-24 scope).
-- Also: Steps 18 and 19 will exercise enough of the selector / aggregation / chart infrastructure that Step 24 becomes cheap after. No reason to build it out of order.
-
-**Tentative implementation shape (if approved as-sketched).**
-- Add `"Employee Productivity"` and `"Employee Trend"` as the 6th and 7th entries in [production_tab.py:489](production_tab.py:489)'s `REPORT_TYPES`.
-- Selector collapses to just the employee combo + date range. Hide action/target/shift widgets when these report types are selected.
-- `PDFReport.productionEmployeeProductivityReport(employeeId, startDate, endDate)` and `productionEmployeeTrendReport(employeeId, startDate, endDate)`. Both reuse the aggregation helpers and chart helper from Steps 18/19.
+Landed 2026-05-08, table-only first cut (Trend variant deferred). See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 24 for the shipped four-case shape, selector wiring, deviations from the pre-confirmation skeleton, and the pre-confirmation planning notes preserved alongside.
 
 ### 13.13 Step 25 — confirm-on-close dialog (Save / Don't Save / Cancel) ✅ Done
 
-Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 25 for the shipped shape, the smoke-check factoring, and the dirty-tracking follow-up.
-
-*Planning notes (preserved; the spec they document shipped as-is).*
-
-**Motivation.** Team feedback 2026-04-24 right after Step 19 landed. MERCY currently exits with no prompt — a user who made edits and forgot to save loses them. Every desktop app in the team's working memory prompts on close; MERCY should too.
-
-**Scope (first pass — no dirty tracking).**
-- Override `MainWindow.closeEvent`. When a DB file is loaded (`fileManager.filePath is not None`), show a three-button `QMessageBox.warning`: **Save** / **Don't Save** / **Cancel**, defaulting to Save.
-  - *Save:* call `fileManager.saveFile()` directly (bypassing `MainWindow.save()`'s "Save successful!" info popup — closing the app shouldn't be a two-click flow), then accept the event.
-  - *Don't Save:* accept the event.
-  - *Cancel* (or the dialog's X): ignore the event, keep the window open.
-- No prompt when `filePath is None` — a never-saved empty DB has nowhere to save to, so prompting there would be noise. Accept the close.
-- Factor the prompt call into a small `MainWindow._confirmCloseChoice()` helper so `smoke.py` can swap the return value without monkeypatching `QMessageBox` globally.
-
-**Decisions (resolved pre-implementation, per Matthew 2026-04-24).**
-- **No dirty tracking yet.** The "correct" design tracks mutations across every tab + dialog + model and only prompts if something actually changed; invasive. Matthew's call: ship the always-prompt version first ("most of them don't save their work until the very end anyway"); revisit with a proper dirty flag later if the nag becomes painful.
-- **Gate on `filePath`, not on `self.db` contents.** Consistent with how `saveButton` is enabled.
-- **Save in the close flow doesn't chain through `MainWindow.save()`.** That method exists for explicit save-button clicks and pops its own success modal. The close-flow save is silent by design — dialog → save → exit.
-
-**Scope as planned.**
-- [`app.py`](app.py) — `MainWindow.closeEvent(event)` override + `_confirmCloseChoice()` helper.
-- [`smoke.py`](smoke.py) — new `close_confirm` check. Stubs `_confirmCloseChoice` to each of the three `StandardButton` values, fires `closeEvent`, asserts event accepted/ignored correctly and that `saveFile` fires only on the Save branch. Also the no-file case (event accepted without any prompt call).
-- No schema change. No `fuzz_db.py` change.
-
-**Verification.** New smoke check covers: (a) Save → event accepted + saveFile called, (b) Don't Save → event accepted + saveFile NOT called, (c) Cancel → event ignored, (d) no file loaded → event accepted without invoking the prompt.
-
-**Follow-up / known unknowns.**
-- **Proper dirty tracking** (future step, number TBD — Step 26 originally floated here, now claimed by the rate-columns work in §13.14). Flag per-mutation in every tab's edit/save path and `fileManager.saveFile` / `loadFile` clear it. Only prompt when the flag is set. Deferred per Matthew 2026-04-24.
-- **Never-saved empty DB edge case.** Current gate silently accepts close, so a user who entered a bunch of data but never saved-as will still lose it. Hand-in-hand with the dirty-tracking work above (once dirty tracking exists, the gate becomes `dirty and (filePath is not None or hasAnyData)` with a save-as dialog for the filePath-None branch). Not worth the complexity on this first pass.
+Landed 2026-04-24, back-to-back with Steps 18/19 and Step 23. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 25 for the shipped shape, the smoke-check factoring, and the dirty-tracking follow-up. Pre-implementation planning notes preserved in the same archive entry under "Step 25 planning notes (preserved)".
 
 ### 13.14 Step 26 — rate columns on production reports ✅ Done
 
-Landed 2026-05-08. Third-round team feedback: users were persistently confusing the four "production" reports (Summary, Per Action, Per Target, Per Employee) with the productivity report and complaining that rate-per-hour was missing. Cheap fix per Matthew's call — push rate-per-hour into the production-family reports where the team is already looking, sidestepping a rename. Scope:
-
-- New [`PDFReport._fmtRate(q, h)`](report.py) class helper (`"—"` when `h <= 0`, else `f"{q/h:.2f}"`). Mirrors the local `fmtRate` already in `productionProductivityReport`.
-- New "Rate (per hr)" column in [`productionActionReport`](report.py) (targeted branch only; Tool Change branch is unchanged since it has no quantity), [`productionTargetReport`](report.py), and [`productionEmployeeReport`](report.py). Per-row rates use `_fmtRate`; per-action totals append the same.
-- [`productionSummaryReport`](report.py) cell formatter `_format(q, s, h, action)` extends its extras with `f"{q/h:.2f}/h"` — gated on `PRODUCTION_ACTION_TARGET[action] != "" and q > 0` so Tool Change cells / empty cells stay clean.
-- Tool Change rows in `productionEmployeeReport` and Tool Change action totals there render `"—"` for rate (action-targetless gate).
-
-`productionProductivityReport`'s local `fmtRate` is left in place — refactoring it to call `self._fmtRate` is mechanical and out of scope for this step.
-
-[`smoke.py`](smoke.py)'s `production_report` seeds gained nonzero hours plus a Tool Change record, so the rate-on / rate-suppressed paths both render. Direct assertions on `_fmtRate(100, 4) == "25.00"`, `_fmtRate(100, 0) == "—"`, and `_fmtRate(0, 8) == "0.00"` cover the formatting contract since PDF binary content is otherwise opaque to smoke. All 16 smoke checks pass post-change.
+Landed 2026-05-08. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 26 for the rationale (team confusion between production and productivity reports), the new `_fmtRate` helper, the per-report column additions, and the Tool-Change-suppression gating.
 
 ### 13.15 Step 27 — Employee Productivity polish ✅ Done
 
-Landed 2026-05-08, same-session follow-up to Step 24 after Matthew did a manual UI test of the Step 24 build and surfaced two paper-cuts.
-
-**Glitch 1: Action and Employee combos defaulted to the alphabetically-first specific entry instead of "All".** [`ProductionReportWindow._rebuildActionBox`](production_tab.py) and `_rebuildEmployeeBox` were preserving the prior `currentData()` selection across mode switches, so first-entry into Employee Productivity mode landed on whatever was selected before (typically "Batching" / first employee) — with the freshly-added "All" entry visible at index 0 but unselected.
-
-Fix: branch on `includeAll`. When entering Employee Productivity (`includeAll=True`), default to index 0 ("All actions" / "All employees") regardless of the prior selection — the broader report is the right first impression. When rebuilding for non-EP modes (`includeAll=False`), keep the existing restore-prev-selection behavior so e.g. switching from Productivity to Trend still preserves the action choice.
-
-**Glitch 2: Tool Change row in the "Summary by Action" overview showed `"—"` in the Quantity column.** Step 24 left the cell as `"—"` on the rationale that Tool Change has no produced quantity to report. But the team's natural read of that column for a Tool Change row is "how many tool changes happened" — i.e., the record count.
-
-Fix: aggregate `perActionCount` and `perEmpActionCount` (one increment per record) alongside the existing `perAction` / `perEmpAction` quantity-and-hours sums, then use those counts for Tool Change rows in the two overview tables — "Summary by Action" (Tool Change row) and "Summary by Employee" when `action == "Tool Change"` (every row). The "Summary by Employee" Total row when filtered to Tool Change uses `perActionCount["Tool Change"]` for the same purpose. Cross-action total rows still show `"—"` in Quantity because the column then mixes units across rows (drops + parts + parts + change-count); summing those is meaningless.
-
-Rate column is still `"—"` for Tool Change rows everywhere — the count *isn't* a rate-able quantity, and a per-hour rate of tool-change events isn't what the team is asking for.
-
-No smoke change required; existing `production_employee_productivity_report` already exercises every overview branch and only checks for non-empty PDF + no exception.
-
-**Not in scope.** The legacy `productionSummaryReport` (Step 12) renders Tool Change cells as `"0 (Xh)"` — also not great, but Matthew explicitly called out "the overview table when all is selected" which only the Step 24 EP report has. Leaving the Step 12 cell formatter alone until/unless the team flags it.
+Landed 2026-05-08, same-session follow-up to Step 24. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 27 for the two paper-cuts fixed (default-to-All on mode entry; Tool Change quantity rendered as record count in overview tables) and the rationale for the cross-action total dashes.
 
 ### 13.16 Step 28 — split `records.py` into a `records/` package ⏳ Deferred
 
@@ -830,16 +695,7 @@ records/
 
 ### 13.17 Step 29 — code hygiene sweep ✅ Done
 
-Landed 2026-05-10 as one umbrella commit. All five mechanical fixes from the original sketch bundled cleanly; smoke stayed 17 PASS pre- and post-change.
-
-**Items shipped.**
-1. **Deleted [`mock_reports.py`](mock_reports.py)** plus its now-orphan `mock_reports/` output directory and the matching `.gitignore` entry.
-2. **`productionProductivityReport`'s local `fmtRate` → `self._fmtRate`** — removed the local def and rewrote 6 call sites in [`report.py`](report.py).
-3. **Bare `== None` sweep** — replaced across 15 first-party files (~45 sites). No `!= None` in first-party code. Records.py's `RuntimeError('idNum == None or idNum >= 0')` message was updated alongside the condition to stay in sync.
-4. **DeMorgan cleanup in [`file_manager.py`](file_manager.py)** — plan called out two sites (`:176` and `:447`); actual count after intervening changes was three (`saveFile`, `loadFile`, `_loadIntoDb`). All three cleaned to `if X is None or Y is None:` form for consistency; RuntimeError messages updated to drop the redundant parens but kept as the positive assertion per Step 7c-1 convention.
-5. **`MainTab` → `EmployeeDetailTab` class rename + file rename `employee_overview_tab.py` → `employee_detail_tab.py`** — **not `EmployeeOverviewTab` as originally planned**. During the rename, discovered `employees_tab.py` already has a class named `EmployeeOverviewTab` (the Employee List roster), so the plan's proposed name would have created a collision. `EmployeeDetailTab` better matches what the class actually is anyway: the per-employee drill-down tab with the employeePicker + Reviews / Training / PTO / Notes / Points subtabs. (Curiously, the Step 5 implementation note in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) already prefigured `EmployeeDetailTab` as the right alternative if the simpler name proved unavailable.) Class def now in [`employee_detail_tab.py`](employee_detail_tab.py); instantiation in [`app.py`](app.py); import + type-annotation sites in `holidays_tab.py`, `notes_tab.py`, `points_tab.py`, `pto_tab.py`, `reviews_tab.py`, `training_tab.py`. The `mainTab` parameter / `self.mainTab` attribute names were left alone (out of plan scope).
-
-**Open follow-up.** `employees_tab.py`'s `EmployeeOverviewTab` is mis-named relative to its actual role (it renders the Employee List roster, not an overview). A future tidy step could rename it to `EmployeeListTab` to match the tab label. Not urgent; flagged for the next backlog refresh.
+Landed 2026-05-10 as one umbrella commit; 17 PASS pre- and post-change. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 29 for the five-item rundown — `mock_reports.py` deletion, `fmtRate` consolidation, `== None` sweep, DeMorgan cleanup, and the `MainTab` → `EmployeeDetailTab` rename (which deviated from the planned `EmployeeOverviewTab` due to a collision in `employees_tab.py`).
 
 ### 13.18 Step 30 — selector helper widget ⏳ Deferred
 
@@ -914,49 +770,6 @@ Alternative: keep `FileManager` a single class and extract pure helpers (per-tab
 **Verification.** smoke green PLUS a manual roundtrip against Matthew's real-world legacy DBs before shipping (load → save → reload, byte-compare populated tables — same fuzz_db.py technique used in Step 13).
 
 **Why this is hardest.** Unlike records / smoke, the boundary between init / load / save / migrate isn't clean — `load` and `migrate` co-mingle (`initFile` decides which migration to run based on schema sniffing); `save` calls into per-table writers; `setFile` triggers loads. A prep pass to map and document the cross-method dependencies would make the split safer; might be worth a Step 32a prep commit.
-
----
-
-Original plan for Step 16 (pre-dated by Step 17) preserved below for reference.
-
-
-
-**Motivation.** Team reported that entering production records one at a time via the single-record dialog will be cumbersome when the floor logs dozens per day. Team proposed: shared date + action at the top of a dialog, then N rows of `(employee, target, quantity, scrap)` below, plus an "add row" button.
-
-**Scope.** New `ProductionBatchDialog` in `production_tab.py`, reachable from a new "Batch Entry" button on the `ProductionTab` toolbar alongside whatever triggers `ProductionEntryDialog` today. The existing single-record `ProductionEntryDialog` stays as "Quick Entry" (cheap to keep, still preferable for one-off edits).
-
-**Layout.**
-```
-┌─────────────────────────────────────────────────┐
-│  Date: [____]    Action: [ Pressing     ▾]      │   ← shared header
-├─────────────────────────────────────────────────┤
-│  Employee ▾   Target ▾   Qty   Scrap   Shift ▾   ✕│  ← row 1
-│  Employee ▾   Target ▾   Qty   Scrap   Shift ▾   ✕│  ← row 2
-│  ...                                             │
-│  [+ Add row]                                     │
-├─────────────────────────────────────────────────┤
-│                          [ Cancel ]  [ Save ]    │
-└─────────────────────────────────────────────────┘
-```
-
-**Resolved decisions (from 2026-04-19 session).**
-1. **Shift is per-row**, inherited as a default from the previous row. The same batch can span multiple shifts (shift lead entering a full day).
-2. **Target dropdown is filtered by the shared action.** Since `action` is at the top of the dialog and target-type is a function of action (`Batching` → mix, `Pressing`/`Finishing` → part), each row's target combo only lists the appropriate type. If the user changes the top-level action mid-edit, all row target-combos must be rebuilt (and any now-invalid selections cleared with a status-line warning).
-3. **Atomic per-batch save.** Any validation or UNIQUE failure on any row refuses the entire batch with a per-row error listing. No partial-save semantics — makes the transaction easier to reason about and mirrors Step 7a's atomic-save philosophy for file writes.
-
-**Implementation sketch.**
-1. New class `ProductionBatchDialog(QDialog)` (or `QWidget` top-level like the existing windows) in `production_tab.py`. Mirror the `WA_DeleteOnClose` + `setAttribute` pattern used by other edit windows (Step 7c-3 §12.2).
-2. Header `QHBoxLayout` with `QDateEdit` + `QComboBox` for action.
-3. Scroll area whose inner widget holds a `QVBoxLayout` of row widgets. Each row = small `QWidget` subclass `_BatchRow(QWidget)` holding the 5 input widgets + remove button. Store rows in `self.rows: list[_BatchRow]`.
-4. "Add row" button at bottom of scroll area: instantiates a new `_BatchRow`, pre-populates fields from `self.rows[-1]` if it exists (quantity and scrap cleared — safer default than duplicating numerical values).
-5. Action-change signal (top-level combo): iterate rows, rebuild each target combo for the new target-type, clear rows whose selected target no longer appears in the new list, show a status label above the rows if any row was invalidated.
-6. Save button: iterate rows, build `ProductionRecord` per row, validate each (reusing whatever validation the existing `ProductionEntryDialog` has at `production_tab.py:362`-ish — factor out into a shared module-level helper if it makes the batch code cleaner). UNIQUE-collision check per row against the current in-memory production dict **plus** the rows added earlier in the same batch. On any failure: `QMessageBox` with a per-row error listing, leave the dialog open. On full success: insert all, call `parentTab.refresh()`, close.
-7. Wire a "Batch Entry" button into `ProductionTab`'s toolbar (the current quick-entry trigger remains; batch is a peer).
-
-**Verification.** Add `production_batch_roundtrip` to `smoke.py`: construct the dialog headlessly (or bypass the UI and exercise the save-commit logic directly on a synthetic row list), seed 3–4 rows spanning two shifts, commit, save the file, reload in a fresh `MainWindow`, assert all records present. Manual test with real data: enter a batch of 10 rows against the team's file, confirm they all appear in the list and survive a save/reload.
-
-**Known unknowns.**
-- `ProductionTab` has a second entry-dialog-ish class starting around `production_tab.py:458` (not fully read during planning — it's about an "EmployeeBox + targetTypeBox + targetNameBox + actionBox" flow, so probably the "Quick Entry" alternative already). Worth skimming before starting: if it already does something batch-like, the new work may be incremental rather than greenfield.
 
 ---
 
