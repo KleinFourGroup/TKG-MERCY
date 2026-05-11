@@ -279,7 +279,9 @@ def qsettings_reopen() -> list[str]:
     Saves an empty DB, stashes its path under ``lastDbPath`` in an isolated
     INI-backed QSettings store, then drives ``MainWindow._loadPath`` on a
     fresh window to simulate the startup auto-reopen hook (bypassing the
-    modal). Asserts the DB loads, ``fileManager.filePath`` is set, and
+    modal). Asserts the DB loads, ``fileManager.filePath`` is set,
+    ``saveButton`` is enabled (regression guard: pre-fix, the auto-reopen
+    path didn't refresh button state and Save stayed grayed out), and
     ``_loadPath`` re-persists ``lastDbPath``. Also checks that a stale
     (missing) path is caught by the caller's ``os.path.isfile`` guard that
     ``main.py`` uses before invoking the helper.
@@ -333,6 +335,8 @@ def qsettings_reopen() -> list[str]:
             return errors
         if w2.fileManager.filePath != tmp.name:
             errors.append(f"filePath after _loadPath: expected {tmp.name}, got {w2.fileManager.filePath}")
+        if not w2.saveButton.isEnabled():
+            errors.append("saveButton not enabled after _loadPath (Step 20 regression)")
 
         post = QSettings().value("lastDbPath")
         if post != tmp.name:

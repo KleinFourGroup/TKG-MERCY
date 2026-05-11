@@ -136,13 +136,14 @@ class MainWindow(QWidget):
         # Shared entry point for loading a DB from a known path — used by the
         # File → Open dialog and by the startup auto-reopen hook. Skips any modal
         # UI so a smoke test can drive the load path directly. Always refreshes
-        # the label/tabs so the caller doesn't have to; only persists lastDbPath
-        # and returns True on a successful load.
+        # the label, tabs, and Save-button state so the caller doesn't have to;
+        # only persists lastDbPath and returns True on a successful load.
         success = self.fileManager.setFile(path)
         if success:
             self.fileManager.loadFile()
         self.setFileLabel()
         self._refreshAllTabs()
+        self.saveButton.setEnabled(self.fileManager.filePath is not None)
         if success:
             QSettings().setValue("lastDbPath", self.fileManager.filePath)
         return success
