@@ -280,7 +280,7 @@ class EmployeeEditWindow(QWidget):
             errors.append(f"Employee telephone and email are both blank")
 
         if len(errors) == 0:
-            isNone = self.employee == None
+            isNone = self.employee is None
             if isNew:
                 self.employee = Employee()
                 self.employee.setID(id)

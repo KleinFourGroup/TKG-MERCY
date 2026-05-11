@@ -113,7 +113,7 @@ class InventoryTab(QWidget):
         self.refresh()
 
     def report(self):
-        if self.date == None:
+        if self.date is None:
             errorMessage(self.mainApp, ["No date selected."])
         else:
             path = tempReportPath(f"{self.date.isoformat()}-inventory")
@@ -235,7 +235,7 @@ class MaterialsInventoryTab(QWidget):
     def genTableData(self):
         db = self.mainApp.db.inventories[self.currentDate].materials if self.currentDate is not None else None
         self.headers = ["Material", "Current Cost", "Original Cost", "Amount"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             "{}".format(entry),
             "{:.4f}".format(self.mainApp.db.materials[entry].getCostPerLb() if entry in self.mainApp.db.materials and self.mainApp.db.materials[entry].getCostPerLb() is not None else 0),
             "{}".format(db[entry].cost),
@@ -467,7 +467,7 @@ class PartsInventoryTab(QWidget):
     def genTableData(self):
         db = self.mainApp.db.inventories[self.currentDate].parts if self.currentDate is not None else None
         self.headers = ["Part", "Current Cost", "Original Cost", "Pressed", "Finished", "Fired", "Completed"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             "{}".format(entry),
             "{:.4f}".format(self.mainApp.db.parts[entry].getManufacturingCost() if entry in self.mainApp.db.parts else 0),
             "{}".format(db[entry].cost),

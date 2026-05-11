@@ -177,7 +177,7 @@ class MixturesEditWindow(QWidget):
             [QLabel("Mixture:"), QLineEdit(f"{entry if entry is not None else "New Mixture"}")],
         ]
         for i in range(12):
-            if mixture == None or i >= len(mixture.materials):
+            if mixture is None or i >= len(mixture.materials):
                 self.mainLayout.append([QLabel("Material:"), getComboBox(materials, None), QLabel("Weight:"), QLineEdit()])
             else:
                 self.mainLayout.append([QLabel("Material:"), getComboBox(materials, mixture.materials[i]), QLabel("Weight:"), QLineEdit(f"{mixture.weights[i]}")])
@@ -210,7 +210,7 @@ class MixturesEditWindow(QWidget):
             errors.append("Mixture must have at least one material")
 
         if len(errors) == 0:
-            isNone = self.mixture == None
+            isNone = self.mixture is None
             if isNew:
                 self.mixture = Mixture(name)
                 self.mainApp.db.addMixture(self.mixture)

@@ -6,7 +6,7 @@ import math
 
 from table import DBTable
 from app import MainWindow
-from employee_overview_tab import MainTab
+from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeePTORange, EmployeePTODB
 from defaults import POINT_VALS, PTO_ELIGIBILITY
 from error import ErrorWindow, errorMessage
@@ -14,7 +14,7 @@ from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, s
 from report import PDFReport
 
 class PTOTab(QWidget):
-    def __init__(self, mainTab: MainTab) -> None:
+    def __init__(self, mainTab: EmployeeDetailTab) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
@@ -86,7 +86,7 @@ class PTOTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeePTO
         self.headers = ["Start", "End", "Hours"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             "{}".format(db.PTO[entry].start.isoformat()),
             "{}".format(db.PTO[entry].end.isoformat() if isinstance(db.PTO[entry].end, datetime.date) else db.PTO[entry].end),
             "{}{}".format("" if isinstance(db.PTO[entry].end, datetime.date) else "", db.PTO[entry].hours)
@@ -109,8 +109,8 @@ class PTOTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: f"{x[0].isoformat()} -- {x[1].isoformat() if isinstance(x[1], datetime.date) else x[1]}", self.selection))}")
     
     def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeePTO = None if employeeID == None else self.mainApp.db.PTO[self.mainTab.employeeID] 
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
+        self.currentEmployeePTO = None if employeeID is None else self.mainApp.db.PTO[self.mainTab.employeeID] 
         if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
@@ -161,7 +161,7 @@ class PTOTab(QWidget):
         PTOEditWindow(self.currentEmployeePTO.idNum, None, self.mainApp)
     
     def manageCarry(self):
-        if self.currentEmployeePTO == None:
+        if self.currentEmployeePTO is None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
             PTOCarryWindow(self.currentEmployeePTO.idNum, self.mainApp)
@@ -193,7 +193,7 @@ class PTOTab(QWidget):
         self.refresh()
 
     def report(self):
-        if self.currentEmployeePTO == None or self.currentEmployee == None:
+        if self.currentEmployeePTO is None or self.currentEmployee is None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
             path = tempReportPath(f"employee-{self.currentEmployee.idNum}-pto")
@@ -285,7 +285,7 @@ class PTOCarryWindow(QWidget):
         ]
 
         widgetFromList(self, self.mainLayout)
-        if self.unusedType == None:
+        if self.unusedType is None:
             self.resetButton.setEnabled(False)
         else:
             self.resetButton.clicked.connect(self.reset)
@@ -380,7 +380,7 @@ class PTOEditWindow(QWidget):
             raise RuntimeError('self.employee is None')
 
         self.PTORange = PTORange
-        self.isNew = PTORange == None
+        self.isNew = PTORange is None
         if not self.isNew:
             if PTORange is None:  # Redundant but the type hinter wants it
                 raise RuntimeError('PTORange is None')

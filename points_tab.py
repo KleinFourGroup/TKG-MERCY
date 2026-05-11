@@ -6,7 +6,7 @@ import math
 
 from table import DBTable
 from app import MainWindow
-from employee_overview_tab import MainTab
+from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeePoint, EmployeePointsDB
 from defaults import POINT_VALS
 from error import ErrorWindow, errorMessage
@@ -14,7 +14,7 @@ from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, s
 from report import PDFReport
 
 class PointsTab(QWidget):
-    def __init__(self, mainTab: MainTab) -> None:
+    def __init__(self, mainTab: EmployeeDetailTab) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
@@ -62,7 +62,7 @@ class PointsTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeePoints
         self.headers = ["Date", "Points", "Reason"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             "{}".format(entry.date.isoformat()),
             "{}".format(entry.value),
             "{}".format(entry.reason)
@@ -75,8 +75,8 @@ class PointsTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: str(x), self.selection))}")
     
     def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeePoints = None if employeeID == None else self.mainApp.db.attendance[self.mainTab.employeeID] 
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
+        self.currentEmployeePoints = None if employeeID is None else self.mainApp.db.attendance[self.mainTab.employeeID] 
         if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
@@ -136,7 +136,7 @@ class PointsTab(QWidget):
         self.refresh()
 
     def report(self):
-        if self.currentEmployeePoints == None:
+        if self.currentEmployeePoints is None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
             path = tempReportPath(f"employee-{self.currentEmployee.idNum}-attendance")
@@ -163,7 +163,7 @@ class PointsEditWindow(QWidget):
             raise RuntimeError('self.pointDB is None')
 
         self.point = point
-        self.isNew = point == None
+        self.isNew = point is None
         if not self.isNew:
             if point.date not in self.pointDB.points:
                 raise RuntimeError('point.date not in self.pointDB.points')

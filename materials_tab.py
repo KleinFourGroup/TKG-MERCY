@@ -211,7 +211,7 @@ class MaterialsEditWindow(QWidget):
         Sub325 = checkInput(self.mainLayout[4][13].text(), float, "nonneg", errors, "Sub325")
 
         if len(errors) == 0:
-            isNone = self.material == None
+            isNone = self.material is None
             if isNew:
                 self.material = Material(name)
                 self.mainApp.db.addMaterial(self.material)

@@ -135,7 +135,7 @@ class PDFReport:
         hasHeader = headers is not None
         columns = len(widths) if widths is not None else len(headers) if hasHeader else len(data[0]) if len(data) > 0 else 1
 
-        if widths == None:
+        if widths is None:
             widths = [(self.right - self.left) / columns for i in range(columns)]
 
         totalWidth = 0
@@ -1056,11 +1056,6 @@ class PDFReport:
         subtitleBits.append(f"{startDate.isoformat()} through {endDate.isoformat()}")
         subtitle = " — ".join(subtitleBits)
 
-        def fmtRate(q: float, h: float) -> str:
-            if h <= 0:
-                return "—"
-            return f"{q / h:.2f}"
-
         def fmtNum(x: float) -> str:
             return f"{x:g}"
 
@@ -1117,9 +1112,10 @@ class PDFReport:
             for eid in empsHere:
                 eq, eh = perTargetEmp[(tn, eid)]
                 rows.append([self._employeeName(eid),
-                             fmtNum(eq), fmtNum(eh), fmtRate(eq, eh)])
+                             fmtNum(eq), fmtNum(eh), self._fmtRate(eq, eh)])
             tq, th = perTarget[tn]
-            totalsRow = ["Total", fmtNum(tq), fmtNum(th), fmtRate(tq, th)]
+            totalsRow = ["Total", fmtNum(tq), fmtNum(th),
+                         self._fmtRate(tq, th)]
             renderSection(f"{action}: {tn}", rows, headersEmp, totalsRow)
 
         if allTargets:
@@ -1127,9 +1123,10 @@ class PDFReport:
             summaryRows = []
             for tn in sortedTargets:
                 tq, th = perTarget[tn]
-                summaryRows.append([tn, fmtNum(tq), fmtNum(th), fmtRate(tq, th)])
+                summaryRows.append([tn, fmtNum(tq), fmtNum(th),
+                                    self._fmtRate(tq, th)])
             summaryTotals = ["Total", fmtNum(totalQ), fmtNum(totalH),
-                             fmtRate(totalQ, totalH)]
+                             self._fmtRate(totalQ, totalH)]
             renderSection("Summary by Target", summaryRows, headersTarget,
                           summaryTotals)
 
@@ -1138,9 +1135,10 @@ class PDFReport:
                 for s in sorted(perShift.keys(), key=shiftSortKey):
                     sq, sh = perShift[s]
                     lbl = str(s) if s is not None else "(none)"
-                    shiftRows.append([lbl, fmtNum(sq), fmtNum(sh), fmtRate(sq, sh)])
+                    shiftRows.append([lbl, fmtNum(sq), fmtNum(sh),
+                                      self._fmtRate(sq, sh)])
                 shiftTotals = ["Total", fmtNum(totalQ), fmtNum(totalH),
-                               fmtRate(totalQ, totalH)]
+                               self._fmtRate(totalQ, totalH)]
                 renderSection("Overview by Shift", shiftRows, headersShift,
                               shiftTotals)
 

@@ -362,7 +362,7 @@ TKG-MERCY/
 ├── globals_tab.py
 │
 ├── # Employees domain (from BECKY)
-├── employee_overview_tab.py  # renamed from main_tab.py for clarity
+├── employee_detail_tab.py    # renamed from main_tab.py → employee_overview_tab.py → final name (Steps 5, 29)
 ├── employees_tab.py
 ├── reviews_tab.py
 ├── training_tab.py
@@ -511,7 +511,7 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-09. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Each step is committed separately on `main` with a message that names the step.*
+*Last updated 2026-05-10. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. Each step is committed separately on `main` with a message that names the step.*
 
 Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
 
@@ -562,7 +562,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 26 | ✅ Done | Merge plan Step 26: rate columns on production reports — see §13.14 |
 | 27 | ✅ Done | Merge plan Step 27: Employee Productivity polish (default-to-All + Tool Change count) — see §13.15 |
 | 28 | ⏳ Deferred | split `records.py` into a `records/` package (gated on team OK'ing Steps 24/26/27) — see §13.16 |
-| 29 | ⏳ Deferred | code hygiene sweep (5 mechanical fixes from §12.3 + recent steps) — see §13.17 |
+| 29 | ✅ Done | Merge plan Step 29: code hygiene sweep — see §13.17 |
 | 30 | ⏳ Deferred | selector helper widget (factor `ProductionReportWindow`'s combo logic) — see §13.18 |
 | 31 | ⏳ Deferred | split `smoke.py` into a `smoke/` package — see §13.19 |
 | 32 | ⏳ Deferred | split `file_manager.py` (mixin or pure-helper extraction) — see §13.20 |
@@ -573,9 +573,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 
 ### 12.3 Known deferred issues visible in the current build
 
-- Bare `x == None` / `x != None` residuals (not in 7c-3's scope; see [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 7c-3). Small optional follow-up.
-- One awkward DeMorgan-able condition at `file_manager.py:176` / `:447` (`if not ((A is not None) and (B is not None)):`) — correct but ugly. Style-only, not blocking.
-- Step 5's partial rename: `main_tab.py` → `employee_overview_tab.py` but the class is still `MainTab`. Not in Step 7's scope; see [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 5.
+- *(All three previously listed items — bare `== None` residuals, the DeMorgan-able condition in `file_manager.py`, and the `MainTab` class name — were resolved by Step 29's hygiene sweep, 2026-05-10. See §13.17.)*
+- `employees_tab.py`'s `EmployeeOverviewTab` is mis-named relative to its role (renders the Employee List roster, not an overview). Surfaced during Step 29's class-rename item; deferred. A future tidy step could rename it to `EmployeeListTab`.
 
 ### 12.4 Test conventions used so far
 
@@ -829,24 +828,18 @@ records/
 
 **Why not also split `report.py`?** Same length (1757 lines), harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until Step 28 (and the intervening Steps 29-32 sketched below) land and we see whether the smaller-files instinct still feels strong; that becomes a future Step 33 if so.
 
-### 13.17 Step 29 — code hygiene sweep ⏳ Deferred
+### 13.17 Step 29 — code hygiene sweep ✅ Done
 
-**Status.** Sketched plan only — **gated on the team OK'ing Steps 24/26/27**, same as Step 28. Useful as a low-risk warmup once the reports are blessed, or interleavable with Step 28 if it makes sense to bundle.
+Landed 2026-05-10 as one umbrella commit. All five mechanical fixes from the original sketch bundled cleanly; smoke stayed 17 PASS pre- and post-change.
 
-**Motivation.** Five mechanical fixes accumulated across [§12.3](#123-known-deferred-issues-visible-in-the-current-build) and the recent step commits. Bundling mirrors the Step 7c-1 / 7c-2 / 7c-3 pattern of focused mechanical sweeps.
+**Items shipped.**
+1. **Deleted [`mock_reports.py`](mock_reports.py)** plus its now-orphan `mock_reports/` output directory and the matching `.gitignore` entry.
+2. **`productionProductivityReport`'s local `fmtRate` → `self._fmtRate`** — removed the local def and rewrote 6 call sites in [`report.py`](report.py).
+3. **Bare `== None` sweep** — replaced across 15 first-party files (~45 sites). No `!= None` in first-party code. Records.py's `RuntimeError('idNum == None or idNum >= 0')` message was updated alongside the condition to stay in sync.
+4. **DeMorgan cleanup in [`file_manager.py`](file_manager.py)** — plan called out two sites (`:176` and `:447`); actual count after intervening changes was three (`saveFile`, `loadFile`, `_loadIntoDb`). All three cleaned to `if X is None or Y is None:` form for consistency; RuntimeError messages updated to drop the redundant parens but kept as the positive assertion per Step 7c-1 convention.
+5. **`MainTab` → `EmployeeDetailTab` class rename + file rename `employee_overview_tab.py` → `employee_detail_tab.py`** — **not `EmployeeOverviewTab` as originally planned**. During the rename, discovered `employees_tab.py` already has a class named `EmployeeOverviewTab` (the Employee List roster), so the plan's proposed name would have created a collision. `EmployeeDetailTab` better matches what the class actually is anyway: the per-employee drill-down tab with the employeePicker + Reviews / Training / PTO / Notes / Points subtabs. (Curiously, the Step 5 implementation note in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) already prefigured `EmployeeDetailTab` as the right alternative if the simpler name proved unavailable.) Class def now in [`employee_detail_tab.py`](employee_detail_tab.py); instantiation in [`app.py`](app.py); import + type-annotation sites in `holidays_tab.py`, `notes_tab.py`, `points_tab.py`, `pto_tab.py`, `reviews_tab.py`, `training_tab.py`. The `mainTab` parameter / `self.mainTab` attribute names were left alone (out of plan scope).
 
-**Items.**
-1. **Delete [`mock_reports.py`](mock_reports.py).** Per §13.8 it was a Step 18 planning artifact, "deletable once the team picks a design." Steps 18 and 19 shipped; the artifact has done its job.
-2. **`productionProductivityReport`'s local `fmtRate` → `self._fmtRate`.** Step 26 introduced the class helper but called the older method's local copy out-of-scope. Two-line consolidation.
-3. **Bare `x == None` / `x != None` sweep.** §12.3 known deferred since Step 7c-3. Replace with `is None` / `is not None` — more Pythonic and marginally faster.
-4. **DeMorgan cleanup at [`file_manager.py:176`](file_manager.py:176) and [`:447`](file_manager.py:447).** §12.3 — `if not ((A is not None) and (B is not None)):` reads better as `if A is None or B is None:`. Style-only.
-5. **`MainTab` → `EmployeeOverviewTab` class rename.** Step 5 renamed the file; §12.3 notes the class kept its old name. Rename the class + update the handful of instantiation sites.
-
-**Risk.** Very low. Each item is well-scoped; smoke covers the rendering paths and `compile_all` catches missed references.
-
-**Verification.** smoke green.
-
-**Tentative commits.** One umbrella commit if all five fit cleanly; sub-number (29a, 29b, ...) if any one grows. Item #5 is the most likely candidate to split out since it touches multiple tab files.
+**Open follow-up.** `employees_tab.py`'s `EmployeeOverviewTab` is mis-named relative to its actual role (it renders the Employee List roster, not an overview). A future tidy step could rename it to `EmployeeListTab` to match the tab label. Not urgent; flagged for the next backlog refresh.
 
 ### 13.18 Step 30 — selector helper widget ⏳ Deferred
 

@@ -309,7 +309,7 @@ class PartsEditWindow(QWidget):
                 misc.append(row[1].currentText())
 
         if len(errors) == 0:
-            isNone = self.part == None
+            isNone = self.part is None
             if isNew:
                 self.part = Part(name)
                 self.mainApp.db.addPart(self.part)

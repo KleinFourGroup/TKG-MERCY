@@ -432,8 +432,8 @@ class FileManager:
     # ---- saveFile --------------------------------------------------------------------------
 
     def saveFile(self):
-        if not ((self.filePath is not None) and (self.dbFile is not None)):
-            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
+        if self.filePath is None or self.dbFile is None:
+            raise RuntimeError('self.filePath is not None and self.dbFile is not None')
         # Atomic save: the body below runs as a single SQLite transaction.
         # Any exception rolls the entire save back, leaving the DB file
         # unchanged (§3.4 of MERGE_PLAN.md).
@@ -797,8 +797,8 @@ class FileManager:
     # ---- loadFile --------------------------------------------------------------------------
 
     def loadFile(self):
-        if not ((self.filePath is not None) and (self.dbFile is not None)):
-            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
+        if self.filePath is None or self.dbFile is None:
+            raise RuntimeError('self.filePath is not None and self.dbFile is not None')
         from records import emptyDB
         self.mainApp.db = emptyDB()
         self._loadIntoDb(self.mainApp.db)
@@ -807,8 +807,8 @@ class FileManager:
         # Read every table from self.dbFile into the provided Database. Split out from
         # loadFile so the importer can populate a throwaway `emptyDB()` without
         # clobbering self.mainApp.db.
-        if not ((self.filePath is not None) and (self.dbFile is not None)):
-            raise RuntimeError('(self.filePath is not None) and (self.dbFile is not None)')
+        if self.filePath is None or self.dbFile is None:
+            raise RuntimeError('self.filePath is not None and self.dbFile is not None')
 
         # --- globals (ANIKA cost parameters; ignore db_version on the load side) ---
         logging.info(f"Loading globals from {self.filePath}")

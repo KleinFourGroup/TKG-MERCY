@@ -12,7 +12,7 @@ def createTab():
     tab.setLayout(layout)
     return tab
 
-class MainTab(QWidget):
+class EmployeeDetailTab(QWidget):
     def __init__(self, mainApp: MainWindow):
         super().__init__()
         self.mainApp = mainApp

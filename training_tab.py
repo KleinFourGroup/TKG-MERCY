@@ -6,14 +6,14 @@ import math
 
 from table import DBTable
 from app import MainWindow
-from employee_overview_tab import MainTab
+from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeeTrainingDate, EmployeeTrainingDB
 from defaults import POINT_VALS
 from error import ErrorWindow, errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class TrainingTab(QWidget):
-    def __init__(self, mainTab: MainTab) -> None:
+    def __init__(self, mainTab: EmployeeDetailTab) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
@@ -67,7 +67,7 @@ class TrainingTab(QWidget):
         db = self.currentEmployeeTraining
 
         self.headers = ["Date", "Comments"]
-        self.tableData = [] if db == None or not self.currentTraining in db.training else [[
+        self.tableData = [] if db is None or not self.currentTraining in db.training else [[
             "{}".format(db.training[self.currentTraining][entry].date.isoformat()),
             "{}".format(db.training[self.currentTraining][entry].comment)
 
@@ -106,8 +106,8 @@ class TrainingTab(QWidget):
         self.trainingPicker.setCurrentText(oldTraining)
     
     def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeeTraining = None if employeeID == None else self.mainApp.db.training[self.mainTab.employeeID]
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
+        self.currentEmployeeTraining = None if employeeID is None else self.mainApp.db.training[self.mainTab.employeeID]
         
         if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
@@ -169,7 +169,7 @@ class TrainingEditWindow(QWidget):
             raise RuntimeError('self.trainingDateDB is None')
 
         self.trainingDate = trainingDate
-        self.isNew = trainingDate == None
+        self.isNew = trainingDate is None
         if not self.isNew:
             if trainingDate.date not in self.trainingDateDB.training[trainingType]:
                 raise RuntimeError('trainingDate.date not in self.trainingDateDB.training[trainingType]')

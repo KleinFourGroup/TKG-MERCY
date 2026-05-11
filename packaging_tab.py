@@ -135,7 +135,7 @@ class PackagingEditWindow(QWidget):
         price = checkInput(self.mainLayout[1][3].text(), float, "nonneg", errors, "price")
 
         if len(errors) == 0:
-            isNone = self.item == None
+            isNone = self.item is None
             if isNew:
                 self.item = Package(name, None, None)
                 self.mainApp.db.addPackaging(self.item)

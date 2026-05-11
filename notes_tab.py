@@ -4,14 +4,14 @@ from PySide6.QtCore import QTime, Qt
 
 from table import DBTable
 from app import MainWindow
-from employee_overview_tab import MainTab
+from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeeNote, EmployeeNotesDB
 from error import errorMessage
 from utils import widgetFromList, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 
 class NotesTab(QWidget):
-    def __init__(self, mainTab: MainTab) -> None:
+    def __init__(self, mainTab: EmployeeDetailTab) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
@@ -58,7 +58,7 @@ class NotesTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeeNotes
         self.headers = ["Date & Time", "Details"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             f"{note.date.isoformat()} {note.time}",
             "{}".format(note.details[:60] + "..." if len(note.details) > 60 else note.details)
         ] for note in db.notes.values()]
@@ -74,8 +74,8 @@ class NotesTab(QWidget):
         self.selectLabel.setText(f"Selection: {', '.join([f'{d.isoformat()} {t}' for d, t in self.selection])}")
 
     def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID]
-        self.currentEmployeeNotes = None if employeeID == None else self.mainApp.db.notes[self.mainTab.employeeID]
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID]
+        self.currentEmployeeNotes = None if employeeID is None else self.mainApp.db.notes[self.mainTab.employeeID]
         if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
         else:
@@ -117,7 +117,7 @@ class NotesTab(QWidget):
         self.refresh()
 
     def report(self):
-        if self.currentEmployeeNotes == None:
+        if self.currentEmployeeNotes is None:
             errorMessage(self.mainApp, ["No employee selected."])
         else:
             path = tempReportPath(f"employee-{self.currentEmployee.idNum}-notes")
@@ -126,7 +126,7 @@ class NotesTab(QWidget):
             startfile(path)
 
     def incidentReport(self):
-        if self.currentEmployeeNotes == None:
+        if self.currentEmployeeNotes is None:
             errorMessage(self.mainApp, ["No employee selected."])
         elif len(self.selection) == 0:
             errorMessage(self.mainApp, ["No note selected."])
@@ -159,7 +159,7 @@ class NotesEditWindow(QWidget):
             raise RuntimeError('self.notesDB is None')
 
         self.note = note
-        self.isNew = note == None
+        self.isNew = note is None
         if not self.isNew:
             if (note.date, note.time) not in self.notesDB.notes:
                 raise RuntimeError('(note.date, note.time) not in self.notesDB.notes')

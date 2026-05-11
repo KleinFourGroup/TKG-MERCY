@@ -6,13 +6,13 @@ import math
 
 from table import DBTable
 from app import MainWindow
-from employee_overview_tab import MainTab
+from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeeReview, EmployeeReviewsDB
 from error import ErrorWindow, errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class ReviewsTab(QWidget):
-    def __init__(self, mainTab: MainTab) -> None:
+    def __init__(self, mainTab: EmployeeDetailTab) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
@@ -59,7 +59,7 @@ class ReviewsTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeeReviews
         self.headers = ["Review Date", "Next Review", "Details"]
-        self.tableData = [] if db == None else [[
+        self.tableData = [] if db is None else [[
             "{}".format(db.reviews[entry].date.isoformat()),
             "{}".format(db.reviews[entry].nextReview.isoformat()),
             "{}".format(db.reviews[entry].details)
@@ -72,8 +72,8 @@ class ReviewsTab(QWidget):
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: str(x), self.selection))}")
     
     def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID == None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeeReviews = None if employeeID == None else self.mainApp.db.reviews[self.mainTab.employeeID] 
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
+        self.currentEmployeeReviews = None if employeeID is None else self.mainApp.db.reviews[self.mainTab.employeeID] 
         if self.currentEmployee is not None:
             self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
             self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
@@ -147,7 +147,7 @@ class ReviewsEditWindow(QWidget):
             raise RuntimeError('self.reviewDB is None')
 
         self.review = review
-        self.isNew = review == None
+        self.isNew = review is None
         if not self.isNew:
             if review.date not in self.reviewDB.reviews:
                 raise RuntimeError('review.date not in self.reviewDB.reviews')

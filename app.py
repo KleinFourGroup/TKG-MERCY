@@ -10,7 +10,7 @@ class MainWindow(QWidget):
     def __init__(self, db: Database | None = None):
         super().__init__()
         self.setWindowTitle(f"Manufacturing and Employee Records, Costing, and Yield v{VERSION}")
-        if db == None:
+        if db is None:
             self.db = emptyDB()
         else:
             self.db = db
@@ -47,8 +47,8 @@ class MainWindow(QWidget):
         # ---- Employees top-level tab (nested: Overview | Employee List | Holiday Observances) ----
         self.employeesTopTab = QTabWidget()
 
-        from employee_overview_tab import MainTab
-        self.overviewTab = MainTab(self)
+        from employee_detail_tab import EmployeeDetailTab
+        self.overviewTab = EmployeeDetailTab(self)
         self.employeesTopTab.addTab(self.overviewTab, "Overview")
 
         from employees_tab import EmployeeOverviewTab

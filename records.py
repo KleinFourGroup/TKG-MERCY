@@ -54,7 +54,7 @@ class Material:
         self.Sub325 = Sub325
     
     def getCostPerLb(self):
-        if self.price == None or self.freight == None:
+        if self.price is None or self.freight is None:
             return None
         return (self.price + self.freight) / LBS_PER_TON
     
@@ -150,7 +150,7 @@ class Mixture:
         ret = 0
         for i in range(len(self.materials)):
             matVal = getattr(self.db.materials[self.materials[i]], prop)
-            if matVal == None:
+            if matVal is None:
                 ret = None
                 break
             pct = self.weights[i] / self.getBatchWeight()
@@ -678,8 +678,8 @@ class Employee:
 
 class EmployeeReview:
     def __init__(self, idNum: int | None = None, date: datetime.date | None = None, nextReview: datetime.date | None = None, details: str = "") -> None:
-        if not (idNum == None or idNum >= 0):
-            raise RuntimeError('idNum == None or idNum >= 0')
+        if not (idNum is None or idNum >= 0):
+            raise RuntimeError('idNum is None or idNum >= 0')
         self.idNum: int | None = idNum
         self.date: datetime.date | None = date
         self.nextReview: datetime.date | None = nextReview
@@ -695,8 +695,8 @@ class EmployeeReview:
     def getTuple(self):
         return (
             self.idNum,
-            "" if self.date == None else self.date.isoformat(),
-            "" if self.nextReview == None else self.nextReview.isoformat(),
+            "" if self.date is None else self.date.isoformat(),
+            "" if self.nextReview is None else self.nextReview.isoformat(),
             self.details
         )
 
