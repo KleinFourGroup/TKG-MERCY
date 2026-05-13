@@ -574,7 +574,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 ### 12.3 Known deferred issues visible in the current build
 
 - *(All three previously listed items — bare `== None` residuals, the DeMorgan-able condition in `file_manager.py`, and the `MainTab` class name — were resolved by Step 29's hygiene sweep, 2026-05-10. See §13.17.)*
-- `employees_tab.py`'s `EmployeeOverviewTab` is mis-named relative to its role (renders the Employee List roster, not an overview). Surfaced during Step 29's class-rename item; deferred. A future tidy step could rename it to `EmployeeListTab`.
+- *(`employees_tab.py`'s `EmployeeOverviewTab` was renamed to `EmployeeListTab` on 2026-05-13 to match the tab label, closing the rename Step 29 deferred. Manual UI sweep across Active / Inactive sub-tabs and the New / Edit / Toggle / Delete / Report buttons confirmed identical behavior.)*
 
 ### 12.4 Test conventions used so far
 

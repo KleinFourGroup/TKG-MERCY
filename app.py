@@ -51,8 +51,8 @@ class MainWindow(QWidget):
         self.overviewTab = EmployeeDetailTab(self)
         self.employeesTopTab.addTab(self.overviewTab, "Overview")
 
-        from employees_tab import EmployeeOverviewTab
-        self.employeesTab = EmployeeOverviewTab(self)
+        from employees_tab import EmployeeListTab
+        self.employeesTab = EmployeeListTab(self)
         self.employeesTopTab.addTab(self.employeesTab, "Employee List")
 
         from holidays_tab import HolidayTab

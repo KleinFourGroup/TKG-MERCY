@@ -12,7 +12,7 @@ from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, s
 from report import PDFReport
 import logging
 
-class EmployeeOverviewTab(QWidget):
+class EmployeeListTab(QWidget):
     def __init__(self, mainApp: MainWindow):
         super().__init__()
         self.mainApp = mainApp
@@ -32,7 +32,7 @@ class EmployeeOverviewTab(QWidget):
         self.setLayout(layout)
 
 class EmployeeTab(QWidget):
-    def __init__(self, mainTab: EmployeeOverviewTab, active: bool) -> None:
+    def __init__(self, mainTab: EmployeeListTab, active: bool) -> None:
         super().__init__()
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
