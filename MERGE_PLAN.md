@@ -660,7 +660,7 @@ Landed 2026-05-08, same-session follow-up to Step 24. See [`plan_archive/impleme
 
 Landed 2026-05-11. Smoke 17 PASS pre- and post-change, on the first run. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 28 for the four-file shape (`products.py` / `employees.py` / `production.py` / `database.py`), the `__init__.py` re-export shim that keeps all ~20 existing `from records import X` sites working unchanged, and the annotation-evaluation gotcha that turned out not to matter (function-body annotations on complex targets like `self.db: Database | None = None` aren't evaluated at runtime, so there's no circular-import problem to manage).
 
-The follow-up Step 28.1 ("simplify the bundled `from records import (...)` lines in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports") was sketched in the original plan but is purely cosmetic and remains deferred.
+The follow-up Step 28.1 ("simplify the bundled `from records import (...)` lines in `file_manager.py` / `smoke.py` / `fuzz_db.py` to per-module imports") landed 2026-05-13 — `file_manager/load.py` and `fuzz_db.py` now import directly from `records.products` / `records.employees` / `records.production`. (`smoke/` was already absorbed during Step 31's split, where each submodule inlines its own per-call records imports.) Smoke 17 PASS pre- and post-change.
 
 **Why not also split `report.py`?** Same length, harder to split — every method belongs to one `PDFReport` class. Splitting requires either composing `PDFReport` from per-domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) or converting per-domain reports to free functions. Bigger diff, more churn. Hold off until the smaller-files instinct still feels strong after Steps 30/31/32 land; that becomes a future Step 33 if so.
 
@@ -678,7 +678,7 @@ Landed 2026-05-11, immediately after Step 30. CLI shifted from `./Scripts/python
 
 ### 13.20 Step 32 — `file_manager.py` split ✅ Done
 
-Landed 2026-05-11, immediately after Step 31 — closes the refactor backlog. Mixin composition, six-file package; smoke 17 PASS first try; fuzz-DB load → save → reload roundtrip across 19 populated tables (3522 production records) row-for-row identical post-save. Real-world legacy-DB sweep on Matthew's machine still pending as the final acceptance gate. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 32 for the shipped six-file shape, the mixin-vs-pure-helper decision, the orchestration-vs-domain-work boundary that drove `initFile`/`setFile` placement, the deferred-import dance for the `ImportMixin` ↔ `FileManager` cycle, fuzz-roundtrip mechanics, and the Step 28.1 follow-up that remains open for `file_manager/load.py`.
+Landed 2026-05-11, immediately after Step 31 — closes the refactor backlog. Mixin composition, six-file package; smoke 17 PASS first try; fuzz-DB load → save → reload roundtrip across 19 populated tables (3522 production records) row-for-row identical post-save. Real-world legacy-DB sweep on Matthew's machine cleared the final acceptance gate. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 32 for the shipped six-file shape, the mixin-vs-pure-helper decision, the orchestration-vs-domain-work boundary that drove `initFile`/`setFile` placement, the deferred-import dance for the `ImportMixin` ↔ `FileManager` cycle, and fuzz-roundtrip mechanics. The Step 28.1 follow-up for `file_manager/load.py` landed 2026-05-13 — see §13.16.
 
 ---
 

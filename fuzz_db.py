@@ -38,15 +38,17 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import defaults  # noqa: E402
 from app import MainWindow  # noqa: E402
-from records import (  # noqa: E402
+from records.products import (  # noqa: E402
     Material, Mixture, Package, Part,
     MaterialInventoryRecord, PartInventoryRecord, Inventory,
+)
+from records.employees import (  # noqa: E402
     Employee, EmployeeReview, EmployeeTrainingDate, EmployeePoint,
     EmployeePTORange, EmployeeNote, HolidayObservance,
     EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB,
     EmployeePTODB, EmployeeNotesDB,
-    ProductionRecord,
 )
+from records.production import ProductionRecord  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------

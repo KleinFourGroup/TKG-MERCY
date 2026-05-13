@@ -1,11 +1,11 @@
 import logging
 
-from records import (
-    Material, Mixture, Package, Part, MaterialInventoryRecord, PartInventoryRecord,
+from records.products import Material, Mixture, Package, Part, MaterialInventoryRecord, PartInventoryRecord
+from records.employees import (
     Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB,
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
-    ProductionRecord
 )
+from records.production import ProductionRecord
 
 
 class LoadMixin:
