@@ -182,7 +182,11 @@ class YearSelectWindow(QWidget):
         year = checkInput(self.yearEntry.text(), int, "pos", errors, "Year")
 
         if len(errors) == 0:
-            self.observanceTab.currentYear = year
+            # checkInput is loosely typed (returns int | float | None even when type=int).
+            # The errors-empty guard implies the parse succeeded; cast to satisfy the
+            # narrower currentYear: int declaration.
+            assert year is not None
+            self.observanceTab.currentYear = int(year)
             QMessageBox.information(self, "Success", "Year updated successful!")
             self.observanceTab.refresh()
         else:

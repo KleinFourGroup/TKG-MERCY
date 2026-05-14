@@ -19,8 +19,8 @@ class PointsTab(QWidget):
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
         
-        self.currentEmployee: Employee = None
-        self.currentEmployeePoints: EmployeePointsDB = None
+        self.currentEmployee: Employee | None = None
+        self.currentEmployeePoints: EmployeePointsDB | None = None
         self.currentEmployeeLabel = QLabel("Employee: N/A")
 
         self.genTableData()

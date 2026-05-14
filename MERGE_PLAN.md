@@ -573,7 +573,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36a | ✅ Done | Merge plan Step 36a: pyright setup + triage |
 | 36b | ✅ Done | Merge plan Step 36b: file_manager/ Optional sweep |
 | 36c | ✅ Done | Merge plan Step 36c: records/products.py Database TYPE_CHECKING |
-| 36d | 📝 Sketched | Declarative-attribute batch (parentTab / currentEmployee / etc.) |
+| 36d | ✅ Done | Merge plan Step 36d: declarative attribute batch |
 | 36e | 📝 Sketched | HR tabs Optional sweep (pto / reviews / employees / points / training / notes / holidays) |
 | 36f | 📝 Sketched | Production-side cleanup (production_tab.py + report/production.py) |
 | 36g | 📝 Sketched | Bake `pyright --outputjson` into the smoke baseline |
@@ -774,9 +774,21 @@ Landed 2026-05-14, same session as 36a. **57 findings gone, file_manager/ at 0; 
 
 Landed 2026-05-14. Three-line addition at the top of the module (`from typing import TYPE_CHECKING` + `if TYPE_CHECKING: from records.database import Database`). All 4 `reportUndefinedVariable` findings gone; baseline 162 → 158. Smoke 18 PASS.
 
-#### Step 36d — declarative-attribute batch 📝 Sketched
+#### Step 36d — declarative-attribute batch ✅ Done
 
-The 38 `reportAttributeAccessIssue` findings are all the same shape: an attribute set externally on a class (`dbTable.parentTab = self` from the tab code; `currentEmployee` and `currentEmployeeNotes` set in `refresh()`-style methods on `NotesTab`, `PointsTab`, etc.). Fix: declare each on the class body as `attr: Optional[T] = None` or `attr: 'SomeType' | None = None`. Mechanical; one focused commit. **~38 findings.**
+Landed 2026-05-14. **28 of 38 `reportAttributeAccessIssue` findings cleared** (38 → 10). Smoke 18 PASS.
+
+Changes:
+- `table.py` — `DBTable.parentTab` was inferred as `type(None)` from `self.parentTab = None`; annotated as `Any` to reflect the duck-typed callback pattern (whatever tab class constructs the DBTable assigns itself; `DBTable.onSelect` invokes `parentTab.setSelection(list)`, no common base class).
+- **HR tabs (notes / points / reviews / training)** — changed `self.currentEmployee: Employee = None` to `self.currentEmployee: Employee | None = None` (and the parallel `currentEmployeeNotes` / `Points` / `Reviews` / `Training`). The annotations were lying — Optional was the truth all along.
+- `employee_detail_tab.py` — `self.employeeID: int = None` → `self.employeeID: int | None = None`. Same fix.
+- `holidays_tab.py` — `assert year is not None` + `int(year)` cast at the `self.observanceTab.currentYear = year` assignment site. `checkInput` is untyped and pyright infers its return as `int | float | None`; the errors-empty guard implies the parse succeeded but pyright can't track that through `errors`'s list state.
+
+**10 deferrals.** All are mis-classified as `reportAttributeAccessIssue` but are actually different shapes:
+- `pto_tab.py:91` and `report/employees.py:92` — "X on str" where `db.PTO[entry].end` is `datetime.date | str` and pyright doesn't track `isinstance` narrowing through dict re-fetches. Belongs to 36e (HR Optional sweep) — they need per-call-site hoisting of the value into a local variable.
+- 8 `report/production.py` reportlab Drawing primitives (`LinePlot.x` / `XValueAxis.labels` / `Legend.x` etc.) — pyright's view of reportlab's types is incomplete; same shape as the vulture false positives. Belongs to 36f (production-side cleanup) — per-line `# pyright: ignore` or a narrower per-file relax.
+
+**On the net-up count.** Baseline rose 158 → 175 (+17) over 36d. Cause: making the Optional types honest exposes ~45 previously-hidden `reportOptionalMemberAccess` / `reportArgumentType` findings — `self.currentEmployee.idNum` could not be flagged when `currentEmployee` was lying as a non-Optional `Employee`. The total is a noisier metric than the categorical health: by rule, `reportAttributeAccessIssue` dropped from 38 → 10, and the Optional findings are now properly categorized as Optional. The exposed surface is exactly 36e's scope, ready for per-call-site judgment.
 
 #### Step 36e — HR tabs Optional sweep 📝 Sketched
 

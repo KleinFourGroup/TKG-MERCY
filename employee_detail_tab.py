@@ -11,7 +11,7 @@ class EmployeeDetailTab(QWidget):
 
         self.employeePicker = QComboBox()
         self.employeePicker.setEditable(False)
-        self.employeeID: int = None
+        self.employeeID: int | None = None
         self.employeeLabel = QLabel()
 
         self.employeePicker.currentTextChanged.connect(self.selectEmployee)

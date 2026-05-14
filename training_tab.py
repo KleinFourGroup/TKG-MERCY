@@ -21,8 +21,8 @@ class TrainingTab(QWidget):
         self.currentTraining = "None"
         self.trainingOptions = ["None"]
 
-        self.currentEmployee: Employee = None
-        self.currentEmployeeTraining: EmployeeTrainingDB = None
+        self.currentEmployee: Employee | None = None
+        self.currentEmployeeTraining: EmployeeTrainingDB | None = None
         self.currentEmployeeLabel = QLabel("Employee: N/A")
 
         self.genTableData()

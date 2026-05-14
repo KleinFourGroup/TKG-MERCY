@@ -1,3 +1,5 @@
+from typing import Any
+
 from PySide6.QtCore import QAbstractTableModel, QItemSelection, Qt
 from PySide6.QtWidgets import QTableView, QWidget
 
@@ -40,7 +42,10 @@ class DBTableModel(QAbstractTableModel):
 class DBTable(QTableView):
     def __init__(self, data, headers) -> None:
         super().__init__()
-        self.parentTab = None
+        # parentTab is a duck-typed callback handle: whatever tab class
+        # constructs the DBTable assigns itself here, and DBTable.onSelect
+        # invokes `parentTab.setSelection(list)`. No common base class.
+        self.parentTab: Any = None
         self.dbModel = DBTableModel(data, headers)
         self.setModel(self.dbModel)
         self.selector = self.selectionModel()

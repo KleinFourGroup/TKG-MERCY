@@ -16,8 +16,8 @@ class NotesTab(QWidget):
         self.mainTab = mainTab
         self.mainApp = self.mainTab.mainApp
 
-        self.currentEmployee: Employee = None
-        self.currentEmployeeNotes: EmployeeNotesDB = None
+        self.currentEmployee: Employee | None = None
+        self.currentEmployeeNotes: EmployeeNotesDB | None = None
         self.currentEmployeeLabel = QLabel("Employee: N/A")
 
         self.genTableData()
