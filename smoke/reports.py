@@ -355,7 +355,9 @@ def production_trend_report() -> list[str]:
     sub-30-day range raises RuntimeError and an all-empty range still produces
     a valid PDF ("No production recorded").
     """
-    import report as R
+    # Step 33 split: TREND_MODE lives in `report.production`, not `report`
+    # itself, so the mode-swap below has to mutate the submodule binding.
+    import report.production as R
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     from records import ProductionRecord, Employee
