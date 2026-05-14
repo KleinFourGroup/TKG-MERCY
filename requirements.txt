@@ -3,3 +3,4 @@ reportlab
 
 # Dev / lint
 vulture
+pyright

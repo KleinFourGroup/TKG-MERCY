@@ -1,0 +1,17 @@
+{
+  "exclude": [
+    "Lib",
+    "Scripts",
+    "Include",
+    "build",
+    "dist",
+    "__pycache__",
+    "**/__pycache__",
+    "plan_archive",
+    "multiuser_briefs"
+  ],
+  "extraPaths": ["Lib/site-packages"],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Windows"
+}
