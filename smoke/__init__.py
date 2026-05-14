@@ -19,6 +19,7 @@ from smoke.migrations import (
 from smoke.reports import (
     production_report, production_productivity_report,
     production_employee_productivity_report, production_trend_report,
+    product_employee_reports,
 )
 from smoke.ui import (
     production_refresh_on_delete, production_batch_roundtrip,
@@ -33,6 +34,7 @@ __all__ = [
     "mercy_v3_to_v4_migration",
     "production_report", "production_productivity_report",
     "production_employee_productivity_report", "production_trend_report",
+    "product_employee_reports",
     "production_refresh_on_delete", "production_batch_roundtrip",
     "qsettings_reopen", "close_confirm",
 ]

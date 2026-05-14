@@ -1,6 +1,8 @@
 """PDF report rendering checks for the production-family reports
-(Step 12) and the three productivity-family reports (Steps 18, 19, 24)."""
+(Step 12), the three productivity-family reports (Steps 18, 19, 24), and
+the product + employee report families against a tiny fuzz DB (Step 35)."""
 import os
+import random
 import sys
 import tempfile
 from datetime import date as datetime_date
@@ -484,6 +486,135 @@ def production_trend_report() -> list[str]:
             errors.append("unknown action did not raise RuntimeError")
     finally:
         R.TREND_MODE = savedMode
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
+def product_employee_reports() -> list[str]:
+    """Step 35: render every product + employee report against a tiny fuzz DB.
+
+    Builds a tiny-scale fuzzed DB in memory (no file write) by driving
+    fuzz_db's populate functions directly with seed=1, then instantiates
+    PDFReport and exercises:
+      - product reports: globalsReport / mixReport / salesReport / inventoryReport
+      - employee reports: employeePointsReport / employeePTOReport /
+        employeeNotesReport / employeeIncidentReport / employeeActiveReport
+    These were previously gated on a manual UI sweep at PR time; this
+    check automates that gate. Production-family reports are already
+    covered by production_report / production_productivity_report /
+    production_employee_productivity_report / production_trend_report.
+    Doesn't parse PDF content; success is generation without exception, a
+    non-empty file, and the %PDF- header magic on each output.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from report import PDFReport
+    import fuzz_db as F
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        # Mirror fuzz_db.build() — populate every record type — minus the
+        # file save / chatty prints. Seed is fixed so failures are reproducible.
+        rng = random.Random(1)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date.today()
+        db = w.db
+
+        materialNames = F.populateMaterials(db, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for name in db.packaging:
+            packagingByKind[db.packaging[name].kind].append(name)
+        partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+        idNums = F.populateEmployees(db, rng, cfg["employees"], today)
+        F.populateReviews(db, rng, idNums, today)
+        F.populateTraining(db, rng, idNums, today)
+        F.populateAttendance(db, rng, idNums, today)
+        F.populatePTO(db, rng, idNums, today)
+        F.populateNotes(db, rng, idNums, today)
+        F.populateHolidays(db, rng, today)
+        F.populateInventory(db, rng, cfg["inventorySnapshots"], materialNames, partNames, today)
+        F.populateProduction(db, rng, idNums, partNames, mixtureNames,
+                             cfg["productionDays"], today)
+
+        # Parameterized reports need deterministic anchor values from the
+        # fuzzed data. Inventory date is read back rather than hardcoded
+        # because fuzz_db keys it off `datetime.date.today()`.
+        someMix = mixtureNames[0]
+        someEmp = idNums[0]
+        someInventoryDate = next(iter(db.inventories.keys()))
+
+        # employeeIncidentReport needs an existing (date, time) key in the
+        # notes table. Fuzz_db seeds 0-3 notes per employee — search for one;
+        # if none exist for any seeded employee, drop in a synthetic note so
+        # the check still exercises the code path.
+        from records.employees import EmployeeNote
+        incidentArgs = None
+        for idnum in idNums:
+            if idnum in db.notes and db.notes[idnum].notes:
+                (date, timeStr), _ = next(iter(db.notes[idnum].notes.items()))
+                incidentArgs = (idnum, date, timeStr)
+                break
+        if incidentArgs is None:
+            synthDate = today - datetime.timedelta(days=7)
+            synthTime = "09:00"
+            db.notes[someEmp].notes[(synthDate, synthTime)] = EmployeeNote(
+                someEmp, synthDate, synthTime, "synthetic note for smoke")
+            incidentArgs = (someEmp, synthDate, synthTime)
+
+        reports = [
+            ("globals",          lambda p: p.globalsReport()),
+            ("mix",              lambda p: p.mixReport(someMix)),
+            ("sales",            lambda p: p.salesReport()),
+            ("inventory",        lambda p: p.inventoryReport(someInventoryDate)),
+            ("employeePoints",   lambda p: p.employeePointsReport(someEmp)),
+            ("employeePTO",      lambda p: p.employeePTOReport(someEmp)),
+            ("employeeNotes",    lambda p: p.employeeNotesReport(someEmp)),
+            ("employeeIncident", lambda p: p.employeeIncidentReport(*incidentArgs)),
+            ("employeeActive",   lambda p: p.employeeActiveReport()),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+                continue
+            with open(tmpPdf.name, "rb") as f:
+                head = f.read(5)
+            if head != b"%PDF-":
+                errors.append(f"report {name} doesn't start with %PDF- magic; got {head!r}")
+    finally:
         if w is not None and w.fileManager.dbFile is not None:
             w.fileManager.dbFile.close()
         for suffix in ("", "-wal", "-shm"):
