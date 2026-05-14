@@ -572,7 +572,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36 | 🟡 In progress | Pyright sweep across the codebase — split into 36a-g; see §13.24 |
 | 36a | ✅ Done | Merge plan Step 36a: pyright setup + triage |
 | 36b | ✅ Done | Merge plan Step 36b: file_manager/ Optional sweep |
-| 36c | 📝 Sketched | `records/products.py` Database forward-ref via TYPE_CHECKING |
+| 36c | ✅ Done | Merge plan Step 36c: records/products.py Database TYPE_CHECKING |
 | 36d | 📝 Sketched | Declarative-attribute batch (parentTab / currentEmployee / etc.) |
 | 36e | 📝 Sketched | HR tabs Optional sweep (pto / reviews / employees / points / training / notes / holidays) |
 | 36f | 📝 Sketched | Production-side cleanup (production_tab.py + report/production.py) |
@@ -770,9 +770,9 @@ Landed 2026-05-14, same session as 36a. **57 findings gone, file_manager/ at 0; 
 
 **Note on `# pyright:` comment prefix.** First attempt used `# pyright: HolidayObservance.date is...` as a prose comment above the comprehension; pyright treats `# pyright:` as a reserved directive prefix and emitted two new errors complaining about the unknown directive. Rephrased the comment so it doesn't start with the magic prefix; pyright now parses the inline `# pyright: ignore[reportOptionalMemberAccess]` cleanly and the prose comment is just prose.
 
-#### Step 36c — `records/products.py` Database forward-ref 📝 Sketched
+#### Step 36c — `records/products.py` Database forward-ref ✅ Done
 
-The 4 `reportUndefinedVariable` for `Database`. Add `from typing import TYPE_CHECKING` + `if TYPE_CHECKING: from records.database import Database` at the top of the module. Pyright resolves the type; runtime behavior unchanged. **~4 findings.**
+Landed 2026-05-14. Three-line addition at the top of the module (`from typing import TYPE_CHECKING` + `if TYPE_CHECKING: from records.database import Database`). All 4 `reportUndefinedVariable` findings gone; baseline 162 → 158. Smoke 18 PASS.
 
 #### Step 36d — declarative-attribute batch 📝 Sketched
 

@@ -1,4 +1,8 @@
 import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from records.database import Database
 
 LBS_PER_TON = 2000  # short ton
 
