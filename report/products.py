@@ -193,9 +193,9 @@ class ProductReportsMixin:
         currValMatl_currDate, origValMatl_currDate = processMaterials(currDate, dataMatl)
         currValPartWIP_currDate, origValPartWIP_currDate = processPartsWIP(currDate, dataPartWIP)
         currValPartCompleted_currDate, origValPartCompleted_currDate = processPartsCompleted(currDate, dataPartCompleted)
-        currValMatl_prevDate, origValMatl_prevDate = processMaterials(prevDate) if prevDate is not None else (0, 0)
-        currValPartWIP_prevDate, origValPartWIP_prevDate = processPartsWIP(prevDate) if prevDate is not None else (0, 0)
-        currValPartCompleted_prevDate, origValPartCompleted_prevDate = processPartsCompleted(prevDate) if prevDate is not None else (0, 0)
+        _, origValMatl_prevDate = processMaterials(prevDate) if prevDate is not None else (0, 0)
+        _, origValPartWIP_prevDate = processPartsWIP(prevDate) if prevDate is not None else (0, 0)
+        _, origValPartCompleted_prevDate = processPartsCompleted(prevDate) if prevDate is not None else (0, 0)
 
         dataDeltas = [
             ["Materials", f"${currValMatl_currDate:.2f}", f"${origValMatl_prevDate:.2f}" if prevDate is not None else "N/A", f"${currValMatl_currDate - origValMatl_prevDate:.2f}"],

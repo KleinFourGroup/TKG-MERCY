@@ -9,7 +9,7 @@ from app import MainWindow
 from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeePTORange, EmployeePTODB
 from defaults import POINT_VALS, PTO_ELIGIBILITY
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 

@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from records import Package
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, centerOnScreen
 import logging
 

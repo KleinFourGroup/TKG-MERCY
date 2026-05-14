@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushBu
 from table import DBTable
 from app import MainWindow
 from records import Package
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, newVLine, startfile, tempReportPath
 
 from report import PDFReport
@@ -19,7 +19,6 @@ class GlobalsTab(QWidget):
         self.values: dict[str, QLabel] = {}
         self.inputs: dict[str, QLineEdit] = {}
         self.buttons: dict[str, QPushButton] = {}
-        self.calls = {}
 
         self.mainLayout = []
 

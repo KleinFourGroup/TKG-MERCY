@@ -10,14 +10,6 @@ from report import PDFReport
 
 import datetime
 
-def createTab():
-    tab = QWidget()
-    label = QLabel("TODO")
-    layout = QVBoxLayout(tab)
-    layout.addWidget(label)
-    tab.setLayout(layout)
-    return tab
-
 class InventoryTab(QWidget):
     def __init__(self, mainApp: MainWindow):
         super().__init__()
@@ -269,7 +261,7 @@ class MaterialsInventoryTab(QWidget):
         for material in self.selection:
             confirm = QMessageBox.question(self, f"Delete record for {material} on {self.currentDate.isoformat()}?", f"Are you sure you want to delete the inventory for {material} on {self.currentDate.isoformat()}?")
             if confirm == QMessageBox.StandardButton.Yes:
-                del self.mainApp.db.inventories[self.currentDate].materials[material]
+                self.mainApp.db.inventories[self.currentDate].delMaterialRecord(material)
                 QMessageBox.information(self.mainApp, "Success", f"{material} on {self.currentDate.isoformat()} successfully deleted!")
         self.refresh()
     
@@ -503,7 +495,7 @@ class PartsInventoryTab(QWidget):
         for part in self.selection:
             confirm = QMessageBox.question(self, f"Delete record for {part} on {self.currentDate.isoformat()}?", f"Are you sure you want to delete the inventory for {part} on {self.currentDate.isoformat()}?")
             if confirm == QMessageBox.StandardButton.Yes:
-                del self.mainApp.db.inventories[self.currentDate].parts[part]
+                self.mainApp.db.inventories[self.currentDate].delPartRecord(part)
                 QMessageBox.information(self.mainApp, "Success", f"{part} on {self.currentDate.isoformat()} successfully deleted!")
         self.refresh()
     

@@ -8,20 +8,12 @@ from table import DBTable
 from app import MainWindow
 from employee_detail_tab import EmployeeDetailTab
 from records import Database, ObservancesDB, HolidayObservance
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 from defaults import HOLIDAYS
 
 from app import MainWindow
-
-def createTab():
-    tab = QWidget()
-    label = QLabel("TODO")
-    layout = QVBoxLayout(tab)
-    layout.addWidget(label)
-    tab.setLayout(layout)
-    return tab
 
 class HolidayTab(QWidget):
     def __init__(self, mainApp: MainWindow):

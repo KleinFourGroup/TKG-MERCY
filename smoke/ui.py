@@ -124,8 +124,8 @@ def production_batch_roundtrip() -> list[str]:
     # Stub them out so we can drive the real save path headlessly.
     origCrit = QMessageBox.critical
     origInfo = QMessageBox.information
-    QMessageBox.critical = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
-    QMessageBox.information = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.critical = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.information = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
 
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()

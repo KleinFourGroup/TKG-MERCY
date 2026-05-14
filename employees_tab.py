@@ -7,7 +7,7 @@ import math
 from table import DBTable
 from app import MainWindow
 from records import Employee, EmployeeReviewsDB, EmployeeTrainingDB, EmployeePointsDB, EmployeePTODB, EmployeeNotesDB
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, startfile, tempReportPath, centerOnScreen
 from report import PDFReport
 import logging

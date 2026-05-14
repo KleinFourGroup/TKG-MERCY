@@ -1,5 +1,4 @@
 import datetime
-import logging
 
 from records.products import (
     Globals, Material, Mixture, Package, Part, Inventory,
@@ -200,11 +199,6 @@ class Database:
             raise RuntimeError('date not in self.inventories')
         del self.inventories[date]
 
-    def updateMaterialInventory(self, date: datetime.date, oldName: str, newName: str):
-        if date not in self.inventories:
-            raise RuntimeError('date not in self.inventories')
-        self.inventories[date].updateMaterialRecord(oldName, newName)
-
     def addMaterialInventory(self, materialRec: MaterialInventoryRecord):
         if materialRec.date is None:
             raise RuntimeError('materialRec.date is None')
@@ -212,27 +206,12 @@ class Database:
             self.addInventory(materialRec.date)
         self.inventories[materialRec.date].addMaterialRecord(materialRec)
 
-    def delMaterialInventory(self, date: datetime.date, name: str):
-        if date not in self.inventories:
-            raise RuntimeError('date not in self.inventories')
-        self.inventories[date].delMaterialRecord(name)
-
-    def updatePartInventory(self, date: datetime.date, oldName: str, newName: str):
-        if date not in self.inventories:
-            raise RuntimeError('date not in self.inventories')
-        self.inventories[date].updatePartRecord(oldName, newName)
-
     def addPartInventory(self, partRec: PartInventoryRecord):
         if partRec.date is None:
             raise RuntimeError('partRec.date is None')
         if not partRec.date in self.inventories:
             self.addInventory(partRec.date)
         self.inventories[partRec.date].addPartRecord(partRec)
-
-    def delPartInventory(self, date: datetime.date, name: str):
-        if date not in self.inventories:
-            raise RuntimeError('date not in self.inventories')
-        self.inventories[date].delPartRecord(name)
 
     def addEmployee(self, employee: Employee):
         if employee.idNum in self.employees:
@@ -435,27 +414,6 @@ class Database:
                     self.holidays.observances[year][holiday] = {}
                 for shift, obs in byShift.items():
                     self.holidays.observances[year][holiday][shift] = obs
-
-    def materialCosts(self):
-        for entry in self.materials:
-            cost = self.materials[entry].getCostPerLb()
-            if cost is not None:
-                logging.info("{} {}".format(self.materials[entry].name, cost))
-
-    def mixtureCosts(self):
-        for entry in self.mixtures:
-            logging.info("{} {}".format(self.mixtures[entry].name, self.mixtures[entry].getCost()))
-
-    def partCosts(self):
-        for entry in self.parts:
-            part = self.parts[entry]
-            logging.info("{} | {:.4f} {:.4f} -> {:.4f} {:.4f} {:.4f} -> {:.4f} {:.4f} -> {:.4f} | {:.4f} | {:.2f}% {:.2f}% {:.4f} | {:.4f}".format(part.name, part.getMatlCost(),  part.getLaborCost(),
-                                          part.getGrossMatlLaborCost(), part.getPackagingCost(), part.getManufacturingOverhead(),
-                                          part.getManufacturingCost(), part.getSGA(),
-                                          part.getTotalCost(), part.price,
-                                          100 * part.getGM(), 100 * part.getCM(), part.getVariableCost(),
-                                          part.getProductivity()))
-
 
     def __str__(self) -> str:
         res = []

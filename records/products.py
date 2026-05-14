@@ -375,9 +375,6 @@ class Part:
     def solveCM(self, target):
         return self.getVariableCost() / (1 - target)
 
-    def getProductivity(self):
-        return self.weight * (1 - self.getScrap()) / self.getLaborHours()
-
     def getTuple(self):
         return (
             self.name,

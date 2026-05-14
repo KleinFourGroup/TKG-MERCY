@@ -323,8 +323,8 @@ def production_quantity_validation() -> list[str]:
     production_tab.errorMessage = lambda parent, errs: captured.append(list(errs))  # type: ignore[assignment]
     origCrit = QMessageBox.critical
     origInfo = QMessageBox.information
-    QMessageBox.critical = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
-    QMessageBox.information = staticmethod(lambda *a, **kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.critical = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.information = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
 
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()

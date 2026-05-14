@@ -17,7 +17,6 @@ class PDFReportCore:
         self.pdf = canvas.Canvas(path, pagesize=letter)
         self.lineSpace = 1.3
         self.calculateMargins(margin)
-        self.pageNum = 1
         self.setFont("Times-Roman", 12)
 
     def calculateMargins(self, margin: float):
@@ -32,7 +31,6 @@ class PDFReportCore:
 
     def nextPage(self):
         self.pdf.showPage()
-        self.pageNum += 1
         self.setupPage()
 
     def setFont(self, font: str, size: int):

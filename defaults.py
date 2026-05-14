@@ -1,5 +1,3 @@
-import datetime
-
 TRAINING: list[str] = [
     "Orientation",
     "PPE",
@@ -9,13 +7,6 @@ TRAINING: list[str] = [
     "Emergency Response",
     "Hazardous Communication",
     "Forklift"
-]
-
-REVIEW_DATES = [
-    datetime.timedelta(days=30),
-    datetime.timedelta(days=60),
-    datetime.timedelta(days=90),
-    datetime.timedelta(days=365)
 ]
 
 POINT_VALS: dict[str, float] = {

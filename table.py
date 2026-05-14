@@ -49,7 +49,7 @@ class DBTable(QTableView):
     def setData(self, data):
         self.dbModel.setData(data)
     
-    def onSelect(self, selected: QItemSelection, deselected):
+    def onSelect(self, selected: QItemSelection, _deselected):
         selection = []
         for ind in selected.indexes():
             row = ind.row()

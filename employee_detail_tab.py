@@ -4,14 +4,6 @@ from utils import newHLine
 
 from app import MainWindow
 
-def createTab():
-    tab = QWidget()
-    label = QLabel("TODO")
-    layout = QVBoxLayout(tab)
-    layout.addWidget(label)
-    tab.setLayout(layout)
-    return tab
-
 class EmployeeDetailTab(QWidget):
     def __init__(self, mainApp: MainWindow):
         super().__init__()

@@ -8,7 +8,7 @@ from table import DBTable
 from app import MainWindow
 from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeeReview, EmployeeReviewsDB
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class ReviewsTab(QWidget):

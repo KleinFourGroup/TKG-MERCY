@@ -9,7 +9,7 @@ from app import MainWindow
 from employee_detail_tab import EmployeeDetailTab
 from records import Employee, EmployeeTrainingDate, EmployeeTrainingDB
 from defaults import POINT_VALS
-from error import ErrorWindow, errorMessage
+from error import errorMessage
 from utils import getComboBox, widgetFromList, checkInput, toQDate, fromQDate, centerOnScreen
 
 class TrainingTab(QWidget):
