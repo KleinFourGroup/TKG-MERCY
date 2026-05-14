@@ -32,6 +32,11 @@ class SaveMixin:
         self.dbFile.commit()
 
     def _saveFileBody(self):
+        # Re-narrow Optional attrs for the body. saveFile() already validated
+        # these before calling us, but pyright doesn't carry narrowing across
+        # method-boundary calls — and the body uses self.dbFile on ~50 sites.
+        if self.filePath is None or self.dbFile is None:
+            raise RuntimeError('self.filePath is not None and self.dbFile is not None')
         db = self.mainApp.db
 
         # --- globals (ANIKA cost parameters; db_version is preserved separately) ---
@@ -332,10 +337,14 @@ class SaveMixin:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
 
         res = self.dbFile.execute(f"SELECT holiday, shift, date FROM observances")
+        # HolidayObservance.date is Optional at init but always set by fromTuple
+        # / setObservance — never None on a saved record. Restructuring the 4-deep
+        # nested comprehension to satisfy the type checker is more disruptive
+        # than the inline ignore at the end of the comprehension.
         deleted = [vals for vals in res.fetchall() if not datetime.date.fromisoformat(vals[2]).year in db.holidays.observances or
                                                       not vals[0] in db.holidays.observances[datetime.date.fromisoformat(vals[2]).year] or
                                                       not vals[1] in db.holidays.observances[datetime.date.fromisoformat(vals[2]).year][vals[0]] or
-                                                      not db.holidays.observances[datetime.date.fromisoformat(vals[2]).year][vals[0]][vals[1]].date.isoformat() == vals[2]]
+                                                      not db.holidays.observances[datetime.date.fromisoformat(vals[2]).year][vals[0]][vals[1]].date.isoformat() == vals[2]]  # pyright: ignore[reportOptionalMemberAccess]
         if len(deleted) > 0:
             try:
                 self.dbFile.executemany(f"DELETE FROM observances WHERE (holiday, shift, date)=(?, ?, ?)", deleted)

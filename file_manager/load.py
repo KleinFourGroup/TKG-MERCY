@@ -156,6 +156,7 @@ class LoadMixin:
         for values in res.fetchall():
             employee = Employee()
             employee.fromTuple(values)
+            assert employee.idNum is not None, "Employee.fromTuple should set idNum"
 
             db.addEmployee(employee)
             reviews = EmployeeReviewsDB(employee.idNum)
@@ -255,6 +256,7 @@ class LoadMixin:
         for values in res.fetchall():
             observance = HolidayObservance()
             observance.fromTuple(values)
+            assert observance.date is not None, "HolidayObservance.fromTuple should set date"
 
             db.holidays.setObservance(observance)
 

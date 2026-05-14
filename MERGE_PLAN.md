@@ -571,7 +571,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 35 | ✅ Done | Merge plan Step 35: smoke render every report against fuzzed data — see §13.23 |
 | 36 | 🟡 In progress | Pyright sweep across the codebase — split into 36a-g; see §13.24 |
 | 36a | ✅ Done | Merge plan Step 36a: pyright setup + triage |
-| 36b | 📝 Sketched | `file_manager/` Optional sweep (save.py + load.py mixins) |
+| 36b | ✅ Done | Merge plan Step 36b: file_manager/ Optional sweep |
 | 36c | 📝 Sketched | `records/products.py` Database forward-ref via TYPE_CHECKING |
 | 36d | 📝 Sketched | Declarative-attribute batch (parentTab / currentEmployee / etc.) |
 | 36e | 📝 Sketched | HR tabs Optional sweep (pto / reviews / employees / points / training / notes / holidays) |
@@ -760,9 +760,15 @@ Landed 2026-05-14. Pyright added to requirements.txt's "Dev / lint" section; new
 
 **Top files:** `file_manager/save.py` (51 — **all the same pattern**, `self.dbFile.execute(...)` where the SaveMixin's `dbFile: sqlite3.Connection \| None` declaration doesn't narrow across method calls), then the HR tabs (pto: 25, reviews: 17, parts: 17, employees: 16, points: 14, training: 14, holidays: 13, notes: 12) and report/production.py (14), production_tab.py (7), file_manager/load.py (6), record/employees.py (5), records/products.py (4), employee_detail_tab.py (3), app.py (2).
 
-#### Step 36b — `file_manager/` Optional sweep 📝 Sketched
+#### Step 36b — `file_manager/` Optional sweep ✅ Done
 
-Single highest-ROI commit in the queue: ~51 findings in `save.py` plus the related ones in `load.py` are all the same pattern — entry-guard validates `dbFile is not None`, but pyright doesn't narrow across the call into `_saveFileBody()`. Likely fix: `assert self.dbFile is not None` at each method entry, or a local rebind (`conn = self.dbFile` after the guard) used throughout. Aim: knock `save.py` and `load.py` down to zero. **~57 findings.**
+Landed 2026-05-14, same session as 36a. **57 findings gone, file_manager/ at 0; baseline 219 → 162.** Smoke 18 PASS.
+
+- `save.py`: added the same `if self.filePath is None or self.dbFile is None: raise` entry guard at the top of `_saveFileBody()` that `_loadIntoDb()` already had — pyright doesn't narrow across method-boundary calls, so `saveFile()`'s outer guard didn't reach the ~50 `self.dbFile.execute(...)` sites inside `_saveFileBody`. Dropped save.py from 51 → 0 in one stroke.
+- `load.py`: two `assert ... is not None` lines — one after `Employee.fromTuple()` covering the 5 `EmployeeReviewsDB(employee.idNum)`-style constructor calls, one after `HolidayObservance.fromTuple()` covering the inline `observance.date.isoformat()` in the load logging. Both express "fromTuple should set this" as a runtime invariant.
+- One `# pyright: ignore[reportOptionalMemberAccess]` deferral in `save.py:343` — the `observance.date.isoformat()` site is buried in a 4-deep nested-dict list comprehension that does its own work via `db.holidays.observances[year][holiday][shift].date.isoformat()`. Restructuring the comprehension to introduce a local assertion would be more disruptive than the inline suppression; a comment above documents why.
+
+**Note on `# pyright:` comment prefix.** First attempt used `# pyright: HolidayObservance.date is...` as a prose comment above the comprehension; pyright treats `# pyright:` as a reserved directive prefix and emitted two new errors complaining about the unknown directive. Rephrased the comment so it doesn't start with the magic prefix; pyright now parses the inline `# pyright: ignore[reportOptionalMemberAccess]` cleanly and the prose comment is just prose.
 
 #### Step 36c — `records/products.py` Database forward-ref 📝 Sketched
 
