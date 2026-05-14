@@ -62,24 +62,31 @@ class PointsTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeePoints
         self.headers = ["Date", "Points", "Reason"]
-        self.tableData = [] if db is None else [[
-            "{}".format(entry.date.isoformat()),
-            "{}".format(entry.value),
-            "{}".format(entry.reason)
-
-        ] for entry in db.currentPointsList(datetime.date.today())]
+        self.tableData = []
+        if db is not None:
+            for entry in db.currentPointsList(datetime.date.today()):
+                if entry.date is None:
+                    raise RuntimeError('entry.date is None')
+                self.tableData.append([
+                    "{}".format(entry.date.isoformat()),
+                    "{}".format(entry.value),
+                    "{}".format(entry.reason)
+                ])
         self.tableData.sort(key=lambda row: row[0])
     
     def setSelection(self, selection):
         self.selection = list(map(lambda x: datetime.date.fromisoformat(x), selection))
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: str(x), self.selection))}")
     
-    def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeePoints = None if employeeID is None else self.mainApp.db.attendance[self.mainTab.employeeID] 
+    def setEmployee(self, employeeID: int | None):
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[employeeID]
+        self.currentEmployeePoints = None if employeeID is None else self.mainApp.db.attendance[employeeID]
         if self.currentEmployee is not None:
-            self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
-            self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
+            lastName = (self.currentEmployee.lastName or "?").upper()
+            firstName = self.currentEmployee.firstName or "?"
+            anniversary = self.currentEmployee.anniversary.isoformat() if self.currentEmployee.anniversary is not None else "?"
+            self.currentEmployeeLabel.setText(f"Employee: {lastName} {firstName} ({self.currentEmployee.idNum})")
+            self.anniversary.setText(f"Anniversary: {anniversary}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
@@ -110,21 +117,31 @@ class PointsTab(QWidget):
             self.pointsLabel.setText("Points: N/A")
     
     def openNew(self):
+        if self.currentEmployeePoints is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         PointsEditWindow(self.currentEmployeePoints.idNum, None, self.mainApp)
-    
+
     def openEdits(self):
-        pass
+        if self.currentEmployeePoints is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for date in self.selection:
             if not date in self.currentEmployeePoints.points:
                 errorMessage(self.mainApp, [f"{date} is an automatic deduction and cannot be edited."])
             else:
                 PointsEditWindow(self.currentEmployeePoints.idNum, self.currentEmployeePoints.points[date], self.mainApp)
-    
+
     def deletePoints(self):
+        if self.currentEmployeePoints is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for date in self.selection:
             if not date in self.currentEmployeePoints.points:
                 errorMessage(self.mainApp, [f"{date} is an automatic deduction and cannot be deleted."])
@@ -136,20 +153,20 @@ class PointsTab(QWidget):
         self.refresh()
 
     def report(self):
-        if self.currentEmployeePoints is None:
+        if self.currentEmployee is None or self.currentEmployeePoints is None:
             errorMessage(self.mainApp, ["No employee selected."])
-        else:
-            path = tempReportPath(f"employee-{self.currentEmployee.idNum}-attendance")
-            pdf = PDFReport(self.mainApp.db, path)
-            pdf.employeePointsReport(self.currentEmployee.idNum)
-            startfile(path)
+            return
+        path = tempReportPath(f"employee-{self.currentEmployee.idNum}-attendance")
+        pdf = PDFReport(self.mainApp.db, path)
+        pdf.employeePointsReport(self.currentEmployee.idNum)
+        startfile(path)
     
     def refresh(self):
         self.setEmployee(self.mainTab.employeeID)
         self.refreshPoints()
 
 class PointsEditWindow(QWidget):
-    def __init__(self, employeeID, point: EmployeePoint, mainApp: MainWindow):
+    def __init__(self, employeeID, point: EmployeePoint | None, mainApp: MainWindow):
         super().__init__(mainApp, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
@@ -164,19 +181,20 @@ class PointsEditWindow(QWidget):
 
         self.point = point
         self.isNew = point is None
-        if not self.isNew:
+
+        self.calendar = QCalendarWidget()
+        self.otherReason = QLineEdit()
+
+        if point is not None:
+            if point.date is None:
+                raise RuntimeError('point.date is None')
             if point.date not in self.pointDB.points:
                 raise RuntimeError('point.date not in self.pointDB.points')
             if not (point == self.pointDB.points[point.date]):
                 raise RuntimeError('point == self.pointDB.points[point.date]')
-
-        self.calendar = QCalendarWidget()
-        if not self.isNew:
-            self.calendar.setSelectedDate(toQDate(self.point.date))
-        
-        self.otherReason = QLineEdit()
-        if not self.isNew and not self.point.reason in POINT_VALS:
-            self.otherReason.setText(self.point.reason)
+            self.calendar.setSelectedDate(toQDate(point.date))
+            if point.reason not in POINT_VALS:
+                self.otherReason.setText(point.reason)
 
         self.pointsInput = QLineEdit()
         def setReason(reason: str):
@@ -187,10 +205,10 @@ class PointsEditWindow(QWidget):
                 self.otherReason.setEnabled(False)
                 self.pointsInput.setEnabled(False)
             else:
-                self.pointsInput.setText(f"{self.point.value if not self.isNew else ""}")
+                self.pointsInput.setText(f"{self.point.value if self.point is not None else ""}")
                 self.otherReason.setEnabled(True)
                 self.pointsInput.setEnabled(True)
-            
+
         reasonList = ["Other"]
         reasonList.extend(list(POINT_VALS.keys()))
 
@@ -198,8 +216,8 @@ class PointsEditWindow(QWidget):
         self.reasons.setEditable(False)
         self.reasons.currentTextChanged.connect(setReason)
         self.reasons.addItems(reasonList)
-        if not self.isNew:
-            self.reasons.setCurrentText(self.point.reason)
+        if point is not None and point.reason is not None:
+            self.reasons.setCurrentText(point.reason)
 
         self.mainLayout = [
             [
@@ -231,11 +249,16 @@ class PointsEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        
+
         date = fromQDate(self.calendar.selectedDate())
-        if date in self.pointDB.points and not (not isNew and date == self.point.date):
+        isSameDate = (
+            not isNew
+            and self.point is not None
+            and date == self.point.date
+        )
+        if date in self.pointDB.points and not isSameDate:
             errors.append(f"Employee {self.employeeID} already has points on {date.isoformat()}")
-        
+
         reason = self.reasons.currentText()
         other = self.otherReason.text()
         if reason == "Other" and other in POINT_VALS:
@@ -244,18 +267,23 @@ class PointsEditWindow(QWidget):
 
         if len(errors) == 0:
             if isNew:
-                self.point = EmployeePoint(self.employeeID, date, other if reason == "Other" else reason, points)
-            if not isNew:
+                point = EmployeePoint(self.employeeID, date, other if reason == "Other" else reason, points)
+                self.point = point
+            else:
+                if self.point is None:
+                    raise RuntimeError('self.point is None despite not isNew')
+                if self.point.date is None:
+                    raise RuntimeError('self.point.date is None')
                 del self.pointDB.points[self.point.date]
                 self.point.date = date
                 self.point.reason = reason
                 self.point.value = points
-            self.pointDB.points[self.point.date] = self.point
+                point = self.point
+            self.pointDB.points[date] = point
 
             self.mainApp.overviewTab.pointsTab.refresh()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         return res
     

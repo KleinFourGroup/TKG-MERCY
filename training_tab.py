@@ -67,11 +67,13 @@ class TrainingTab(QWidget):
         db = self.currentEmployeeTraining
 
         self.headers = ["Date", "Comments"]
-        self.tableData = [] if db is None or not self.currentTraining in db.training else [[
-            "{}".format(db.training[self.currentTraining][entry].date.isoformat()),
-            "{}".format(db.training[self.currentTraining][entry].comment)
-
-        ] for entry in db.training[self.currentTraining]]
+        self.tableData = []
+        if db is not None and self.currentTraining in db.training:
+            for entry, td in db.training[self.currentTraining].items():
+                self.tableData.append([
+                    entry.isoformat(),
+                    "{}".format(td.comment)
+                ])
         self.tableData.sort(key=lambda row: row[0])
     
     def setSelection(self, selection):
@@ -94,7 +96,7 @@ class TrainingTab(QWidget):
     
     def refreshPicker(self):
         self.trainingOptions = ["None"]
-        if self.currentEmployee is not None:
+        if self.currentEmployeeTraining is not None:
             self.trainingOptions.extend(list(self.currentEmployeeTraining.training.keys()))
 
         oldTraining = self.currentTraining
@@ -105,15 +107,17 @@ class TrainingTab(QWidget):
             oldTraining = "None"
         self.trainingPicker.setCurrentText(oldTraining)
     
-    def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeeTraining = None if employeeID is None else self.mainApp.db.training[self.mainTab.employeeID]
-        
+    def setEmployee(self, employeeID: int | None):
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[employeeID]
+        self.currentEmployeeTraining = None if employeeID is None else self.mainApp.db.training[employeeID]
+
         if self.currentEmployee is not None:
-            self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
+            lastName = (self.currentEmployee.lastName or "?").upper()
+            firstName = self.currentEmployee.firstName or "?"
+            self.currentEmployeeLabel.setText(f"Employee: {lastName} {firstName} ({self.currentEmployee.idNum})")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
-        
+
         self.refreshPicker()
     
     def refreshTrainingTab(self):
@@ -129,18 +133,28 @@ class TrainingTab(QWidget):
         self.deleteB.setEnabled(self.currentEmployee is not None and not self.currentTraining == "None")
     
     def openNew(self):
+        if self.currentEmployeeTraining is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, None, self.mainApp)
-    
+
     def openEdits(self):
-        pass
+        if self.currentEmployeeTraining is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for date in self.selection:
             TrainingEditWindow(self.currentEmployeeTraining.idNum, self.currentTraining, self.currentEmployeeTraining.training[self.currentTraining][date], self.mainApp)
-    
+
     def deleteTraining(self):
+        if self.currentEmployeeTraining is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for date in self.selection:
             confirm = QMessageBox.question(self, f"Delete {date.isoformat()}?", f"Are you sure you want to delete the training for {self.currentTraining} on {date.isoformat()}?")
 
@@ -154,7 +168,7 @@ class TrainingTab(QWidget):
         self.refreshTrainingTab()
 
 class TrainingEditWindow(QWidget):
-    def __init__(self, employeeID, trainingType: str, trainingDate: EmployeeTrainingDate, mainApp: MainWindow):
+    def __init__(self, employeeID, trainingType: str, trainingDate: EmployeeTrainingDate | None, mainApp: MainWindow):
         super().__init__(mainApp, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
@@ -170,21 +184,23 @@ class TrainingEditWindow(QWidget):
 
         self.trainingDate = trainingDate
         self.isNew = trainingDate is None
-        if not self.isNew:
+
+        self.calendar = QCalendarWidget()
+        self.comment = QLineEdit()
+
+        if trainingDate is not None:
+            if trainingDate.date is None:
+                raise RuntimeError('trainingDate.date is None')
+            if trainingDate.training is None:
+                raise RuntimeError('trainingDate.training is None')
             if trainingDate.date not in self.trainingDateDB.training[trainingType]:
                 raise RuntimeError('trainingDate.date not in self.trainingDateDB.training[trainingType]')
             if not (trainingDate.training == trainingType):
                 raise RuntimeError('trainingDate.training == trainingType')
             if not (trainingDate == self.trainingDateDB.training[trainingDate.training][trainingDate.date]):
                 raise RuntimeError('trainingDate == self.trainingDateDB.training[trainingDate.training][trainingDate.date]')
-
-        self.calendar = QCalendarWidget()
-        if not self.isNew:
-            self.calendar.setSelectedDate(toQDate(self.trainingDate.date))
-        
-        self.comment = QLineEdit()
-        if not self.isNew:
-            self.comment.setText(self.trainingDate.comment)
+            self.calendar.setSelectedDate(toQDate(trainingDate.date))
+            self.comment.setText(trainingDate.comment)
 
         self.mainLayout = [
             [
@@ -210,26 +226,36 @@ class TrainingEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        
+
         date = fromQDate(self.calendar.selectedDate())
-        if date in self.trainingDateDB.training[self.trainingType] and not (not isNew and date == self.trainingDate.date):
+        isSameDate = (
+            not isNew
+            and self.trainingDate is not None
+            and date == self.trainingDate.date
+        )
+        if date in self.trainingDateDB.training[self.trainingType] and not isSameDate:
             errors.append(f"Employee {self.employeeID} already has training for {self.trainingType} on {date.isoformat()}")
-        
+
         comment = self.comment.text()
 
         if len(errors) == 0:
             if isNew:
-                self.trainingDate = EmployeeTrainingDate(self.employeeID, self.trainingType, date, comment)
-            if not isNew:
+                trainingDate = EmployeeTrainingDate(self.employeeID, self.trainingType, date, comment)
+                self.trainingDate = trainingDate
+            else:
+                if self.trainingDate is None:
+                    raise RuntimeError('self.trainingDate is None despite not isNew')
+                if self.trainingDate.date is None:
+                    raise RuntimeError('self.trainingDate.date is None')
                 del self.trainingDateDB.training[self.trainingType][self.trainingDate.date]
                 self.trainingDate.date = date
                 self.trainingDate.comment = comment
-            self.trainingDateDB.training[self.trainingType][self.trainingDate.date] = self.trainingDate
+                trainingDate = self.trainingDate
+            self.trainingDateDB.training[self.trainingType][date] = trainingDate
 
             self.mainApp.overviewTab.trainingTab.refresh()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         return res
     

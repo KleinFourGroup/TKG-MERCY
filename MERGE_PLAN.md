@@ -574,7 +574,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36b | ✅ Done | Merge plan Step 36b: file_manager/ Optional sweep |
 | 36c | ✅ Done | Merge plan Step 36c: records/products.py Database TYPE_CHECKING |
 | 36d | ✅ Done | Merge plan Step 36d: declarative attribute batch |
-| 36e | 📝 Sketched | HR tabs Optional sweep (pto / reviews / employees / points / training / notes / holidays) |
+| 36e1 | ✅ Done | Merge plan Step 36e1: HR Optional sweep — group A (notes / points / reviews / training) |
+| 36e2 | 📝 Sketched | HR Optional sweep — group B (pto / parts / employees / holidays) |
 | 36f | 📝 Sketched | Production-side cleanup (production_tab.py + report/production.py) |
 | 36g | 📝 Sketched | Bake `pyright --outputjson` into the smoke baseline |
 | 37 | 📝 Sketched | (Future / if time permits) UI fuzz harness for state-machine bugs — see §13.25 |
@@ -790,9 +791,27 @@ Changes:
 
 **On the net-up count.** Baseline rose 158 → 175 (+17) over 36d. Cause: making the Optional types honest exposes ~45 previously-hidden `reportOptionalMemberAccess` / `reportArgumentType` findings — `self.currentEmployee.idNum` could not be flagged when `currentEmployee` was lying as a non-Optional `Employee`. The total is a noisier metric than the categorical health: by rule, `reportAttributeAccessIssue` dropped from 38 → 10, and the Optional findings are now properly categorized as Optional. The exposed surface is exactly 36e's scope, ready for per-call-site judgment.
 
-#### Step 36e — HR tabs Optional sweep 📝 Sketched
+#### Step 36e — HR tabs Optional sweep 🟡 In progress
 
-The bulk of the work: ~80-100 `reportOptionalMemberAccess` / `reportArgumentType` findings across `pto_tab.py`, `reviews_tab.py`, `employees_tab.py`, `parts_tab.py`, `points_tab.py`, `training_tab.py`, `notes_tab.py`, `holidays_tab.py`. Per-call-site judgment required: either real null-check (the employee picker returns None when nothing is selected — legitimate Optional that the UI should defend against) or `assert` (UI flow guarantees not-None at this call site). The only step that's not mechanical; likely the biggest commit.
+The bulk of the work: ~80-100 `reportOptionalMemberAccess` / `reportArgumentType` findings across `pto_tab.py`, `reviews_tab.py`, `employees_tab.py`, `parts_tab.py`, `points_tab.py`, `training_tab.py`, `notes_tab.py`, `holidays_tab.py`. Per-call-site judgment required: either real null-check (the employee picker returns None when nothing is selected — legitimate Optional that the UI should defend against) or `assert` (UI flow guarantees not-None at this call site). The only step that's not mechanical; split into a pair of commits (the sketch's "or pair" option) along a natural axis — group A is the four employee-detail sub-tabs that share the `currentEmployee` / `currentEmployee<X>` pattern from 36d; group B is everything else (PTO date/str polymorphism, parts, employees-list, holidays).
+
+##### Step 36e1 — group A (notes / points / reviews / training) ✅ Done
+
+Landed 2026-05-14. **75 findings gone, 4 files at 0; baseline 175 → 100.** Smoke 18 PASS + manual UI sweep across all four sub-tabs (employee select / switch / None, new / edit / delete, prefilled edit dialogs, report generation).
+
+Dominant patterns and the picks made:
+
+- **`setEmployee(employeeID: int)` → `int | None`.** The annotation was lying (the param can legitimately be None when the picker is on "None"). All four tabs additionally used `self.mainTab.employeeID` inside the `if employeeID is None ? None : ...` ternary; replacing it with the local `employeeID` lets pyright narrow on the just-checked param. Both fixes in one stroke.
+- **Display labels with `or "?"` fallback.** `self.currentEmployee.lastName.upper()` and `.anniversary.isoformat()` were pyright Optional-access errors; per the dual-mandate-on-failure-handling guidance (user-visible-degradation > loud crash for display strings), the four tabs' header labels now render "?" for any missing field rather than crashing `setText`. Data corruption stays visible without taking the UI down.
+- **Early-return guards on button-gated methods** (`openNew` / `openEdits` / `delete*` / `report`). Original style was `if X is None: errorMessage()` followed by code that proceeded anyway (would crash on `X.attr` if X really were None). Converted to early-return so pyright narrows the rest of the method body AND defense-in-depth holds if button-enable is ever circumvented. Removed two `pass` no-ops at the top of `openEdits` in points / reviews / training while there.
+- **`EditWindow` `__init__` consolidation.** Each window had a repeating pattern: `if not self.isNew:` blocks scattered across widget construction (calendar, time, details, etc.), each accessing `self.note` / `self.point` / `self.review` / `self.trainingDate` which pyright sees as Optional. Replaced with one `if note is not None:` block (pyright narrows on `is not None` directly) that does all the prefill work in sequence. Widget creation moved outside the block so the widgets always exist. Param annotations changed from non-Optional to Optional to match the call sites that already passed `None` for the new-entry case.
+- **`readData` local-var pattern.** The trailing `self.notesDB.notes[(self.note.date, self.note.time)] = self.note` (and equivalents) needed `self.note` non-None plus `.date` / `.time` non-None. Restructured each `readData` to bind a local `note` / `point` / `review` / `trainingDate` in both branches (isNew constructs it; not-isNew narrows `self.note` with a raise + reassigns its fields), then uses the local + the just-validated local `date` / `timeStr` as the dict key. Side benefit: the existing `self.note.date == self.note.date` after self-assignment becomes pointful; the new code reads what it means.
+
+**Genuine semantic-equivalent changes worth flagging.** `openEdits` for points / reviews / training originally had `if len(self.selection) == 0: errorMessage()` followed by a loop — with empty selection the loop ran zero times, so the missing `return` was a latent no-op. New code returns after the errorMessage; equivalent in current shape but more legible.
+
+##### Step 36e2 — group B (pto / parts / employees / holidays) 📝 Sketched
+
+Remaining: pto_tab.py (30, includes the 36d deferral at L91 — `db.PTO[entry].end` is `datetime.date | str` and needs `isinstance` narrowing via a local), parts_tab.py (16, ANIKA-side — different shape than the employee-detail tabs), employees_tab.py (15, the employee list/CRUD tab itself), holidays_tab.py (11, calendar/observance-shaped). 72 findings, similar judgment-per-site approach as 36e1 but with more variety in the per-file patterns.
 
 #### Step 36f — production-side cleanup 📝 Sketched
 

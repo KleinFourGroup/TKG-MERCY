@@ -59,24 +59,30 @@ class ReviewsTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeeReviews
         self.headers = ["Review Date", "Next Review", "Details"]
-        self.tableData = [] if db is None else [[
-            "{}".format(db.reviews[entry].date.isoformat()),
-            "{}".format(db.reviews[entry].nextReview.isoformat()),
-            "{}".format(db.reviews[entry].details)
-
-        ] for entry in db.reviews]
+        self.tableData = []
+        if db is not None:
+            for entry, review in db.reviews.items():
+                nextReview = "?" if review.nextReview is None else review.nextReview.isoformat()
+                self.tableData.append([
+                    entry.isoformat(),
+                    nextReview,
+                    "{}".format(review.details)
+                ])
         self.tableData.sort(key=lambda row: row[0])
     
     def setSelection(self, selection):
         self.selection = list(map(lambda x: datetime.date.fromisoformat(x), selection))
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: str(x), self.selection))}")
     
-    def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeeReviews = None if employeeID is None else self.mainApp.db.reviews[self.mainTab.employeeID] 
+    def setEmployee(self, employeeID: int | None):
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[employeeID]
+        self.currentEmployeeReviews = None if employeeID is None else self.mainApp.db.reviews[employeeID]
         if self.currentEmployee is not None:
-            self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
-            self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
+            lastName = (self.currentEmployee.lastName or "?").upper()
+            firstName = self.currentEmployee.firstName or "?"
+            anniversary = self.currentEmployee.anniversary.isoformat() if self.currentEmployee.anniversary is not None else "?"
+            self.currentEmployeeLabel.setText(f"Employee: {lastName} {firstName} ({self.currentEmployee.idNum})")
+            self.anniversary.setText(f"Anniversary: {anniversary}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
@@ -95,8 +101,10 @@ class ReviewsTab(QWidget):
         if self.currentEmployeeReviews is not None:
             last = self.currentEmployeeReviews.lastReview()
             if last is not None:
-                self.reviewLast.setText(f"Last Review: {last.date.isoformat()}")
-                self.reviewNext.setText(f"Next Review: {last.nextReview.isoformat()}")
+                lastStr = "?" if last.date is None else last.date.isoformat()
+                nextStr = "?" if last.nextReview is None else last.nextReview.isoformat()
+                self.reviewLast.setText(f"Last Review: {lastStr}")
+                self.reviewNext.setText(f"Next Review: {nextStr}")
             else:
                 isEmpty = True
         else:
@@ -107,18 +115,28 @@ class ReviewsTab(QWidget):
             self.reviewNext.setText(f"Next Review: N/A")
     
     def openNew(self):
+        if self.currentEmployeeReviews is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         ReviewsEditWindow(self.currentEmployeeReviews.idNum, None, self.mainApp)
-    
+
     def openEdits(self):
-        pass
+        if self.currentEmployeeReviews is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No reviews selected."])
+            return
         for date in self.selection:
             ReviewsEditWindow(self.currentEmployeeReviews.idNum, self.currentEmployeeReviews.reviews[date], self.mainApp)
-    
+
     def deleteReviews(self):
+        if self.currentEmployeeReviews is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No reviews selected."])
+            return
         for date in self.selection:
             confirm = QMessageBox.question(self, f"Delete {date.isoformat()}?", f"Are you sure you want to delete the review on {date.isoformat()}?")
 
@@ -133,7 +151,7 @@ class ReviewsTab(QWidget):
         self.refreshReviews()
 
 class ReviewsEditWindow(QWidget):
-    def __init__(self, employeeID, review: EmployeeReview, mainApp: MainWindow):
+    def __init__(self, employeeID, review: EmployeeReview | None, mainApp: MainWindow):
         super().__init__(mainApp, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         if employeeID is None:
@@ -148,25 +166,32 @@ class ReviewsEditWindow(QWidget):
 
         self.review = review
         self.isNew = review is None
-        if not self.isNew:
+
+        self.calendar = QCalendarWidget()
+        daysText = ""
+        detailsText = ""
+
+        if review is not None:
+            if review.date is None:
+                raise RuntimeError('review.date is None')
             if review.date not in self.reviewDB.reviews:
                 raise RuntimeError('review.date not in self.reviewDB.reviews')
             if not (review == self.reviewDB.reviews[review.date]):
                 raise RuntimeError('review == self.reviewDB.reviews[review.date]')
-
-        self.calendar = QCalendarWidget()
-        if not self.isNew:
-            self.calendar.setSelectedDate(toQDate(self.review.date))
+            self.calendar.setSelectedDate(toQDate(review.date))
+            if review.nextReview is not None:
+                daysText = f"{(review.nextReview - review.date).days}"
+            detailsText = review.details
 
         self.mainLayout = [
             [
                 QLabel("Review Date:"), self.calendar
             ],
             [
-                QLabel("Days to Next Review:"), QLineEdit(f"{(self.review.nextReview - self.review.date).days if not self.isNew else ""}"),
+                QLabel("Days to Next Review:"), QLineEdit(daysText),
             ],
             [
-                QLabel("Details:"), QLineEdit(f"{self.review.details if not self.isNew else ""}"),
+                QLabel("Details:"), QLineEdit(detailsText),
             ],
             [
                 QPushButton("Update"), QPushButton("Create")
@@ -185,28 +210,38 @@ class ReviewsEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        
+
         date = fromQDate(self.calendar.selectedDate())
-        if date in self.reviewDB.reviews and not (not isNew and date == self.review.date):
+        isSameDate = (
+            not isNew
+            and self.review is not None
+            and date == self.review.date
+        )
+        if date in self.reviewDB.reviews and not isSameDate:
             errors.append(f"Employee {self.employeeID} was already reviewed on {date.isoformat()}")
-        
+
         days = checkInput(self.mainLayout[1][1].text(), int, "pos", errors, "Days to Next Review")
         details = self.mainLayout[2][1].text()
 
         if len(errors) == 0:
             if isNew:
-                self.review = EmployeeReview(self.employeeID, date, date + datetime.timedelta(days=days), details)
-            if not isNew:
+                review = EmployeeReview(self.employeeID, date, date + datetime.timedelta(days=days), details)
+                self.review = review
+            else:
+                if self.review is None:
+                    raise RuntimeError('self.review is None despite not isNew')
+                if self.review.date is None:
+                    raise RuntimeError('self.review.date is None')
                 del self.reviewDB.reviews[self.review.date]
                 self.review.date = date
                 self.review.nextReview = date + datetime.timedelta(days=days)
                 self.review.details = details
-            self.reviewDB.reviews[self.review.date] = self.review
+                review = self.review
+            self.reviewDB.reviews[date] = review
 
             self.mainApp.overviewTab.reviewsTab.refresh()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         return res
     
