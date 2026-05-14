@@ -1,4 +1,5 @@
 import logging
+from typing import TYPE_CHECKING
 
 from records.products import Material, Mixture, Package, Part, MaterialInventoryRecord, PartInventoryRecord
 from records.employees import (
@@ -7,12 +8,23 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 
+if TYPE_CHECKING:
+    import sqlite3
+    from app import MainWindow
+
 
 class LoadMixin:
     # loadFile + the _loadIntoDb worker that pours every table into a Database.
     # Operates on `self.dbFile`, `self.filePath`, and `self.mainApp.db` set up by
     # the composed FileManager. _loadIntoDb is called with an explicit db so the
     # importer can populate a throwaway emptyDB without clobbering self.mainApp.db.
+
+    if TYPE_CHECKING:
+        # Attributes provided by the composed FileManager (see file_manager/__init__.py).
+        # Declared here so Pylance can resolve `self.dbFile`/etc. on mixin methods.
+        dbFile: sqlite3.Connection | None
+        filePath: str | None
+        mainApp: MainWindow
 
     def loadFile(self):
         if self.filePath is None or self.dbFile is None:

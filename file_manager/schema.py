@@ -1,4 +1,5 @@
 import sqlite3
+from typing import TYPE_CHECKING
 
 # Table-set fingerprints for format detection (§8.1 of MERGE_PLAN).
 ANIKA_TABLES = {"globals", "materials", "mixtures", "packaging", "parts",
@@ -12,6 +13,10 @@ UNIFIED_TABLES = ANIKA_TABLES | BECKY_TABLES | MERCY_EXTRA_TABLES
 class SchemaMixin:
     # Table-creation, version-stamp, and format-detect helpers shared by FileManager.
     # Operates on `self.dbFile` set up by the composed FileManager.
+
+    if TYPE_CHECKING:
+        # Attribute provided by the composed FileManager (see file_manager/__init__.py).
+        dbFile: sqlite3.Connection | None
 
     def _createAnikaTables(self):
         # v2 normalized ANIKA schema. Base64-encoded compound columns replaced by child

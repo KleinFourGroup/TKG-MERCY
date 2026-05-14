@@ -1,8 +1,12 @@
 import datetime
 import logging
 import shutil
+from typing import TYPE_CHECKING
 
 from utils import stringToList, stringFromB64
+
+if TYPE_CHECKING:
+    import sqlite3
 
 
 class MigrateMixin:
@@ -10,6 +14,13 @@ class MigrateMixin:
     # runs inside the outer initFile transaction, so a failure rolls back cleanly.
     # Version targets are literal integers (`_setDbVersion(2)`/`(3)`/`(4)`); MERCY_DB_VERSION
     # is owned by the package root and isn't referenced here.
+
+    if TYPE_CHECKING:
+        # Attributes provided by the composed FileManager (see file_manager/__init__.py).
+        # `_setDbVersion` is supplied by SchemaMixin in the same composition.
+        dbFile: sqlite3.Connection | None
+        filePath: str | None
+        def _setDbVersion(self, version: int) -> None: ...
 
     def _backupDbFile(self):
         # Make a sibling copy before running a destructive migration (§8.2). Timestamp

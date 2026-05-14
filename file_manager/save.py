@@ -1,11 +1,22 @@
 import datetime
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import sqlite3
+    from app import MainWindow
 
 
 class SaveMixin:
     # saveFile orchestration + the long _saveFileBody that walks every table.
     # Operates on `self.dbFile`, `self.filePath`, and `self.mainApp.db` set up by
     # the composed FileManager.
+
+    if TYPE_CHECKING:
+        # Attributes provided by the composed FileManager (see file_manager/__init__.py).
+        dbFile: sqlite3.Connection | None
+        filePath: str | None
+        mainApp: MainWindow
 
     def saveFile(self):
         if self.filePath is None or self.dbFile is None:

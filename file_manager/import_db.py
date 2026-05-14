@@ -2,12 +2,20 @@ import glob
 import logging
 import os
 import shutil
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app import MainWindow
 
 
 class ImportMixin:
     # Cross-DB import: read a second .db (legacy ANIKA, legacy BECKY, or unified MERCY)
     # into a fresh throwaway Database without touching the currently-open DB or the
     # source file.
+
+    if TYPE_CHECKING:
+        # Attribute provided by the composed FileManager (see file_manager/__init__.py).
+        mainApp: MainWindow
 
     def importOtherDb(self, srcPath: str):
         # Read a second .db (legacy ANIKA, legacy BECKY, or unified MERCY) into a fresh
