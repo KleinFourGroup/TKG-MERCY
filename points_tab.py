@@ -219,30 +219,23 @@ class PointsEditWindow(QWidget):
         if point is not None and point.reason is not None:
             self.reasons.setCurrentText(point.reason)
 
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Point Date:"), self.calendar
-            ],
-            [
-                QLabel("Reason:"), self.reasons
-            ],
-            [
-                QLabel("Other:"), self.otherReason
-            ],
-            [
-                QLabel("Points:"), self.pointsInput
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Point Date:"), self.calendar],
+            [QLabel("Reason:"), self.reasons],
+            [QLabel("Other:"), self.otherReason],
+            [QLabel("Points:"), self.pointsInput],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updatePoint)
+            self.updateButton.clicked.connect(self.updatePoint)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newPoint)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newPoint)
         centerOnScreen(self)
         self.show()
 

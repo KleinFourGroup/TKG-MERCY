@@ -580,7 +580,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36g | ✅ Done | Merge plan Step 36g: bake `pyright --outputjson` into the smoke baseline |
 | 37 | 🚧 In progress | UI regression coverage (smoke checks that replace Step 36-style manual sweeps) — split into 37a-c per §13.25 commit plan |
 | 37a | ✅ Done | Merge plan Step 37a: parts_tab_crud + employees_tab_crud (records-side; widget naming for testability) |
-| 37b | 📝 Sketched | Employee-detail side: employee_detail_populates + 5 dialog_roundtrip checks + cascade |
+| 37b | ✅ Done | Merge plan Step 37b: employee_detail_populates + 5 dialog_roundtrip checks + cascade |
 | 37c | 📝 Sketched | Holidays: holidays_tab_observances + holidays_tab_defaults_crud |
 | 38 | 📝 Sketched | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 

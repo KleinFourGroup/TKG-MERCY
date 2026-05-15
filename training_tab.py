@@ -202,24 +202,21 @@ class TrainingEditWindow(QWidget):
             self.calendar.setSelectedDate(toQDate(trainingDate.date))
             self.comment.setText(trainingDate.comment)
 
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Point Date:"), self.calendar
-            ],
-            [
-                QLabel("Comment:"), self.comment
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Point Date:"), self.calendar],
+            [QLabel("Comment:"), self.comment],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updateTraining)
+            self.updateButton.clicked.connect(self.updateTraining)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newTraining)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newTraining)
         centerOnScreen(self)
         self.show()
 

@@ -25,6 +25,10 @@ from smoke import (
     production_quantity_validation,
     qsettings_reopen, close_confirm,
     parts_tab_crud, employees_tab_crud,
+    employee_detail_populates, reviews_dialog_roundtrip,
+    training_dialog_roundtrip, points_dialog_roundtrip,
+    pto_dialog_roundtrip, notes_dialog_roundtrip,
+    employee_delete_cascades_detail_tabs,
     pyright_baseline,
 )
 
@@ -51,6 +55,13 @@ def main() -> int:
                      ("close_confirm", close_confirm),
                      ("parts_tab_crud", parts_tab_crud),
                      ("employees_tab_crud", employees_tab_crud),
+                     ("employee_detail_populates", employee_detail_populates),
+                     ("reviews_dialog_roundtrip", reviews_dialog_roundtrip),
+                     ("training_dialog_roundtrip", training_dialog_roundtrip),
+                     ("points_dialog_roundtrip", points_dialog_roundtrip),
+                     ("pto_dialog_roundtrip", pto_dialog_roundtrip),
+                     ("notes_dialog_roundtrip", notes_dialog_roundtrip),
+                     ("employee_delete_cascades_detail_tabs", employee_delete_cascades_detail_tabs),
                      ("pyright_baseline", pyright_baseline)]:
         errors = fn()
         if errors:

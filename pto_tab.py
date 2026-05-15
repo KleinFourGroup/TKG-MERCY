@@ -426,27 +426,22 @@ class PTOEditWindow(QWidget):
             self.calendarEnd.setSelectedDate(toQDate(PTORange.end))
             self.hours.setText(f"{PTORange.hours}")
 
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Start:"), self.calendarStart
-            ],
-            [
-                QLabel("End:"), self.calendarEnd
-            ],
-            [
-                QLabel("Hours:"), self.hours
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Start:"), self.calendarStart],
+            [QLabel("End:"), self.calendarEnd],
+            [QLabel("Hours:"), self.hours],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updatePTO)
+            self.updateButton.clicked.connect(self.updatePTO)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newPTO)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newPTO)
         centerOnScreen(self)
         self.show()
 

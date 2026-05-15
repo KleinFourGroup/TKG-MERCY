@@ -198,27 +198,22 @@ class NotesEditWindow(QWidget):
             self.timeInput.setTime(QTime(hours, minutes))
             self.detailsInput.setPlainText(note.details)
 
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Date:"), self.calendar
-            ],
-            [
-                QLabel("Time:"), self.timeInput
-            ],
-            [
-                QLabel("Details:"), self.detailsInput
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Date:"), self.calendar],
+            [QLabel("Time:"), self.timeInput],
+            [QLabel("Details:"), self.detailsInput],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updateNote)
+            self.updateButton.clicked.connect(self.updateNote)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newNote)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newNote)
         centerOnScreen(self)
         self.show()
 

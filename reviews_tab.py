@@ -183,27 +183,24 @@ class ReviewsEditWindow(QWidget):
                 daysText = f"{(review.nextReview - review.date).days}"
             detailsText = review.details
 
+        self.daysEdit = QLineEdit(daysText)
+        self.detailsEdit = QLineEdit(detailsText)
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Review Date:"), self.calendar
-            ],
-            [
-                QLabel("Days to Next Review:"), QLineEdit(daysText),
-            ],
-            [
-                QLabel("Details:"), QLineEdit(detailsText),
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Review Date:"), self.calendar],
+            [QLabel("Days to Next Review:"), self.daysEdit],
+            [QLabel("Details:"), self.detailsEdit],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updateReview)
+            self.updateButton.clicked.connect(self.updateReview)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newReview)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newReview)
         centerOnScreen(self)
         self.show()
 
@@ -220,8 +217,8 @@ class ReviewsEditWindow(QWidget):
         if date in self.reviewDB.reviews and not isSameDate:
             errors.append(f"Employee {self.employeeID} was already reviewed on {date.isoformat()}")
 
-        days = checkInput(self.mainLayout[1][1].text(), int, "pos", errors, "Days to Next Review")
-        details = self.mainLayout[2][1].text()
+        days = checkInput(self.daysEdit.text(), int, "pos", errors, "Days to Next Review")
+        details = self.detailsEdit.text()
 
         if len(errors) == 0:
             if isNew:

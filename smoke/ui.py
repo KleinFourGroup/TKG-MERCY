@@ -775,3 +775,458 @@ def employees_tab_crud() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Step 37b — employee-detail side (Overview tab + 5 sub-tab Edit dialogs +
+# delete cascade). Mirrors the pre-37 manual sweep that picked a fixture
+# employee, clicked through each sub-tab + each Edit dialog, and confirmed
+# label population / dialog prefill / save roundtrip.
+# ---------------------------------------------------------------------------
+
+
+def _pickerSelectionFor(emp) -> str:
+    """Reproduce the picker string from EmployeeDetailTab.refreshPicker:
+    'LASTNAME firstname (id)'. Used to drive ``employeePicker.setCurrentText``."""
+    last = (emp.lastName or "?").upper()
+    return f"{last} {emp.firstName} ({emp.idNum})"
+
+
+def _detailTabsScratchSetup(seed=1):
+    """Construct a MainWindow, seed it with a tiny fuzz DB, refresh the
+    overview picker, and return ``(window, restore, tmp, idNums)``.
+
+    Caller is responsible for the finally-block teardown (the standard
+    restore() + dbFile.close() + os.unlink dance)."""
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = MainWindow()
+    if not w.fileManager.setFile(tmp.name):
+        raise RuntimeError("setFile returned False on fresh empty DB")
+    _, idNums, _ = _seedTinyFuzzDB(w)
+    w.overviewTab.refresh()
+    return w, restore, tmp, idNums
+
+
+def employee_detail_populates() -> list[str]:
+    """Step 37b: picking an employee fills all 5 detail sub-tabs; 'None' clears them.
+
+    Drives ``employee_detail_tab.EmployeePicker`` programmatically and asserts
+    that ``currentEmployeeLabel`` on every detail sub-tab (Reviews / Training /
+    Points / PTO / Notes) reflects the selected fixture, then that switching
+    back to 'None' returns every sub-tab to "Employee: N/A". Also confirms the
+    picker actually contains the fixture's selection string (a Step-20-class
+    regression catch: a stale picker that didn't refresh would silently
+    no-op the setCurrentText).
+    """
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        activeIds = [i for i in idNums if w.db.employees[i].status]
+        if not activeIds:
+            errors.append("fuzz fixture produced no active employees (test setup bug)")
+            return errors
+        fixtureId = sorted(activeIds)[0]
+        emp = w.db.employees[fixtureId]
+        selection = _pickerSelectionFor(emp)
+
+        pickerItems = [w.overviewTab.employeePicker.itemText(i)
+                       for i in range(w.overviewTab.employeePicker.count())]
+        if selection not in pickerItems:
+            errors.append(f"picker missing fixture selection {selection!r}; got {pickerItems[:5]}...")
+            return errors
+
+        w.overviewTab.employeePicker.setCurrentText(selection)
+        expectedLabel = f"Employee: {selection}"
+        for tabName in ("reviewsTab", "trainingTab", "pointsTab", "PTOTab", "notesTab"):
+            tab = getattr(w.overviewTab, tabName)
+            got = tab.currentEmployeeLabel.text()
+            if got != expectedLabel:
+                errors.append(f"{tabName}: label={got!r}, want {expectedLabel!r}")
+
+        w.overviewTab.employeePicker.setCurrentText("None")
+        for tabName in ("reviewsTab", "trainingTab", "pointsTab", "PTOTab", "notesTab"):
+            tab = getattr(w.overviewTab, tabName)
+            got = tab.currentEmployeeLabel.text()
+            if got != "Employee: N/A":
+                errors.append(f"{tabName} after None: label={got!r}, want 'Employee: N/A'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def reviews_dialog_roundtrip() -> list[str]:
+    """Step 37b: ReviewsEditWindow new-and-edit roundtrips.
+
+    Drives ``ReviewsEditWindow`` headlessly through both branches:
+      - New: opens with entry=None, sets calendar + daysEdit + detailsEdit,
+        clicks createButton, asserts the record lands in
+        ``db.reviews[idNum].reviews[date]``.
+      - Edit: re-opens on the just-created review, asserts prefill matches,
+        changes daysEdit + detailsEdit, clicks updateButton, asserts the
+        record reflects the new values and nextReview is recomputed.
+    """
+    from utils import toQDate
+    from reviews_tab import ReviewsEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        fixtureId = sorted(i for i in idNums if w.db.employees[i].status)[0]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(w.db.employees[fixtureId]))
+
+        # --- New ---
+        d = datetime_date(2026, 4, 1)
+        dlg = ReviewsEditWindow(fixtureId, None, w)
+        dlg.calendar.setSelectedDate(toQDate(d))
+        dlg.daysEdit.setText("90")
+        dlg.detailsEdit.setText("Smoke test review")
+        dlg.createButton.click()
+        rec = w.db.reviews[fixtureId].reviews.get(d)
+        if rec is None:
+            errors.append(f"after Create: db.reviews[{fixtureId}].reviews[{d}] missing")
+            return errors
+        if rec.details != "Smoke test review":
+            errors.append(f"after Create: details={rec.details!r}, want 'Smoke test review'")
+        if rec.nextReview != d + __import__("datetime").timedelta(days=90):
+            errors.append(f"after Create: nextReview={rec.nextReview!r}, want {d!r}+90d")
+
+        # --- Edit ---
+        dlg2 = ReviewsEditWindow(fixtureId, rec, w)
+        if dlg2.daysEdit.text() != "90":
+            errors.append(f"Edit prefill: daysEdit={dlg2.daysEdit.text()!r}, want '90'")
+        if dlg2.detailsEdit.text() != "Smoke test review":
+            errors.append(f"Edit prefill: detailsEdit={dlg2.detailsEdit.text()!r}, want 'Smoke test review'")
+        dlg2.daysEdit.setText("180")
+        dlg2.detailsEdit.setText("Updated review")
+        dlg2.updateButton.click()
+        rec2 = w.db.reviews[fixtureId].reviews.get(d)
+        if rec2 is None:
+            errors.append(f"after Update: db.reviews[{fixtureId}].reviews[{d}] missing")
+        elif rec2.details != "Updated review":
+            errors.append(f"after Update: details={rec2.details!r}, want 'Updated review'")
+        elif rec2.nextReview != d + __import__("datetime").timedelta(days=180):
+            errors.append(f"after Update: nextReview={rec2.nextReview!r}, want {d!r}+180d")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def training_dialog_roundtrip() -> list[str]:
+    """Step 37b: TrainingEditWindow new-and-edit roundtrips against a fuzzed employee.
+
+    Picks the first defaults.TRAINING key, opens TrainingEditWindow with
+    entry=None, sets calendar + comment, clicks createButton, asserts the
+    record lands in db.training. Then re-opens on the new record, asserts
+    prefill, edits comment, updateButton, asserts the new comment.
+    """
+    import defaults as D
+    from utils import toQDate
+    from training_tab import TrainingEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        fixtureId = sorted(i for i in idNums if w.db.employees[i].status)[0]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(w.db.employees[fixtureId]))
+        trainingType = D.TRAINING[0]
+        d = datetime_date(2026, 4, 5)
+        # If fuzz already seeded this (trainingType, date) for the fixture, push the date out.
+        while d in w.db.training[fixtureId].training[trainingType]:
+            d = d + __import__("datetime").timedelta(days=1)
+
+        dlg = TrainingEditWindow(fixtureId, trainingType, None, w)
+        dlg.calendar.setSelectedDate(toQDate(d))
+        dlg.comment.setText("Initial training")
+        dlg.createButton.click()
+        rec = w.db.training[fixtureId].training[trainingType].get(d)
+        if rec is None:
+            errors.append(f"after Create: db.training[{fixtureId}].training[{trainingType!r}][{d}] missing")
+            return errors
+        if rec.comment != "Initial training":
+            errors.append(f"after Create: comment={rec.comment!r}, want 'Initial training'")
+
+        dlg2 = TrainingEditWindow(fixtureId, trainingType, rec, w)
+        if dlg2.comment.text() != "Initial training":
+            errors.append(f"Edit prefill: comment={dlg2.comment.text()!r}, want 'Initial training'")
+        dlg2.comment.setText("Refresher")
+        dlg2.updateButton.click()
+        rec2 = w.db.training[fixtureId].training[trainingType].get(d)
+        if rec2 is None or rec2.comment != "Refresher":
+            errors.append(f"after Update: comment={(rec2.comment if rec2 else None)!r}, want 'Refresher'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def points_dialog_roundtrip() -> list[str]:
+    """Step 37b: PointsEditWindow new-and-edit roundtrips.
+
+    Uses a default reason ('Absence' from POINT_VALS) so the dialog
+    auto-fills pointsInput from the lookup table — exercises the
+    setReason side-effect path that disables pointsInput / otherReason
+    on non-Other reasons. Then re-opens the created record and asserts
+    prefill + an Update roundtrip with a different reason.
+    """
+    from utils import toQDate
+    from points_tab import PointsEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        fixtureId = sorted(i for i in idNums if w.db.employees[i].status)[0]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(w.db.employees[fixtureId]))
+        d = datetime_date(2026, 4, 7)
+        while d in w.db.attendance[fixtureId].points:
+            d = d + __import__("datetime").timedelta(days=1)
+
+        dlg = PointsEditWindow(fixtureId, None, w)
+        dlg.calendar.setSelectedDate(toQDate(d))
+        dlg.reasons.setCurrentText("Absence")
+        # setReason side-effect should have populated pointsInput from POINT_VALS["Absence"] = 1.
+        if dlg.pointsInput.text() != "1":
+            errors.append(f"setReason side-effect: pointsInput={dlg.pointsInput.text()!r}, want '1'")
+        dlg.createButton.click()
+        rec = w.db.attendance[fixtureId].points.get(d)
+        if rec is None:
+            errors.append(f"after Create: db.attendance[{fixtureId}].points[{d}] missing")
+            return errors
+        if rec.reason != "Absence":
+            errors.append(f"after Create: reason={rec.reason!r}, want 'Absence'")
+        if rec.value != 1.0:
+            errors.append(f"after Create: value={rec.value!r}, want 1.0")
+
+        dlg2 = PointsEditWindow(fixtureId, rec, w)
+        if dlg2.reasons.currentText() != "Absence":
+            errors.append(f"Edit prefill: reasons={dlg2.reasons.currentText()!r}, want 'Absence'")
+        dlg2.reasons.setCurrentText("Tardy")
+        dlg2.updateButton.click()
+        rec2 = w.db.attendance[fixtureId].points.get(d)
+        if rec2 is None or rec2.reason != "Tardy":
+            errors.append(f"after Update: reason={(rec2.reason if rec2 else None)!r}, want 'Tardy'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def pto_dialog_roundtrip() -> list[str]:
+    """Step 37b: PTOEditWindow new-and-edit roundtrips.
+
+    Picks the fixture employee with the longest tenure (so PTO_ELIGIBILITY
+    and available-hours checks don't block the test), constructs a PTO range
+    well outside the fuzz-populated window, hours=4. New → assert in db →
+    Edit → change hours → updateButton → assert.
+    """
+    from utils import toQDate
+    from pto_tab import PTOEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        # Tenured-most active employee gets the most reliable available-hours value.
+        actives = [(w.db.employees[i].anniversary, i) for i in idNums
+                   if w.db.employees[i].status and w.db.employees[i].anniversary is not None]
+        if not actives:
+            errors.append("fuzz fixture produced no active employee with anniversary (test setup bug)")
+            return errors
+        actives.sort()  # oldest anniversary first → most tenured
+        fixtureId = actives[0][1]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(w.db.employees[fixtureId]))
+
+        # Use a future date 2 years out so it can't collide with fuzz_db's
+        # last-300-day PTO ranges and is well past any anniversary + 90 days.
+        today = __import__("datetime").date.today()
+        start = __import__("datetime").date(today.year + 2, 6, 15)
+        end = __import__("datetime").date(today.year + 2, 6, 16)
+
+        dlg = PTOEditWindow(fixtureId, None, w)
+        dlg.calendarStart.setSelectedDate(toQDate(start))
+        dlg.calendarEnd.setSelectedDate(toQDate(end))
+        dlg.hours.setText("4")
+        dlg.createButton.click()
+        key = (start, end)
+        rec = w.db.PTO[fixtureId].PTO.get(key)
+        if rec is None:
+            errors.append(f"after Create: db.PTO[{fixtureId}].PTO[{key}] missing")
+            return errors
+        if rec.hours != 4.0:
+            errors.append(f"after Create: hours={rec.hours!r}, want 4.0")
+
+        dlg2 = PTOEditWindow(fixtureId, rec, w)
+        if dlg2.hours.text() != "4.0":
+            errors.append(f"Edit prefill: hours={dlg2.hours.text()!r}, want '4.0'")
+        dlg2.hours.setText("8")
+        dlg2.updateButton.click()
+        rec2 = w.db.PTO[fixtureId].PTO.get(key)
+        if rec2 is None or rec2.hours != 8.0:
+            errors.append(f"after Update: hours={(rec2.hours if rec2 else None)!r}, want 8.0")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def notes_dialog_roundtrip() -> list[str]:
+    """Step 37b: NotesEditWindow new-and-edit roundtrips.
+
+    Date + time + details → createButton → assert key in db.notes; then
+    re-open the new note, assert prefill, edit details, updateButton,
+    re-assert. Time is set via QTime to exercise the timeInput parse path
+    (a Step-7-class fragility: the dialog formats time itself as 'HH:MM').
+    """
+    from PySide6.QtCore import QTime
+    from utils import toQDate
+    from notes_tab import NotesEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        fixtureId = sorted(i for i in idNums if w.db.employees[i].status)[0]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(w.db.employees[fixtureId]))
+        d = datetime_date(2026, 4, 9)
+        timeStr = "09:30"
+        # Avoid collision with fuzz-seeded notes.
+        while (d, timeStr) in w.db.notes[fixtureId].notes:
+            d = d + __import__("datetime").timedelta(days=1)
+
+        dlg = NotesEditWindow(fixtureId, None, w)
+        dlg.calendar.setSelectedDate(toQDate(d))
+        dlg.timeInput.setTime(QTime(9, 30))
+        dlg.detailsInput.setPlainText("Initial note")
+        dlg.createButton.click()
+        rec = w.db.notes[fixtureId].notes.get((d, timeStr))
+        if rec is None:
+            errors.append(f"after Create: db.notes[{fixtureId}].notes[({d}, {timeStr!r})] missing")
+            return errors
+        if rec.details != "Initial note":
+            errors.append(f"after Create: details={rec.details!r}, want 'Initial note'")
+
+        dlg2 = NotesEditWindow(fixtureId, rec, w)
+        if dlg2.detailsInput.toPlainText() != "Initial note":
+            errors.append(f"Edit prefill: details={dlg2.detailsInput.toPlainText()!r}, want 'Initial note'")
+        dlg2.detailsInput.setPlainText("Updated note")
+        dlg2.updateButton.click()
+        rec2 = w.db.notes[fixtureId].notes.get((d, timeStr))
+        if rec2 is None or rec2.details != "Updated note":
+            errors.append(f"after Update: details={(rec2.details if rec2 else None)!r}, want 'Updated note'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def employee_delete_cascades_detail_tabs() -> list[str]:
+    """Step 37b: deleting an employee while their detail tabs are visible
+    drops the selection on all 5 sub-tabs.
+
+    Mirrors the real flow from EmployeeTab.deleteSelection:
+    ``db.delEmployee(idNum)`` followed by ``mainApp.overviewTab.refresh()``.
+    The picker's refresh clears the current selection (setCurrentIndex(0)
+    fires selectEmployee('None') → employeeID=None → every sub-tab
+    refreshes back to N/A). Asserts both the picker no longer offers the
+    deleted employee and every detail sub-tab shows 'Employee: N/A'.
+    """
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        fixtureId = sorted(i for i in idNums if w.db.employees[i].status)[0]
+        emp = w.db.employees[fixtureId]
+        selection = _pickerSelectionFor(emp)
+        w.overviewTab.employeePicker.setCurrentText(selection)
+
+        # Sanity: pre-delete, every tab reflects the fixture.
+        for tabName in ("reviewsTab", "trainingTab", "pointsTab", "PTOTab", "notesTab"):
+            tab = getattr(w.overviewTab, tabName)
+            if "N/A" in tab.currentEmployeeLabel.text():
+                errors.append(f"pre-delete {tabName}: label is N/A, expected fixture")
+
+        # Delete via the same entry point the EmployeesTab uses.
+        w.db.delEmployee(fixtureId)
+        w.overviewTab.refresh()
+
+        pickerItems = [w.overviewTab.employeePicker.itemText(i)
+                       for i in range(w.overviewTab.employeePicker.count())]
+        if selection in pickerItems:
+            errors.append(f"post-delete: picker still contains {selection!r}")
+
+        for tabName in ("reviewsTab", "trainingTab", "pointsTab", "PTOTab", "notesTab"):
+            tab = getattr(w.overviewTab, tabName)
+            got = tab.currentEmployeeLabel.text()
+            if got != "Employee: N/A":
+                errors.append(f"post-delete {tabName}: label={got!r}, want 'Employee: N/A'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors

@@ -25,6 +25,10 @@ from smoke.ui import (
     production_refresh_on_delete, production_batch_roundtrip,
     qsettings_reopen, close_confirm,
     parts_tab_crud, employees_tab_crud,
+    employee_detail_populates, reviews_dialog_roundtrip,
+    training_dialog_roundtrip, points_dialog_roundtrip,
+    pto_dialog_roundtrip, notes_dialog_roundtrip,
+    employee_delete_cascades_detail_tabs,
 )
 from smoke.pyright import pyright_baseline
 
@@ -40,5 +44,9 @@ __all__ = [
     "production_refresh_on_delete", "production_batch_roundtrip",
     "qsettings_reopen", "close_confirm",
     "parts_tab_crud", "employees_tab_crud",
+    "employee_detail_populates", "reviews_dialog_roundtrip",
+    "training_dialog_roundtrip", "points_dialog_roundtrip",
+    "pto_dialog_roundtrip", "notes_dialog_roundtrip",
+    "employee_delete_cascades_detail_tabs",
     "pyright_baseline",
 ]
