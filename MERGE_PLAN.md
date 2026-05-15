@@ -578,7 +578,8 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36e2 | ✅ Done | Merge plan Step 36e2: HR Optional sweep — group B (pto / parts / employees / holidays) |
 | 36f | ✅ Done | Merge plan Step 36f: production-side cleanup (report/production.py + production_tab.py + report/employees.py + app.py + employee_detail_tab.py) |
 | 36g | ✅ Done | Merge plan Step 36g: bake `pyright --outputjson` into the smoke baseline |
-| 37 | 📝 Sketched | (Future / if time permits) UI fuzz harness for state-machine bugs — see §13.25 |
+| 37 | 📝 Sketched | UI regression coverage (smoke checks that replace Step 36-style manual sweeps) — see §13.25 |
+| 38 | 📝 Sketched | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -695,181 +696,72 @@ Landed 2026-05-11, immediately after Step 31 — closes the refactor backlog. Mi
 
 ### 13.21 Step 33 — split `report.py` into a `report/` package ✅ Done
 
-Landed 2026-05-13. Same composition pattern as Step 32: a `PDFReportCore` base owns `__init__` + the canvas/text/table primitives (`drawTitle` / `drawTable` / `_wrapText` / etc.); three domain mixins (`ProductReportsMixin`, `EmployeeReportsMixin`, `ProductionReportsMixin`) own the per-domain reports; `report/__init__.py` composes them into a single `PDFReport` class. External imports (`from report import PDFReport`) keep working unchanged — the 13 import sites across the tabs and `smoke/reports.py` needed no edits.
-
-Four-file shape: `core.py` (191 lines), `products.py` (272), `employees.py` (242), `production.py` (1148). Production stays bundled for now.
-
-**Eventual goal (Matthew, 2026-05-13):** as each report's layout is finalized in the field, peel them off into one-report-per-mixin files for human readability — the unit of "smallest readable file" is a single report, not a domain. No urgency: it's a nuisance to do incrementally and there's no value until layouts are stable. Tracked here as the running follow-up.
-
-Each mixin carries a small `if TYPE_CHECKING:` stub block declaring the `PDFReportCore` attributes/helpers it reads off `self` (`db`, `pdf`, `setupPage`, `drawTable`, etc.) — same pattern landed in `file_manager/` earlier this session. Pylance resolves cross-mixin references; zero runtime cost.
-
-One smoke-side touch: `TREND_MODE` is a module-level feature flag that the trend-report smoke check mutates to swap algorithms mid-test. After the split it lives in `report/production.py`, so `smoke/reports.py` was updated from `import report as R` to `import report.production as R` (one line). Re-exporting `TREND_MODE` from `report/__init__.py` would have made the read work but not the mutation, since re-exports copy the binding rather than reference it — so the mutation has to address the submodule directly.
-
-Verification: smoke 17 PASS first try (covers all four production reports automatically). Manual sweep of one product report and one employee report (which smoke doesn't cover) confirmed identical PDF rendering.
+Landed 2026-05-13. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 33 for the four-file mixin composition, the eventual goal of one-report-per-mixin once layouts settle in the field, and the `TREND_MODE` smoke-side touch.
 
 ### 13.22 Step 34 — dead-code sweep with vulture ✅ Done
 
-Landed 2026-05-14. Vulture added to a new "Dev / lint" section of `requirements.txt`; one-time hygiene pass at this stage (per step (e) of the original sketch) — no whitelist file, no recurring lint hook.
-
-**What shipped at confidence 80:**
-
-- **Genuine dead code deleted** — 11 tabs lost their `from error import ErrorWindow, errorMessage` → kept only `errorMessage` (the `ErrorWindow` class only appeared in commented-out lines from old error-dialog flows); the `ErrorWindow` class itself was then removed from `error.py` along with its `widgetFromList` import and unused `QWidget`/`QLabel` imports. `QSizePolicy` dropped from `app.py`. Three module-level `createTab()` TODO stubs (in `employee_detail_tab.py` / `holidays_tab.py` / `inventory_tab.py`) removed — leftover scaffolds from the BECKY tab port. `defaults.py`'s `REVIEW_DATES` constant (and its now-orphaned `import datetime`) removed. `globals_tab.py`'s `self.calls = {}` removed (assigned, never read). `report/core.py`'s `pageNum` removed (assigned at `__init__` and incremented in `nextPage`, never read — reportlab's canvas owns its own page counter via `getPageNumber()`). `report/products.py:196-198` — three currVal\*\_prevDate tuple targets renamed to `_` (only the origVal halves are used in the delta table).
-- **`records/database.py` orphan methods (7)** — `updateMaterialInventory`/`delMaterialInventory`/`updatePartInventory`/`delPartInventory` (four inventory mutate methods with no callers; inventory_tab.py bypasses them and calls `inventories[date].updateMaterialRecord`/`updatePartRecord` directly), plus three debug `materialCosts`/`mixtureCosts`/`partCosts` log-only helpers from ANIKA's pre-merge dev. The now-orphaned `import logging` came out too.
-- **Cascade into `records/products.py`** — once the four `del*Inventory` methods were gone, `delMaterialRecord` and `delPartRecord` on `Inventory` had no remaining callers and came out; `partCosts`'s removal orphaned `Part.getProductivity` (same fate). Vulture re-run after the first sweep surfaced these automatically, which is why we caught the cascade rather than leaving them.
-- **Same-session restore for symmetry — `Inventory.delMaterialRecord` and `Inventory.delPartRecord`.** Mid-review, Matthew asked whether the inventory tab callbacks duplicated the wrappers we were removing. Audit showed the *update* path goes through `Inventory.updateMaterialRecord` / `updatePartRecord` (which keep their `oldName not in self.parts` guard), but the *delete* path was inlined two layers deeper — `del self.mainApp.db.inventories[self.currentDate].materials[material]` at [inventory_tab.py:264](inventory_tab.py:264) and the parts twin at [inventory_tab.py:498](inventory_tab.py:498). Functionally equivalent under the live UI (the guard was unreachable — delete is only enabled with a row already selected from the table that mirrors `self.materials`), but asymmetric with the update path and a footgun if a future caller ever appears. Restored `Inventory.delMaterialRecord` and `Inventory.delPartRecord` (the inner methods only, *not* the Database wrappers, which stayed dead) and routed the two tab `del` statements through them. Smoke 17 PASS post-restore; vulture at confidence 80 still empty.
-- **False positives silenced via `_` prefix** — `table.py`'s `onSelect(self, selected, deselected)` Qt signal handler renamed `deselected` → `_deselected`; the two `QMessageBox` stub lambdas in `smoke/records.py` and `smoke/ui.py` switched from `**kw` to `**_kw`.
-- **Known false positives left in place** — at confidence 60 vulture still flags `table.py`'s `rowCount`/`columnCount`/`headerData` (Qt model interface, called from C++ via the model contract) and 13 reportlab `Drawing` primitive attribute assignments in `report/production.py` (the renderer reads them via reflection when it draws the line plot / legend). Both classes are API contracts, not dead code; no recurring lint means no need to whitelist them.
-
-**Verification:** vulture at confidence 80 → zero findings post-sweep. Smoke 17 PASS pre- and post-change. No UI surface touched (dead imports + dead methods only), so no manual UI sweep needed.
-
-**Yield:** matched the §13.22 prediction of "3-5 cleanup wins" if you count by category — actually delivered 8 distinct classes of dead code (one-shot imports, dead constants, dead module-level stubs, vestigial mutate methods, debug helpers, cascade methods, dead instance attrs, and tuple-unpack waste).
+Landed 2026-05-14. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 34 for the 8 distinct dead-code classes deleted at confidence 80, the `Inventory.delMaterialRecord/delPartRecord` same-session restore for symmetry, and the false positives left in place at confidence 60.
 
 ### 13.23 Step 35 — smoke: render every report against fuzzed data ✅ Done
 
-Landed 2026-05-14, same session as Step 34. Smoke is now 18 checks; new check is `product_employee_reports` in [`smoke/reports.py`](smoke/reports.py).
+Landed 2026-05-14, same session as Step 34. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 35 for the 9-report coverage shape (drives `fuzz_db.populate*` directly against `MainWindow().db` — no file I/O, no captured stdout), the seed-1 reproducibility, and the `%PDF-` magic-byte gate.
 
-**Shipped shape.** Rather than shell out to `fuzz_db.py` and load the resulting file back (or call `fuzz_db.build()` directly, which writes a file + emits chatty `print()` lines), the check drives `fuzz_db`'s `populate*` functions directly against `MainWindow().db`. Same data shape as a real fuzz run, no extra I/O, no captured stdout, and the seed (=1) is fixed so any failure reproduces from the same starting state. Tiny scale: 4 materials / 2 mixtures / 5 packaging / 3 parts / 3 employees / 1 inventory snapshot / 5 days of production — plenty of content for every report path without the runtime cost of medium/large.
+### 13.24 Step 36 — Pyright sweep across the codebase ✅ Done
 
-**Reports exercised (9):** product family — `globalsReport`, `mixReport(mixtureNames[0])`, `salesReport`, `inventoryReport(next(iter(db.inventories)))` (reads the inventory date back from the fuzzed DB rather than hardcoding it, since fuzz_db keys the snapshot off `datetime.date.today()`); employee family — `employeePointsReport(idNums[0])`, `employeePTOReport(idNums[0])`, `employeeNotesReport(idNums[0])`, `employeeIncidentReport(...)`, `employeeActiveReport`. The incident report needs an exact `(date, time)` key in the notes table — the check searches `db.notes[idnum].notes` across all seeded employees, and falls back to inserting a synthetic `EmployeeNote` if seed=1 ever ends up with zero notes (the per-employee 0-3 randint roll means it's *possible* though unlikely).
+Landed 2026-05-14 / 2026-05-15 across seven substeps (36a-g). **Baseline 219 → 0 errors; smoke gained a `pyright_baseline` check (18 → 19 PASS).** See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 36 for the substep-by-substep narrative — pyrightconfig setup, file_manager/ sweep, records/products.py TYPE_CHECKING shim, declarative-attribute batch, the HR Optional sweep (split into group A / group B per call-site judgment), production-side cleanup including the reportlab library-stub strategy, and the smoke-gate design.
 
-**Stronger gate than the sketch.** §13.23 step (c) asked for non-empty file + `%PDF-` magic; both are in. Each generated PDF is opened, the first 5 bytes are checked against `b"%PDF-"`, and the file is cleaned up in `finally`.
+The dual-mandate-on-failure-handling guidance Matthew established during 36e1 (user-visible-degradation > loud crash > silent fail; readability tiebreaker; ask when they pull apart) is recorded in `~/.claude/.../feedback_failure_mandate.md` and now applies repo-wide.
 
-**Verification:** smoke 18 PASS first try (covers all 9 product/employee reports automatically, end-to-end through `PDFReport`). Runtime of the new check in isolation: **0.67 s** — well under the "a few seconds" budget the sketch projected. Re-import of `fuzz_db` is what dominates; the population itself is sub-100ms at tiny scale.
+### 13.25 Step 37 — UI regression coverage (replace manual sweeps) 📝 Sketched
 
-**What this buys.** Every future refactor of `report/` (including the eventual one-report-per-mixin split from §13.21) gets automatic regression coverage instead of a manual UI gate. The Step 33 manual sweep — one product report + one employee report rendered by hand — is now done automatically across all nine.
+The bulk of every Step-36-sized refactor's manual UI sweep was deterministic checking: pick a fixture employee → confirm fields populate; click New/Edit/Delete → confirm dialog prefilled and round-trip works; switch employees → confirm tabs refresh. PySide6's `QTest` + introspectable widget state (`.text()` / `.isEnabled()` / `.currentIndex()`) make this directly automatable. The existing smoke patterns (`QApplication.instance()` reuse, `QMessageBox.warning` monkeypatch from `close_confirm`) carry over.
 
-### 13.24 Step 36 — Pyright sweep across the codebase 🟡 In progress
+**Shipped shape (sketched).** Extend `smoke/ui.py` with ~10-12 new checks, each ~150 lines:
 
-Split into 36a-g a la Step 7. Step 36a (triage + setup) landed 2026-05-14; 36b-g still queued.
+- `parts_tab_crud` — open Details/Margins/Edit dialogs for a fixture part, assert field prefill matches the fixture; click Create with new values, assert `db.parts[name]` reflects them.
+- `employees_tab_crud` — same for active + inactive employee dialogs.
+- `employee_detail_populates` — pick a fixture employee, assert all 5 detail sub-tabs (Reviews / Training / Points / PTO / Notes) render expected label values; switch to "None", assert all go to "Employee: N/A".
+- `holidays_tab_observances` — pick year, assert Shift 1/2/3 dates populate; click ◀/▶ year nav, assert year label updates.
+- `holidays_tab_defaults_crud` — New/Edit/Delete holiday roundtrip.
+- `notes_dialog_roundtrip` / `points_dialog_roundtrip` / `pto_dialog_roundtrip` / `reviews_dialog_roundtrip` / `training_dialog_roundtrip` — programmatically fill an Edit dialog and click Create; assert the data lands in `db.X`.
+- `employee_delete_cascades_detail_tabs` — delete an employee while their detail sub-tabs are visible; assert all 5 sub-tabs go to "N/A".
 
-#### Step 36a — pyright setup + initial triage ✅ Done
+**Fixture reuse — no duplicate fuzz code.** Step 35 already established the pattern of driving `fuzz_db.populate*` directly against `MainWindow().db` (rather than file-roundtripping). Step 37 reuses this exact path: each check seeds a tiny fuzz DB (seed=1 fixed for reproducibility), then drives the UI. Picking specific fixture entries — "the first employee", "the first part" — works because `fuzz_db` is deterministic. New fixture helpers belong in `fuzz_db.py` if reusable, not in `smoke/ui.py` — avoid the duplicate-generator trap.
 
-Landed 2026-05-14. Pyright added to requirements.txt's "Dev / lint" section; new `pyrightconfig.json` at repo root with `typeCheckingMode: basic`, `pythonVersion: 3.12`, `pythonPlatform: Windows`, the build/venv exclusions, and crucially `"extraPaths": ["Lib/site-packages"]` — the repo *is* a venv (`Lib/`, `Scripts/` at root), so excluding `Lib` cuts site-packages off too unless extraPaths plugs the import resolution back in. That single config line cleared 65 cascade findings (PySide6 + reportlab unresolved imports → cascading attribute and argument-type errors). `pyright_report.json` added to `.gitignore` as a working-file artifact.
+**Possible refactor magnet.** Several Edit dialogs reach widgets via layout index (`self.mainLayout[1][1].text()`). Tests would need the same indexes — fragile if layout changes. May surface "let's name some widgets" as a small follow-up; not a blocker.
 
-**Initial baseline: 219 errors / 0 warnings across 47 files** (after the `extraPaths` fix; pre-fix it was 284).
+**Splittable into ~3 commits** along tab boundaries (records-side, employee-detail-side, holidays+production). Total estimate: 12-15 hours, 1-2 sessions.
 
-| Count | Rule | Pattern |
-|------:|------|---------|
-| 98 | `reportOptionalMemberAccess` | `Optional[X]` getter used without null check — exactly what §13.24 predicted from the BECKY+ANIKA merge history |
-| 65 | `reportArgumentType` | Passing `Optional[X]` to non-Optional param — mostly cascade from above |
-| 38 | `reportAttributeAccessIssue` | Attribute assigned post-`__init__` not declared on the class (`parentTab` on `DBTable`, `currentEmployee`/`currentEmployeeNotes` on the HR tabs, `currentYear` on `ObservancesTab`, `employeeID` on `EmployeeDetailTab`) |
-| 6 | `reportOperatorIssue` | Operator on possibly-None operand (subset of Optional pattern) |
-| 4 | `reportCallIssue` | Wrong-type call args |
-| 4 | `reportUndefinedVariable` | The `Database` forward refs in `records/products.py` — Step 28's package split relied on Python not evaluating function-body annotations at runtime, but pyright still needs `Database` resolvable via `TYPE_CHECKING` |
-| 2 | `reportOptionalSubscript` | `x[i]` where `x` may be None |
-| 2 | `reportOptionalOperand` | Operator side of the Optional pattern |
+**What's out of scope:** anything that requires pixel-level rendering (icon visibility, text overflow, layout positioning). For MERCY, that's negligible — the manual sweep wasn't checking pixels.
 
-**Top files:** `file_manager/save.py` (51 — **all the same pattern**, `self.dbFile.execute(...)` where the SaveMixin's `dbFile: sqlite3.Connection \| None` declaration doesn't narrow across method calls), then the HR tabs (pto: 25, reviews: 17, parts: 17, employees: 16, points: 14, training: 14, holidays: 13, notes: 12) and report/production.py (14), production_tab.py (7), file_manager/load.py (6), record/employees.py (5), records/products.py (4), employee_detail_tab.py (3), app.py (2).
+### 13.26 Step 38 — UI crash fuzzer (random-walk, seed-reproducible) 📝 Sketched
 
-#### Step 36b — `file_manager/` Optional sweep ✅ Done
+Step 37 catches the regression class Matthew was already looking for during manual sweeps. Step 38 catches a **different** bug class — `None.attr` / index-out-of-range / unhandled edge cases that nobody is currently looking for in either manual sweep OR Step 37's deterministic checks.
 
-Landed 2026-05-14, same session as 36a. **57 findings gone, file_manager/ at 0; baseline 219 → 162.** Smoke 18 PASS.
+**Shipped shape (sketched).** Single new check `crash_fuzz(seed=None, iterations=500)` in `smoke/ui_fuzz.py`. Random-walks through enumerated-enabled UI actions; catches any uncaught exception as a failure with seed for reproduction:
 
-- `save.py`: added the same `if self.filePath is None or self.dbFile is None: raise` entry guard at the top of `_saveFileBody()` that `_loadIntoDb()` already had — pyright doesn't narrow across method-boundary calls, so `saveFile()`'s outer guard didn't reach the ~50 `self.dbFile.execute(...)` sites inside `_saveFileBody`. Dropped save.py from 51 → 0 in one stroke.
-- `load.py`: two `assert ... is not None` lines — one after `Employee.fromTuple()` covering the 5 `EmployeeReviewsDB(employee.idNum)`-style constructor calls, one after `HolidayObservance.fromTuple()` covering the inline `observance.date.isoformat()` in the load logging. Both express "fromTuple should set this" as a runtime invariant.
-- One `# pyright: ignore[reportOptionalMemberAccess]` deferral in `save.py:343` — the `observance.date.isoformat()` site is buried in a 4-deep nested-dict list comprehension that does its own work via `db.holidays.observances[year][holiday][shift].date.isoformat()`. Restructuring the comprehension to introduce a local assertion would be more disruptive than the inline suppression; a comment above documents why.
-
-**Note on `# pyright:` comment prefix.** First attempt used `# pyright: HolidayObservance.date is...` as a prose comment above the comprehension; pyright treats `# pyright:` as a reserved directive prefix and emitted two new errors complaining about the unknown directive. Rephrased the comment so it doesn't start with the magic prefix; pyright now parses the inline `# pyright: ignore[reportOptionalMemberAccess]` cleanly and the prose comment is just prose.
-
-#### Step 36c — `records/products.py` Database forward-ref ✅ Done
-
-Landed 2026-05-14. Three-line addition at the top of the module (`from typing import TYPE_CHECKING` + `if TYPE_CHECKING: from records.database import Database`). All 4 `reportUndefinedVariable` findings gone; baseline 162 → 158. Smoke 18 PASS.
-
-#### Step 36d — declarative-attribute batch ✅ Done
-
-Landed 2026-05-14. **28 of 38 `reportAttributeAccessIssue` findings cleared** (38 → 10). Smoke 18 PASS.
-
-Changes:
-- `table.py` — `DBTable.parentTab` was inferred as `type(None)` from `self.parentTab = None`; annotated as `Any` to reflect the duck-typed callback pattern (whatever tab class constructs the DBTable assigns itself; `DBTable.onSelect` invokes `parentTab.setSelection(list)`, no common base class).
-- **HR tabs (notes / points / reviews / training)** — changed `self.currentEmployee: Employee = None` to `self.currentEmployee: Employee | None = None` (and the parallel `currentEmployeeNotes` / `Points` / `Reviews` / `Training`). The annotations were lying — Optional was the truth all along.
-- `employee_detail_tab.py` — `self.employeeID: int = None` → `self.employeeID: int | None = None`. Same fix.
-- `holidays_tab.py` — `assert year is not None` + `int(year)` cast at the `self.observanceTab.currentYear = year` assignment site. `checkInput` is untyped and pyright infers its return as `int | float | None`; the errors-empty guard implies the parse succeeded but pyright can't track that through `errors`'s list state.
-
-**10 deferrals.** All are mis-classified as `reportAttributeAccessIssue` but are actually different shapes:
-- `pto_tab.py:91` and `report/employees.py:92` — "X on str" where `db.PTO[entry].end` is `datetime.date | str` and pyright doesn't track `isinstance` narrowing through dict re-fetches. Belongs to 36e (HR Optional sweep) — they need per-call-site hoisting of the value into a local variable.
-- 8 `report/production.py` reportlab Drawing primitives (`LinePlot.x` / `XValueAxis.labels` / `Legend.x` etc.) — pyright's view of reportlab's types is incomplete; same shape as the vulture false positives. Belongs to 36f (production-side cleanup) — per-line `# pyright: ignore` or a narrower per-file relax.
-
-**On the net-up count.** Baseline rose 158 → 175 (+17) over 36d. Cause: making the Optional types honest exposes ~45 previously-hidden `reportOptionalMemberAccess` / `reportArgumentType` findings — `self.currentEmployee.idNum` could not be flagged when `currentEmployee` was lying as a non-Optional `Employee`. The total is a noisier metric than the categorical health: by rule, `reportAttributeAccessIssue` dropped from 38 → 10, and the Optional findings are now properly categorized as Optional. The exposed surface is exactly 36e's scope, ready for per-call-site judgment.
-
-#### Step 36e — HR tabs Optional sweep ✅ Done
-
-The bulk of the work: ~80-100 `reportOptionalMemberAccess` / `reportArgumentType` findings across `pto_tab.py`, `reviews_tab.py`, `employees_tab.py`, `parts_tab.py`, `points_tab.py`, `training_tab.py`, `notes_tab.py`, `holidays_tab.py`. Per-call-site judgment required: either real null-check (the employee picker returns None when nothing is selected — legitimate Optional that the UI should defend against) or `assert` (UI flow guarantees not-None at this call site). The only step that's not mechanical; split into a pair of commits (the sketch's "or pair" option) along a natural axis — group A is the four employee-detail sub-tabs that share the `currentEmployee` / `currentEmployee<X>` pattern from 36d; group B is everything else (PTO date/str polymorphism, parts, employees-list, holidays).
-
-##### Step 36e1 — group A (notes / points / reviews / training) ✅ Done
-
-Landed 2026-05-14. **75 findings gone, 4 files at 0; baseline 175 → 100.** Smoke 18 PASS + manual UI sweep across all four sub-tabs (employee select / switch / None, new / edit / delete, prefilled edit dialogs, report generation).
-
-Dominant patterns and the picks made:
-
-- **`setEmployee(employeeID: int)` → `int | None`.** The annotation was lying (the param can legitimately be None when the picker is on "None"). All four tabs additionally used `self.mainTab.employeeID` inside the `if employeeID is None ? None : ...` ternary; replacing it with the local `employeeID` lets pyright narrow on the just-checked param. Both fixes in one stroke.
-- **Display labels with `or "?"` fallback.** `self.currentEmployee.lastName.upper()` and `.anniversary.isoformat()` were pyright Optional-access errors; per the dual-mandate-on-failure-handling guidance (user-visible-degradation > loud crash for display strings), the four tabs' header labels now render "?" for any missing field rather than crashing `setText`. Data corruption stays visible without taking the UI down.
-- **Early-return guards on button-gated methods** (`openNew` / `openEdits` / `delete*` / `report`). Original style was `if X is None: errorMessage()` followed by code that proceeded anyway (would crash on `X.attr` if X really were None). Converted to early-return so pyright narrows the rest of the method body AND defense-in-depth holds if button-enable is ever circumvented. Removed two `pass` no-ops at the top of `openEdits` in points / reviews / training while there.
-- **`EditWindow` `__init__` consolidation.** Each window had a repeating pattern: `if not self.isNew:` blocks scattered across widget construction (calendar, time, details, etc.), each accessing `self.note` / `self.point` / `self.review` / `self.trainingDate` which pyright sees as Optional. Replaced with one `if note is not None:` block (pyright narrows on `is not None` directly) that does all the prefill work in sequence. Widget creation moved outside the block so the widgets always exist. Param annotations changed from non-Optional to Optional to match the call sites that already passed `None` for the new-entry case.
-- **`readData` local-var pattern.** The trailing `self.notesDB.notes[(self.note.date, self.note.time)] = self.note` (and equivalents) needed `self.note` non-None plus `.date` / `.time` non-None. Restructured each `readData` to bind a local `note` / `point` / `review` / `trainingDate` in both branches (isNew constructs it; not-isNew narrows `self.note` with a raise + reassigns its fields), then uses the local + the just-validated local `date` / `timeStr` as the dict key. Side benefit: the existing `self.note.date == self.note.date` after self-assignment becomes pointful; the new code reads what it means.
-
-**Genuine semantic-equivalent changes worth flagging.** `openEdits` for points / reviews / training originally had `if len(self.selection) == 0: errorMessage()` followed by a loop — with empty selection the loop ran zero times, so the missing `return` was a latent no-op. New code returns after the errorMessage; equivalent in current shape but more legible.
-
-##### Step 36e2 — group B (pto / parts / employees / holidays) ✅ Done
-
-Landed 2026-05-15. **72 findings gone, 4 files at 0; baseline 100 → 28** (the remaining 28 are exactly 36f's scope: report/production.py, production_tab.py, report/employees.py, app.py, employee_detail_tab.py). Smoke 18 PASS + manual UI sweep across all four tabs.
-
-The 36e1 patterns (setEmployee param fix, display-label `or "?"` fallback, early-return guards on button-gated methods, EditWindow consolidation, readData local-var pattern) carried over where applicable. The shape-specific work:
-
-- **pto_tab.py** — biggest file at 30 findings. The 36d-deferred L91 case (`db.PTO[entry].end` is `datetime.date | str`) resolved by switching genTableData from a list-comp on `db.PTO` (key-based, no narrowing) to `db.PTO.items()` iteration — pyright tracks `isinstance(end, datetime.date)` narrowing through the local. `refreshPTO` had a giant chain of one-liner f-strings; hoisted `today` / `anniversary` / `attendance` / `available` / `used` / `eligibilityDate` / `eligibilityNote` into locals — same values, dramatically more legible, narrows the Optional in one place. Used `self.currentEmployee.idNum` instead of `self.mainTab.employeeID` for the attendance lookup (identical values per call sites; narrows on the just-checked Employee). `PTOCarryWindow.carry/cash/drop` now use `(today, "CARRY"/"CASH"/"DROP")` directly as the dict key instead of `(self.PTORange.start, self.PTORange.end)` — same values since `EmployeePTORange(employeeID, today, "CARRY"/..., hours)` sets start=today, end=marker. `PTOEditWindow.__init__` got a new raise check for `PTORange.end is str` (defense-in-depth: `openEdits` already filters carryovers before opening the window). Dead commented-out `currentPTO` block dropped from `refreshPTO`.
-- **parts_tab.py** — `PartsDetailsWindow` display fallbacks (`?` for missing greenScrap / fireScrap; `or []` for pad / padsPerBox joins) — would previously crash on `join(None)` / `100 * None`. The 36d-known reportlab-vs-list invariance issue at L146 fixed with an explicit `labels: list[list[QWidget]]` annotation (QLabel is a QWidget; list is invariant so pyright needed the wider element type). `PartsEditWindow` padsLayout loop adds `part.pad is not None and part.padsPerBox is not None` — defense-only since they're set together via `setPackaging`. `readData` uses the local-`part` pattern. **Unrelated polish:** Matthew added the long-missing `centerOnScreen(self)` call to `PartsEditWindow.__init__` while reviewing — the dialog was opening in a default position instead of centered like all the other Edit windows. Rolled into this commit.
-- **employees_tab.py** — `genTableData` restructured to an explicit loop with an `emp` local (cleaner anniversary fallback). `id = int(checkInput(...))` cast is needed because `checkInput` is untyped and infers `int | float` from `res = 1` / `int(raw)` branches — the `int()` cast is a no-op at runtime but narrows for pyright. `readData` uses the local-`employee` pattern + a raise for `employee.idNum is None` before passing it to `updateEmployee`. Inlined a few intermediate names (`reviews = EmployeeReviewsDB(id); addEmployeeReviews(reviews)` → `addEmployeeReviews(EmployeeReviewsDB(id))`) since they were unused after construction.
-- **holidays_tab.py** — biggest improvement here was `buildRows` / `refreshRows`: hoisted the three `getObservance(year, holiday, shift)` calls per row into locals (`obs1`, `obs2`, `obs3`) — narrows the Optional in one place AND halves the call count (was previously called twice per shift, once for the None check and once for `.isoformat()`). `refreshRows hard=True` got explicit raise checks for the `selectLayout.takeAt(0)` / `row.layout()` / `item.widget()` Optional chain. `HolidayEditWindow` sig changed `holiday: str → str | None` (matches the openNew call site that passes None); consolidated the per-block `if not self.isNew:` widget setup into one narrowed `if holiday is not None:` block. Vestigial `pass` no-op dropped from `openEdits`.
-
-**Step 36 status:** 36e done — only 36f (production-side cleanup) and 36g (bake `pyright --outputjson` into smoke) remain before the 0-error baseline.
-
-#### Step 36f — production-side cleanup ✅ Done
-
-Landed 2026-05-15. **28 findings gone — pyright at 0 across the entire codebase.** Smoke 18 PASS + manual UI sweep across production records (single + batch), all 7 production reports, PTO / Notes / Incident reports, employee picker, and the close-app confirm dialog.
-
-Scope expanded slightly from the sketch: the original enumeration was 26 across `report/production.py` / `production_tab.py` / `report/employees.py`, but the actual baseline also had `app.py` (2) and `employee_detail_tab.py` (1) — three stragglers that surfaced through 36b-e. Folded into this commit since 36g (smoke gate) needs the 0-error baseline.
-
-- **report/production.py** (14 → 0). Two real fixes: `actionIsTC` definition restructured from `not allActions` to `action is not None` (pyright narrows directly), and two `assert action is not None` guards added inside the `if actionIsTC:` blocks in `productionEmployeeProductivityReport` (lines 748, 760-area cache lookups). The remaining 12 are reportlab library-stub limitations — `LinePlot.width`/`.height` declared `int` when reportlab accepts float at runtime, `XValueAxis.labels` is a real attr the stub doesn't expose, `Legend.x` same float-vs-int. Handled with per-line `# pyright: ignore[reportArgumentType]` / `[reportAttributeAccessIssue]` on the eight affected lines in `drawLinePlot`, with a comment block at the top explaining the stub limitation so future readers don't mistake the ignores for real bug suppressions.
-- **production_tab.py** (6 → 0). Four `assert X is not None` on guard-already-checked invariants: single-record `readData` (`empId` after the errors check), batch-save `readData` (`empId` inside the per-row `if not rowErrs:` block), and two in `ProductionReportWindow.generate` for the Per Target / Per Employee branches (the upstream early-returns ensure non-None but pyright doesn't carry that across the `reportType ==` elif chain).
-- **report/employees.py** (5 → 0). Three list-comps restructured to explicit loops with locals:
-  - `employeePTOReport`: switched from key-based `for entry in PTO.PTO` to `PTO.PTO.items()` with an `end = ptoRange.end` local — pyright tracks `isinstance(end, datetime.date)` narrowing through the local. This is what the 36d-deferred `db.PTO[entry].end` polymorphism was waiting on. Dropped three legacy `# type: ignore` comments that the restructure made unnecessary.
-  - `employeeNotesReport`: filters out None-date notes upfront in the loop, no narrowing needed downstream.
-  - `employeeIncidentReport`: added a `raise RuntimeError` for `note.date is None` ahead of the date-display block (matches the file's `if employee.lastName is None: raise` pattern).
-- **app.py** (2 → 0). Single `assert self.fileManager.filePath is not None` at the top of `_confirmCloseChoice` — `closeEvent` already returns early when filePath is None, but pyright doesn't carry the narrowing across the method boundary.
-- **employee_detail_tab.py** (1 → 0). `refreshPicker` employee picker uses `(lastName or "?").upper()` — the same display-fallback pattern from 36e1 Group A.
-
-**Pyright is now at a clean 0-error baseline across the whole repo.** 36g (smoke gate) is the closing move.
-
-#### Step 36g — bake `pyright --outputjson` into smoke ✅ Done
-
-Landed 2026-05-15. New `smoke/pyright.py` module with one check function `pyright_baseline()` that subprocess-runs `python -m pyright --outputjson`, parses the JSON, and returns one error string per `severity == "error"` diagnostic in `relpath:line [rule] message` form. Wired into `smoke/__init__.py` re-exports and `smoke/__main__.py` dispatcher.
-
-Smoke now runs **19 PASS** (was 18). Subprocess overhead adds ~5-15s to the smoke battery — the only static-typing regression net we have, and the §13.24 closing move that keeps the 0-error baseline from silently slipping.
-
-**Sanity verified** by induced canary: a temporary `_smoke_canary: int = "wrong"` at the bottom of `smoke/pyright.py` caused `pyright_baseline` to return exactly one error:
-
-```
-smoke\pyright.py:58 [reportAssignmentType] Type "Literal['wrong']" is not assignable to declared type "int"
+```python
+def crash_fuzz(seed=None, iterations=500) -> list[str]:
+    rng = random.Random(seed)
+    # MainWindow with seed-driven fuzz_db fixture
+    # actions = enumerate_enabled_actions(window)
+    # for i in range(iterations):
+    #   action = rng.choice(actions)
+    #   try: action.execute(rng)
+    #   except Exception as e:
+    #     return [f"seed={seed} step={i}: {action.label} crashed with {type(e).__name__}: {e}"]
+    #   actions = enumerate_enabled_actions(window)  # may have changed
 ```
 
-Removed; smoke 19 PASS confirmed before commit.
+The hard part: enumerating "currently legal actions" from the widget tree (which buttons are enabled, which dialogs are open, which combos have items). Action shapes: click button, type random text in a text field, pick random combo item, switch tabs; with some probability, click Cancel on any open dialog.
 
-Design notes:
-- Uses `sys.executable -m pyright` rather than a bare `pyright` invocation — guarantees the venv's pyright is used regardless of how smoke is launched (PATH order, IDE wrapper, etc.).
-- Pyright's non-zero exit code on findings is **expected** and explicitly NOT treated as a check failure; only the parsed errors count. The check returns a stderr-bearing message ONLY if pyright itself failed to run (not installed, timed out, produced non-JSON output) — the three error paths in the function.
-- 120s subprocess timeout: pyright typically runs in 5-15s; the wide ceiling absorbs first-run-after-pull cache-warming without flaking the smoke battery.
-- Paths reported relative to `os.getcwd()` for readability; falls back to absolute on the cross-drive `ValueError` corner case (Windows-specific, harmless elsewhere).
+**Reproducibility is the killer feature.** A found crash → `crash_fuzz(seed=4242, iterations=N+1)` always replays the same sequence, so the regression test for the fix is just calling `crash_fuzz` with the offending seed.
 
-**Step 36 complete.** All seven substeps landed; pyright at 0; regression gate in place.
+**Fixture reuse — same as Step 37.** Uses `fuzz_db.populate*` directly against `MainWindow().db`, seed-driven (separate seed from the action-walk seed, both reproducible). The check's `seed=None` default rolls a fresh `time.time()`-based seed each run and reports it on failure for replay.
 
-**Why split this way:** 36b-d are structural / mechanical fixes that wipe ~99 findings (45% of the backlog) with low judgment risk, so they batch well as single commits. 36e is the judgment-heavy core and deserves its own focused commit (or pair). 36f rounds out the production side. 36g closes the loop. Total realistic estimate: 4-5 substep commits after triage, 1-2 sessions.
+**Single commit.** Smaller scope than Step 37 (one focused module, no fixture-per-tab work) but its own discrete scaffolding (action enumeration, random-walk driver). Estimate: 6-8 hours, 1 session.
 
-### 13.25 Step 37 — UI fuzz harness for state-machine bugs (future / if time permits) 📝 Sketched
-
-Property-based UI testing for the bug class Matthew keeps hitting (Step 20's Save-stuck-disabled at startup, the production-tab refresh-on-delete that became Step 15, button-enable misfires after action toggles, etc.). These aren't random-input bugs — they're **state-machine** bugs, so random clicking is the wrong tool. The right tool is **invariants** (e.g. "after `_loadPath()` succeeds, `saveButton.isEnabled() == self.isDirty`") plus a driver that exercises state transitions via `QTest.mouseClick` / `keyClick` / direct signal emission.
-
-**Sketch of the high-leverage version:** (a) Pick the 3-4 dirtiest state machines first — dirty tracking + Save button, employee delete + production-tab refresh, action selector + button-enable rules. (b) Codify each as 1-2 invariants. (c) Write a small driver that runs sequences of UI events (open / new entry / edit / delete / save / cancel) and asserts the invariants hold throughout. (d) Grow the invariant set as new state-machine bugs surface — each becomes a regression check.
-
-**Why deferred:** real upfront investment — needs a UI driver, an invariant DSL, and probably some refactoring of widgets to make state observable from outside. The payoff curve is steep (each new invariant catches a class of bugs forever) but reaches usefulness slowly. Right candidate for a stretch of time without urgent feature work.
+**Order of operations.** Step 37 first — it directly replaces manual-sweep pain and is easier to validate (assertions either hold or don't). Step 38 second — useful but its value is hardest to measure (until it finds a crash, it's "just running"). Both independent of each other.
 
 ---
 
