@@ -32,6 +32,7 @@ from smoke.ui import (
     holidays_tab_observances, holidays_tab_defaults_crud,
 )
 from smoke.pyright import pyright_baseline
+from smoke.ui_fuzz import crash_fuzz
 
 __all__ = [
     "compile_all", "empty_roundtrip",
@@ -51,4 +52,5 @@ __all__ = [
     "employee_delete_cascades_detail_tabs",
     "holidays_tab_observances", "holidays_tab_defaults_crud",
     "pyright_baseline",
+    "crash_fuzz",
 ]

@@ -32,6 +32,11 @@ from smoke import (
     holidays_tab_observances, holidays_tab_defaults_crud,
     pyright_baseline,
 )
+# crash_fuzz (Step 38) is exported from smoke/ but intentionally not in this
+# dispatcher: known crashes it surfaces (inventory duplicate-date guard, PTO
+# getCarryHours invariant) make a seed=None call flaky. Run on demand with
+# ``./Scripts/python.exe -c "from smoke import crash_fuzz; print(crash_fuzz())"``.
+# Wire into baseline once those follow-up bugs are fixed.
 
 
 def main() -> int:

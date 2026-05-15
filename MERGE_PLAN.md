@@ -582,7 +582,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 37a | ✅ Done | Merge plan Step 37a: parts_tab_crud + employees_tab_crud (records-side; widget naming for testability) |
 | 37b | ✅ Done | Merge plan Step 37b: employee_detail_populates + 5 dialog_roundtrip checks + cascade |
 | 37c | ✅ Done | Merge plan Step 37c: holidays_tab_observances + holidays_tab_defaults_crud |
-| 38 | 📝 Sketched | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
+| 38 | ✅ Done | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -747,34 +747,32 @@ shape that drove the split is preserved below for reference.
 
 **What's out of scope:** anything that requires pixel-level rendering (icon visibility, text overflow, layout positioning). For MERCY, that's negligible — the manual sweep wasn't checking pixels.
 
-### 13.26 Step 38 — UI crash fuzzer (random-walk, seed-reproducible) 📝 Sketched
+### 13.26 Step 38 — UI crash fuzzer (random-walk, seed-reproducible) ✅ Done
 
-Step 37 catches the regression class Matthew was already looking for during manual sweeps. Step 38 catches a **different** bug class — `None.attr` / index-out-of-range / unhandled edge cases that nobody is currently looking for in either manual sweep OR Step 37's deterministic checks.
+Landed 2026-05-15. New module `smoke/ui_fuzz.py` with `crash_fuzz(seed=None, iterations=2000)`. Exported from `smoke/__init__.py` but **deliberately not wired into the `smoke/__main__.py` dispatcher** — see "Bugs surfaced" below.
 
-**Shipped shape (sketched).** Single new check `crash_fuzz(seed=None, iterations=500)` in `smoke/ui_fuzz.py`. Random-walks through enumerated-enabled UI actions; catches any uncaught exception as a failure with seed for reproduction:
+**Shipped shape.** Action enumeration filters `window.findChildren(...)` by `isEnabled()` only (drops the original sketch's `isVisible()` filter — exercising click handlers on non-current tabs is more coverage, not less). Action kinds: `QPushButton.click()`, `QComboBox.setCurrentIndex(rng-pick)`, `QTabWidget.setCurrentIndex(rng-pick)`, `QLineEdit.setText(rng-string)`, `QSpinBox` / `QDoubleSpinBox.setValue(edge-or-uniform)`, `QCheckBox.setChecked(toggle)`. Re-enumerated every step.
 
-```python
-def crash_fuzz(seed=None, iterations=500) -> list[str]:
-    rng = random.Random(seed)
-    # MainWindow with seed-driven fuzz_db fixture
-    # actions = enumerate_enabled_actions(window)
-    # for i in range(iterations):
-    #   action = rng.choice(actions)
-    #   try: action.execute(rng)
-    #   except Exception as e:
-    #     return [f"seed={seed} step={i}: {action.label} crashed with {type(e).__name__}: {e}"]
-    #   actions = enumerate_enabled_actions(window)  # may have changed
+**Blocking-UI silence.** `_silenceBlockingUI(walk_rng)` stubs `QMessageBox.information / critical / warning / question`, `QFileDialog.getOpenFileName / getSaveFileName / getExistingDirectory`, `QDialog.exec`, and `os.startfile` (which `utils.startfile` delegates to on Windows — neutralizes report-tab PDF launches too). The `question` stub is randomized off `walk_rng` so Yes/No branches of confirm dialogs (delete employee, import db, etc.) are both exercised reproducibly. `warning` returns `Cancel` so a stray close prompt vetoes itself.
+
+**Catching slot-raised exceptions.** PySide6 wraps every slot in a try/except that prints to `sys.excepthook` and then returns from `click()` normally — a plain `try` around `_executeAction` sees nothing. The check installs a `sys.excepthook` that records `(type, value, tb)` into a list cleared before each action; if anything lands there during the click, the loop returns it as the failure with full traceback. This was the key correctness fix mid-implementation — without it, the fuzzer ran "successfully" through crashes that were silently lost to stderr.
+
+**`w.close()` skipped in cleanup.** Offscreen, `MainWindow.closeEvent` calls `QMessageBox.warning` (our stub → Cancel → `event.ignore()`), but `w.close()` itself never returns cleanly even when the close is vetoed. Match the existing smoke checks that leak the window until process exit.
+
+**Bugs surfaced (and why this isn't in the baseline dispatcher yet).** First three real seeds hit three distinct crash classes, two root causes — all `RuntimeError` raised from slot handlers and today silently swallowed by Qt's signal-slot wrapper:
+
+1. **Inventory duplicate-date guard** — `inventory_tab.py:170 newInventory` / `:176 updateInventory` → `db.addInventory` / `db.updateInventory` raise `RuntimeError('date already in self.inventories')`. Hits across many seeds (e.g., seed=1 step 576, seed=2026 step 1485, seed=42 step 2864).
+2. **PTO `getCarryHours` `count <= 1` invariant** — surfaces from two call paths: `employees_tab.py:143 reportAll` → `report/employees.py:229 employeeActiveReport` (seed=7 step 2009), and `pto_tab.py:505 newPTO` → `getAvailableHours` → `getCarryHours` (seed=99 step 2083).
+
+Both root causes have follow-up tasks spawned (chip queue). Until they land, a `seed=None` baseline call flakes on whichever bug the time-seeded run happens to hit; that's why the dispatcher wiring was reverted before commit. Once fixed, a later step adds `crash_fuzz(seed=None, iterations=2000)` to `smoke/__main__.py`. Run on demand today:
+
+```
+./Scripts/python.exe -c "from smoke import crash_fuzz; r = crash_fuzz(); print(r[0] if r else 'PASS')"
 ```
 
-The hard part: enumerating "currently legal actions" from the widget tree (which buttons are enabled, which dialogs are open, which combos have items). Action shapes: click button, type random text in a text field, pick random combo item, switch tabs; with some probability, click Cancel on any open dialog.
+**Timing.** On a clean tree (post-bug-fixes), 2000 iter clocks ~21-30s depending on seed — slightly over the original 10-20s target but close. Inside the budget once the known crashes are fixed and the fuzzer stops fail-fasting at low iter counts on most seeds. Replay a found crash with explicit `iterations=<reported step + 1>`.
 
-**Reproducibility is the killer feature.** A found crash → `crash_fuzz(seed=4242, iterations=N+1)` always replays the same sequence, so the regression test for the fix is just calling `crash_fuzz` with the offending seed.
-
-**Fixture reuse — same as Step 37.** Uses `fuzz_db.populate*` directly against `MainWindow().db`, seed-driven (separate seed from the action-walk seed, both reproducible). The check's `seed=None` default rolls a fresh `time.time()`-based seed each run and reports it on failure for replay.
-
-**Single commit.** Smaller scope than Step 37 (one focused module, no fixture-per-tab work) but its own discrete scaffolding (action enumeration, random-walk driver). Estimate: 6-8 hours, 1 session.
-
-**Order of operations.** Step 37 first — it directly replaces manual-sweep pain and is easier to validate (assertions either hold or don't). Step 38 second — useful but its value is hardest to measure (until it finds a crash, it's "just running"). Both independent of each other.
+**Reproducibility.** Both `walk_rng` (action choices + `question_stub` Yes/No decisions) and `fixture_rng` (`fuzz_db.populate*` data) are derived from the single `seed` parameter (`fixture_rng = Random(seed ^ 0xCAFEBEEF)`). A reported crash always replays from `crash_fuzz(seed=N, iterations=step+1)`.
 
 ---
 
