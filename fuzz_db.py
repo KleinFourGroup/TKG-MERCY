@@ -366,6 +366,13 @@ def populatePTO(db, rng, idNums, today):
     for idNum in idNums:
         n = rng.randint(0, 4)
         seen = set()
+        # At most one CARRY/CASH/DROP per year per employee — getCarryType
+        # and getCarryHours enforce this invariant with a `count <= 1` guard,
+        # and production code maintains it via clearCarry before any write.
+        # Without this guard the (start, end) dedup above accepts both
+        # (Jan 1, "CARRY") and (Jan 1, "CASH") as distinct, breaking the
+        # invariant on fixture data and crashing every downstream caller.
+        carryYears: set[int] = set()
         for _ in range(n):
             start = today - datetime.timedelta(days=rng.randint(0, 300))
             if rng.random() < 0.85:
@@ -373,10 +380,12 @@ def populatePTO(db, rng, idNums, today):
                 end = start + datetime.timedelta(days=length)
                 hours = 8 * length
             else:
-                # CARRY/CASH/DROP are anchored to start of year per the model.
+                if today.year in carryYears:
+                    continue
                 end = rng.choice(["CARRY", "CASH", "DROP"])
                 hours = rng.randint(8, 40)
                 start = datetime.date(today.year, 1, 1)
+                carryYears.add(today.year)
             if (start, end) in seen:
                 continue
             seen.add((start, end))

@@ -584,6 +584,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 37c | ✅ Done | Merge plan Step 37c: holidays_tab_observances + holidays_tab_defaults_crud |
 | 38 | ✅ Done | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 | 39 | ✅ Done | inventory_tab dup-date guard loopholes (Create-in-Edit + Update-same-date) — see §13.27 |
+| 40 | ✅ Done | PTO carryover dialog stale-snapshot fix + fuzz_db carry-type invariant — see §13.28 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -799,6 +800,32 @@ Create + existing date now surfaces the existing `errorMessage` dialog regardles
 **Verification.** `crash_fuzz(seed=1, iterations=1000)` (Create-in-Edit repro) and `crash_fuzz(seed=2026, iterations=2000)` (Update-same-date repro) both PASS post-fix. Broader 7-seed sweep at iterations=2000 surfaces no inventory crashes; only the remaining known follow-up (PTO `getCarryHours` `count <= 1` — separate chip queued) appears, and only on some seeds. Smoke baseline 30 PASS pre- and post-change. **Db-layer RuntimeError guards stay intact** as defense-in-depth — the fix is at the call sites that were violating the invariants.
 
 **Manual UI sweep:** in MERCY, add an inventory date, open Edit on it, leave the calendar unchanged, and click Create — expect the "Inventory already exists on ..." dialog. Open New Inventory Date twice and create today's date in window #1, then click Create in window #2 — expect the same dialog. Open Edit, change the calendar to a fresh date, click Create — expect a new inventory at the fresh date (original Edit target unchanged). Open Edit, leave the calendar alone, click Update — closes cleanly with the success toast.
+
+### 13.28 Step 40 — PTO carryover stale-snapshot + fuzz_db carry-type invariant ✅ Done
+
+Landed 2026-05-15. Second Step-38 follow-up: `getCarryHours` / `getCarryType` in [`records/employees.py`](records/employees.py) raised `RuntimeError('count <= 1')` from four distinct call paths (Active Employees report, New PTO entry, Carry Over button, Cash Out button), all silently swallowed by Qt's signal-slot wrapper. Root cause was two complementary bugs, both fixed in this step.
+
+**The invariant.** `getCarryHours(year)` and `getCarryType(year)` walk an employee's PTO records counting entries where `dates[1] in ("CARRY", "CASH", "DROP")` for the given year. The model permits at most one such disposition per employee per year — the user picks CARRY, CASH, or DROP for unused hours at year-end and lives with the choice. Two or more is data corruption.
+
+**Bug 1 — `fuzz_db.populatePTO` could generate multiple carry-type entries per year.** Each employee got 0–4 random PTO entries; 15% of those rolled the CARRY/CASH/DROP branch with `start = datetime.date(today.year, 1, 1)`. The de-dup was `(start, end) in seen` — `(Jan 1, "CARRY")` and `(Jan 1, "CASH")` are distinct tuples, so both could land. Fixture violated the invariant before any UI action.
+
+Fix: track per-employee `carryYears` and skip the carry branch if the year is already taken. Comment ties the loop's invariant to `getCarryType`'s guard.
+
+**Bug 2 — `PTOCarryWindow.carry/cash/drop` used stale `self.unusedType`.** The constructor snapshots `self.unusedType = self.PTODB.getCarryType(today.year)` at dialog open; the three handlers compare against that snapshot to decide whether to call `clearCarry` before writing the new disposition. If another action wrote a CARRY/CASH/DROP for the same employee+year between dialog open and the click — easy under crash_fuzz because the dialog is non-modal (`QWidget` with `WA_DeleteOnClose`) and the fuzzer can drive the main window while it stays open — the handler saw `unusedType=None`, skipped `clearCarry`, and wrote a second disposition. The trailing `PTOTab.refresh()` then called `getCarryHours` and crashed.
+
+Fix: each handler re-reads `currentType = self.PTODB.getCarryType(today.year)` at click time and branches on that fresh value. `self.unusedType` is retained for display-only purposes (the status label + reset button enable state). Trace from seed=271 showed the crash landing exactly here:
+
+```
+pto_tab.py:356 cash → PTOTab.refresh → refreshPTO → getAvailableHours → getCarryHours → raise
+```
+
+Cash had written a duplicate disposition one line earlier; the refresh's read found the corruption immediately.
+
+**Why both fixes are needed.** The fixture fix alone leaves the run-time creator unchanged: 10-seed sweep at iter=3000 with fuzz_db fixed but pto_tab unchanged still surfaced `count <= 1` from four distinct buttons across five seeds. The pto_tab fix alone would let the bug surface immediately on opening a Carry Over dialog against the broken fixture data (the constructor's `getCarryType` call would crash before the handler ever runs). With both fixes the invariant holds end-to-end.
+
+**Verification.** `crash_fuzz` 10-seed sweep at iter=3000 — all PASS, no `count <= 1` anywhere. Both originally-reported seeds (7 for the Active Employees report, 99 for New PTO entry) clean. Smoke baseline 30 PASS pre- and post-change. **Db / records-layer `RuntimeError` guards untouched** — they're correct invariant assertions and now stay genuinely unreachable.
+
+**Manual UI sweep:** Run two PTO Carryover dialogs in parallel for the same employee (Overview tab → PTO sub-tab on the main window plus a second employee-detail tab open elsewhere if there's a path), click Carry Over in one and Cash Out in the other in quick succession — expect the second action to see the first's write and either show the overwrite-confirm dialog (if the user clicks Yes the previous disposition is cleared first) or the "already carried over/cashed out" `errorMessage`. Generate the Active Employees report and add new PTO entries across a few employee shapes — no crashes, reports render.
 
 ---
 

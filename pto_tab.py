@@ -319,11 +319,18 @@ class PTOCarryWindow(QWidget):
         self.show()
 
     def carry(self):
+        # Re-read the carry type at click time rather than trusting the
+        # self.unusedType snapshot from dialog construction: if another
+        # carryover dialog (or report path) wrote a CARRY/CASH/DROP for the
+        # year between construction and this click, the stale snapshot
+        # would skip clearCarry and produce two records, violating the
+        # at-most-one-per-year invariant in getCarryType / getCarryHours.
         abort = False
-        if self.unusedType == "CARRY":
+        currentType = self.PTODB.getCarryType(datetime.date.today().year)
+        if currentType == "CARRY":
             errorMessage(self, ["Unused hours have already been carried over"])
         else:
-            if self.unusedType is not None:
+            if currentType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
@@ -339,10 +346,11 @@ class PTOCarryWindow(QWidget):
 
     def cash(self):
         abort = False
-        if self.unusedType == "CASH":
+        currentType = self.PTODB.getCarryType(datetime.date.today().year)
+        if currentType == "CASH":
             errorMessage(self, ["Unused hours have already been cashed out"])
         else:
-            if self.unusedType is not None:
+            if currentType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
@@ -358,10 +366,11 @@ class PTOCarryWindow(QWidget):
 
     def drop(self):
         abort = False
-        if self.unusedType == "DROP":
+        currentType = self.PTODB.getCarryType(datetime.date.today().year)
+        if currentType == "DROP":
             errorMessage(self, ["Unused hours have already been dropped"])
         else:
-            if self.unusedType is not None:
+            if currentType is not None:
                 confirm = QMessageBox.question(self, f"Overwrite?", f"Are you sure you want to overwrite {self.employeeID}'s carryover'?")
                 if confirm == QMessageBox.StandardButton.Yes:
                     self.PTODB.clearCarry(datetime.date.today().year)
