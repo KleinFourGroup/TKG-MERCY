@@ -29,6 +29,7 @@ from smoke.ui import (
     training_dialog_roundtrip, points_dialog_roundtrip,
     pto_dialog_roundtrip, notes_dialog_roundtrip,
     employee_delete_cascades_detail_tabs,
+    holidays_tab_observances, holidays_tab_defaults_crud,
 )
 from smoke.pyright import pyright_baseline
 
@@ -48,5 +49,6 @@ __all__ = [
     "training_dialog_roundtrip", "points_dialog_roundtrip",
     "pto_dialog_roundtrip", "notes_dialog_roundtrip",
     "employee_delete_cascades_detail_tabs",
+    "holidays_tab_observances", "holidays_tab_defaults_crud",
     "pyright_baseline",
 ]

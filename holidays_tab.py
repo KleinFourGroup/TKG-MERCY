@@ -176,18 +176,15 @@ class YearSelectWindow(QWidget):
         self.setWindowTitle(f"Select Observance Year")
 
         self.yearEntry = QLineEdit(f"{self.observanceTab.currentYear}")
+        self.selectButton = QPushButton("Select")
 
         self.mainLayout = [
-            [
-                QLabel("Year:"), self.yearEntry
-            ],
-            [
-                QPushButton("Select")
-            ]
+            [QLabel("Year:"), self.yearEntry],
+            [self.selectButton],
         ]
 
         widgetFromList(self, self.mainLayout)
-        self.mainLayout[-1][0].clicked.connect(self.readData)
+        self.selectButton.clicked.connect(self.readData)
         centerOnScreen(self)
         self.show()
 
@@ -226,18 +223,15 @@ class ObservanceSelectWindow(QWidget):
         if date is None:
             date = datetime.date(year=year, month=self.observancesDB.getDefault(holiday), day=1)
         self.calendar.setSelectedDate(toQDate(date))
+        self.selectButton = QPushButton("Select")
 
         self.mainLayout = [
-            [
-                QLabel("Observance:"), self.calendar
-            ],
-            [
-                QPushButton("Select")
-            ]
+            [QLabel("Observance:"), self.calendar],
+            [self.selectButton],
         ]
 
         widgetFromList(self, self.mainLayout)
-        self.mainLayout[-1][0].clicked.connect(self.readData)
+        self.selectButton.clicked.connect(self.readData)
         centerOnScreen(self)
         self.show()
 
@@ -358,21 +352,20 @@ class HolidayEditWindow(QWidget):
         else:
             self.holidayName = QLineEdit("")
 
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [
-                QLabel("Holiday:"), self.holidayName, QLabel("Month:"), self.holidayMonth
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Holiday:"), self.holidayName, QLabel("Month:"), self.holidayMonth],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if not self.isNew:
-            self.mainLayout[-1][0].clicked.connect(self.updateHoliday)
+            self.updateButton.clicked.connect(self.updateHoliday)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newHoliday)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newHoliday)
         centerOnScreen(self)
         self.show()
 

@@ -578,10 +578,10 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36e2 | ✅ Done | Merge plan Step 36e2: HR Optional sweep — group B (pto / parts / employees / holidays) |
 | 36f | ✅ Done | Merge plan Step 36f: production-side cleanup (report/production.py + production_tab.py + report/employees.py + app.py + employee_detail_tab.py) |
 | 36g | ✅ Done | Merge plan Step 36g: bake `pyright --outputjson` into the smoke baseline |
-| 37 | 🚧 In progress | UI regression coverage (smoke checks that replace Step 36-style manual sweeps) — split into 37a-c per §13.25 commit plan |
+| 37 | ✅ Done | UI regression coverage (smoke checks that replace Step 36-style manual sweeps) — landed across 37a-c |
 | 37a | ✅ Done | Merge plan Step 37a: parts_tab_crud + employees_tab_crud (records-side; widget naming for testability) |
 | 37b | ✅ Done | Merge plan Step 37b: employee_detail_populates + 5 dialog_roundtrip checks + cascade |
-| 37c | 📝 Sketched | Holidays: holidays_tab_observances + holidays_tab_defaults_crud |
+| 37c | ✅ Done | Merge plan Step 37c: holidays_tab_observances + holidays_tab_defaults_crud |
 | 38 | 📝 Sketched | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -715,9 +715,19 @@ Landed 2026-05-14 / 2026-05-15 across seven substeps (36a-g). **Baseline 219 →
 
 The dual-mandate-on-failure-handling guidance Matthew established during 36e1 (user-visible-degradation > loud crash > silent fail; readability tiebreaker; ask when they pull apart) is recorded in `~/.claude/.../feedback_failure_mandate.md` and now applies repo-wide.
 
-### 13.25 Step 37 — UI regression coverage (replace manual sweeps) 📝 Sketched
+### 13.25 Step 37 — UI regression coverage (replace manual sweeps) ✅ Done
 
-The bulk of every Step-36-sized refactor's manual UI sweep was deterministic checking: pick a fixture employee → confirm fields populate; click New/Edit/Delete → confirm dialog prefilled and round-trip works; switch employees → confirm tabs refresh. PySide6's `QTest` + introspectable widget state (`.text()` / `.isEnabled()` / `.currentIndex()`) make this directly automatable. The existing smoke patterns (`QApplication.instance()` reuse, `QMessageBox.warning` monkeypatch from `close_confirm`) carry over.
+Landed across 37a-c on 2026-05-15. **Smoke 19 → 30 PASS** (11 new checks).
+Each Edit/Select dialog's input widgets are now reachable as `self.*Edit` /
+`self.*Combo` / `self.updateButton` / `self.createButton` etc., so the
+checks (and any future test code) no longer have to reach through
+`self.mainLayout[i][j]` layout indexes — closing the "let's name some
+widgets" follow-up flagged in the planning notes below. Shared helpers
+in `smoke/ui.py`: `_silenceMessageBoxes`, `_seedTinyFuzzDB`,
+`_pickerSelectionFor`, `_detailTabsScratchSetup`. The original sketched
+shape that drove the split is preserved below for reference.
+
+**Sketched shape (preserved).** The bulk of every Step-36-sized refactor's manual UI sweep was deterministic checking: pick a fixture employee → confirm fields populate; click New/Edit/Delete → confirm dialog prefilled and round-trip works; switch employees → confirm tabs refresh. PySide6's `QTest` + introspectable widget state (`.text()` / `.isEnabled()` / `.currentIndex()`) make this directly automatable. The existing smoke patterns (`QApplication.instance()` reuse, `QMessageBox.warning` monkeypatch from `close_confirm`) carry over.
 
 **Shipped shape (sketched).** Extend `smoke/ui.py` with ~10-12 new checks, each ~150 lines:
 

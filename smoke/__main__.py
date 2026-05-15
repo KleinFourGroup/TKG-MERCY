@@ -29,6 +29,7 @@ from smoke import (
     training_dialog_roundtrip, points_dialog_roundtrip,
     pto_dialog_roundtrip, notes_dialog_roundtrip,
     employee_delete_cascades_detail_tabs,
+    holidays_tab_observances, holidays_tab_defaults_crud,
     pyright_baseline,
 )
 
@@ -62,6 +63,8 @@ def main() -> int:
                      ("pto_dialog_roundtrip", pto_dialog_roundtrip),
                      ("notes_dialog_roundtrip", notes_dialog_roundtrip),
                      ("employee_delete_cascades_detail_tabs", employee_delete_cascades_detail_tabs),
+                     ("holidays_tab_observances", holidays_tab_observances),
+                     ("holidays_tab_defaults_crud", holidays_tab_defaults_crud),
                      ("pyright_baseline", pyright_baseline)]:
         errors = fn()
         if errors:

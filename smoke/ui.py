@@ -1230,3 +1230,160 @@ def employee_delete_cascades_detail_tabs() -> list[str]:
                 except OSError:
                     pass
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Step 37c — Holidays tab (Observances + Defaults sub-tabs).
+# ---------------------------------------------------------------------------
+
+
+def holidays_tab_observances() -> list[str]:
+    """Step 37c: ObservancesTab renders shift dates and the ◀/▶ year nav works.
+
+    Seeds a tiny fuzz DB (which populates both default-holiday months AND
+    per-shift observances for ``today.year`` + ``today.year + 1``), then
+    overrides Christmas Day shift 1 / shift 2 to known dates and *deletes*
+    the fuzz-seeded shift 3 so we can also assert the N/A render path.
+    Refreshes the holidaysTab.observancesTab, then:
+      - Asserts each default holiday has a row in ``observanceRows``.
+      - For the Christmas Day row, asserts Shift 1 / Shift 2 labels
+        contain the overridden dates and Shift 3 shows N/A.
+      - Clicks ◀ once, asserts ``curYearB.text()`` == str(year-1) AND
+        that the Christmas Day row reads Shift 1: N/A in the prior year
+        (fuzz only seeds current + next year, so year-1 is empty —
+        regression catch for the year nav re-building rows from scratch
+        rather than reusing cached ones).
+      - Clicks ▶ once, asserts ``curYearB.text()`` returns to str(year).
+    """
+    import datetime
+    from records.employees import HolidayObservance
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, _ = _detailTabsScratchSetup()
+        year = datetime.date.today().year
+        # Override known shifts; drop shift 3 so it renders as N/A.
+        w.db.holidays.setObservance(HolidayObservance("Christmas Day", datetime.date(year, 12, 25), 1))
+        w.db.holidays.setObservance(HolidayObservance("Christmas Day", datetime.date(year, 12, 24), 2))
+        w.db.holidays.delObservance(year, "Christmas Day", 3)
+
+        # Force the tab to rebuild on the seeded year.
+        tab = w.holidaysTab.observancesTab
+        tab.currentYear = year
+        tab.refresh(hard=True)
+
+        if tab.curYearB.text() != str(year):
+            errors.append(f"curYearB text={tab.curYearB.text()!r}, want {str(year)!r}")
+
+        rowsByHoliday = {row[0]: row for row in tab.observanceRows}
+        for holiday in w.db.holidays.defaults:
+            if holiday not in rowsByHoliday:
+                errors.append(f"observanceRows missing default holiday {holiday!r}")
+
+        xmas = rowsByHoliday.get("Christmas Day")
+        if xmas is None:
+            errors.append("Christmas Day row missing")
+        else:
+            # row shape: [holiday, label, date1, select1, clear1, date2, ...]
+            s1 = xmas[2].text()
+            s2 = xmas[5].text()
+            s3 = xmas[8].text()
+            if f"Shift 1: {year}-12-25" not in s1:
+                errors.append(f"Shift 1 label={s1!r}, want 'Shift 1: {year}-12-25'")
+            if f"Shift 2: {year}-12-24" not in s2:
+                errors.append(f"Shift 2 label={s2!r}, want 'Shift 2: {year}-12-24'")
+            if "Shift 3: N/A" not in s3:
+                errors.append(f"Shift 3 label={s3!r}, want 'Shift 3: N/A'")
+
+        # --- ◀ year nav: drop to year-1, no observances there → all N/A ---
+        tab.decYearB.click()
+        if tab.curYearB.text() != str(year - 1):
+            errors.append(f"after decYear: curYearB={tab.curYearB.text()!r}, want {str(year - 1)!r}")
+        rowsByHoliday = {row[0]: row for row in tab.observanceRows}
+        xmas = rowsByHoliday.get("Christmas Day")
+        if xmas is not None:
+            for slot, label in [(2, "Shift 1"), (5, "Shift 2"), (8, "Shift 3")]:
+                if f"{label}: N/A" not in xmas[slot].text():
+                    errors.append(f"year-1 Christmas Day {label}={xmas[slot].text()!r}, want N/A")
+
+        # --- ▶ year nav: bump back to the seeded year ---
+        tab.incYearB.click()
+        if tab.curYearB.text() != str(year):
+            errors.append(f"after incYear: curYearB={tab.curYearB.text()!r}, want {str(year)!r}")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def holidays_tab_defaults_crud() -> list[str]:
+    """Step 37c: HolidayEditWindow new + edit roundtrips for default holidays.
+
+    Seeds tiny fuzz DB (the default-holiday month map is populated by
+    fuzz_db.populateHolidays), then:
+      - Opens HolidayEditWindow(None) to create a synthetic holiday,
+        sets holidayName + holidayMonth, clicks createButton, asserts
+        the new entry appears in db.holidays.defaults with the right
+        month.
+      - Opens HolidayEditWindow(existing) on a fuzz-seeded holiday,
+        asserts holidayName + holidayMonth prefill match the DB,
+        changes the month, clicks updateButton, asserts the change
+        landed in db.holidays.defaults.
+    """
+    from holidays_tab import HolidayEditWindow
+
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, _ = _detailTabsScratchSetup()
+        defaultsTab = w.holidaysTab.defaultsTab
+        defaultsTab.refresh()
+
+        # --- New ---
+        synthName = "Smoke Test Day"
+        dlg = HolidayEditWindow(defaultsTab, None, w)
+        dlg.holidayName.setText(synthName)
+        dlg.holidayMonth.setCurrentText("7")
+        dlg.createButton.click()
+        if synthName not in w.db.holidays.defaults:
+            errors.append(f"after Create: db.holidays.defaults missing {synthName!r}")
+        elif w.db.holidays.defaults[synthName] != 7:
+            errors.append(f"after Create: month={w.db.holidays.defaults[synthName]!r}, want 7")
+
+        # --- Edit an existing fuzz-seeded holiday ---
+        existing = next((h for h in w.db.holidays.defaults if h != synthName), None)
+        if existing is None:
+            errors.append("fuzz fixture produced no default holidays (test setup bug)")
+            return errors
+        priorMonth = w.db.holidays.defaults[existing]
+        dlg2 = HolidayEditWindow(defaultsTab, existing, w)
+        if dlg2.holidayName.text() != existing:
+            errors.append(f"Edit prefill: holidayName={dlg2.holidayName.text()!r}, want {existing!r}")
+        if dlg2.holidayMonth.currentText() != str(priorMonth):
+            errors.append(f"Edit prefill: holidayMonth={dlg2.holidayMonth.currentText()!r}, want {priorMonth!r}")
+        newMonth = (priorMonth % 12) + 1  # any month other than the current one
+        dlg2.holidayMonth.setCurrentText(str(newMonth))
+        dlg2.updateButton.click()
+        if w.db.holidays.defaults.get(existing) != newMonth:
+            errors.append(f"after Update: db.holidays.defaults[{existing!r}]={w.db.holidays.defaults.get(existing)!r}, want {newMonth}")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
