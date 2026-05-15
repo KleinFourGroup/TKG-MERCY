@@ -86,12 +86,16 @@ class PTOTab(QWidget):
     def genTableData(self):
         db = self.currentEmployeePTO
         self.headers = ["Start", "End", "Hours"]
-        self.tableData = [] if db is None else [[
-            "{}".format(db.PTO[entry].start.isoformat()),
-            "{}".format(db.PTO[entry].end.isoformat() if isinstance(db.PTO[entry].end, datetime.date) else db.PTO[entry].end),
-            "{}{}".format("" if isinstance(db.PTO[entry].end, datetime.date) else "", db.PTO[entry].hours)
-
-        ] for entry in db.PTO]
+        self.tableData = []
+        if db is not None:
+            for entry, ptoRange in db.PTO.items():
+                start, end = entry
+                endStr = end.isoformat() if isinstance(end, datetime.date) else end
+                self.tableData.append([
+                    start.isoformat(),
+                    endStr,
+                    f"{ptoRange.hours}",
+                ])
         self.tableData.sort(key=lambda row: (row[0], row[1]))
     
     def setSelection(self, selection):
@@ -108,12 +112,15 @@ class PTOTab(QWidget):
         self.selection = list(map(getPair, selection))
         self.selectLabel.setText(f"Selection: {",".join(map(lambda x: f"{x[0].isoformat()} -- {x[1].isoformat() if isinstance(x[1], datetime.date) else x[1]}", self.selection))}")
     
-    def setEmployee(self, employeeID: int):
-        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[self.mainTab.employeeID] 
-        self.currentEmployeePTO = None if employeeID is None else self.mainApp.db.PTO[self.mainTab.employeeID] 
+    def setEmployee(self, employeeID: int | None):
+        self.currentEmployee = None if employeeID is None else self.mainApp.db.employees[employeeID]
+        self.currentEmployeePTO = None if employeeID is None else self.mainApp.db.PTO[employeeID]
         if self.currentEmployee is not None:
-            self.currentEmployeeLabel.setText(f"Employee: {self.currentEmployee.lastName.upper()} {self.currentEmployee.firstName} ({self.currentEmployee.idNum})")
-            self.anniversary.setText(f"Anniversary: {self.currentEmployee.anniversary.isoformat()}")
+            lastName = (self.currentEmployee.lastName or "?").upper()
+            firstName = self.currentEmployee.firstName or "?"
+            anniversary = self.currentEmployee.anniversary.isoformat() if self.currentEmployee.anniversary is not None else "?"
+            self.currentEmployeeLabel.setText(f"Employee: {lastName} {firstName} ({self.currentEmployee.idNum})")
+            self.anniversary.setText(f"Anniversary: {anniversary}")
         else:
             self.currentEmployeeLabel.setText("Employee: N/A")
             self.anniversary.setText("Anniversary: N/A")
@@ -130,20 +137,27 @@ class PTOTab(QWidget):
         self.setSelection(selection)
 
         isEmpty = False
-        if self.currentEmployeePTO is not None and self.currentEmployee is not None and self.currentEmployee.fullTime:
+        if (
+            self.currentEmployeePTO is not None
+            and self.currentEmployee is not None
+            and self.currentEmployee.fullTime
+            and self.currentEmployee.anniversary is not None
+            and self.currentEmployee.idNum is not None
+        ):
             today = datetime.date.today()
-            self.PTOHoursLabel.setText(f"PTO hours in {datetime.date.today().year}: {self.currentEmployeePTO.getAvailableHours(self.currentEmployee.anniversary, self.mainApp.db.attendance[self.mainTab.employeeID], today)}{"" if (today - self.currentEmployee.anniversary).days >= PTO_ELIGIBILITY else f" (available {(self.currentEmployee.anniversary + datetime.timedelta(days=PTO_ELIGIBILITY)).isoformat()})"}")
-            self.PTOUsedLabel.setText(f"PTO used in {datetime.date.today().year}: {self.currentEmployeePTO.getUsedHours(today.year)}")
-            self.PTORemainingLabel.setText(f"PTO remaining in {datetime.date.today().year}: {self.currentEmployeePTO.getAvailableHours(self.currentEmployee.anniversary, self.mainApp.db.attendance[self.mainTab.employeeID], today) - self.currentEmployeePTO.getUsedHours(today.year)}")
-            self.PTOBaseLabel.setText(f"Base PTO in {datetime.date.today().year}: {self.currentEmployeePTO.getAvailableBaseHours(self.currentEmployee.anniversary, today.year)}")
-            self.PTOAttendanceLabel.setText(f"PTO attendance bonus in {datetime.date.today().year}: {self.currentEmployeePTO.getQuarterHours(self.currentEmployee.anniversary, self.mainApp.db.attendance[self.mainTab.employeeID], today)}")
-            self.carryLabel.setText(f"PTO carryover from {datetime.date.today().year - 1}: {self.currentEmployeePTO.getCarryHours(today.year)}")
+            anniversary = self.currentEmployee.anniversary
+            attendance = self.mainApp.db.attendance[self.currentEmployee.idNum]
+            available = self.currentEmployeePTO.getAvailableHours(anniversary, attendance, today)
+            used = self.currentEmployeePTO.getUsedHours(today.year)
+            eligibilityDate = (anniversary + datetime.timedelta(days=PTO_ELIGIBILITY)).isoformat()
+            eligibilityNote = "" if (today - anniversary).days >= PTO_ELIGIBILITY else f" (available {eligibilityDate})"
+            self.PTOHoursLabel.setText(f"PTO hours in {today.year}: {available}{eligibilityNote}")
+            self.PTOUsedLabel.setText(f"PTO used in {today.year}: {used}")
+            self.PTORemainingLabel.setText(f"PTO remaining in {today.year}: {available - used}")
+            self.PTOBaseLabel.setText(f"Base PTO in {today.year}: {self.currentEmployeePTO.getAvailableBaseHours(anniversary, today.year)}")
+            self.PTOAttendanceLabel.setText(f"PTO attendance bonus in {today.year}: {self.currentEmployeePTO.getQuarterHours(anniversary, attendance, today)}")
+            self.carryLabel.setText(f"PTO carryover from {today.year - 1}: {self.currentEmployeePTO.getCarryHours(today.year)}")
             self.carryButton.setEnabled(True)
-            # currentPTO = self.currentEmployeePTO.currentPTO(today)
-            # if currentPTO is not None:
-            #     self.PTOLabel.setText(f"PTO: {currentPTO}")
-            # else:
-            #     isEmpty = True
         else:
             isEmpty = True
         
@@ -157,37 +171,42 @@ class PTOTab(QWidget):
     
     def openNew(self):
         if self.currentEmployeePTO is None:
-            raise RuntimeError('self.currentEmployeePTO is None')
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         PTOEditWindow(self.currentEmployeePTO.idNum, None, self.mainApp)
-    
+
     def manageCarry(self):
         if self.currentEmployeePTO is None:
             errorMessage(self.mainApp, ["No employee selected."])
-        else:
-            PTOCarryWindow(self.currentEmployeePTO.idNum, self.mainApp)
-    
+            return
+        PTOCarryWindow(self.currentEmployeePTO.idNum, self.mainApp)
+
     def openEdits(self):
+        if self.currentEmployeePTO is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for PTOrange in self.selection:
             if isinstance(PTOrange[1], str):
                 errorMessage(self.mainApp, ["Carryover cannot be edited through this interface.  Please use the \"Manage Carryover\" button."])
             else:
-                if self.currentEmployeePTO is None:
-                    raise RuntimeError('self.currentEmployeePTO is None')
                 PTOEditWindow(self.currentEmployeePTO.idNum, self.currentEmployeePTO.PTO[PTOrange], self.mainApp)
-    
+
     def deletePTO(self):
+        if self.currentEmployeePTO is None:
+            errorMessage(self.mainApp, ["No employee selected."])
+            return
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No dates selected."])
+            return
         for PTOrange in self.selection:
             if isinstance(PTOrange[1], str):
                 errorMessage(self.mainApp, ["Carryover cannot be deleted through this interface.  Please use the \"Manage Carryover\" button."])
             else:
                 confirm = QMessageBox.question(self, f"Delete {PTOrange[0].isoformat()} -- {PTOrange[1].isoformat()}?", f"Are you sure you want to delete the PTO from {PTOrange[0].isoformat()} to {PTOrange[1].isoformat()}?")
                 if confirm == QMessageBox.StandardButton.Yes:
-                    if self.currentEmployeePTO is None:
-                        raise RuntimeError('self.currentEmployeePTO is None')
                     del self.currentEmployeePTO.PTO[PTOrange]
                 QMessageBox.information(self.mainApp, "Success", f"PTO from {PTOrange[0].isoformat()} to {PTOrange[1].isoformat()} successfully deleted!")
         self.refresh()
@@ -195,11 +214,11 @@ class PTOTab(QWidget):
     def report(self):
         if self.currentEmployeePTO is None or self.currentEmployee is None:
             errorMessage(self.mainApp, ["No employee selected."])
-        else:
-            path = tempReportPath(f"employee-{self.currentEmployee.idNum}-pto")
-            pdf = PDFReport(self.mainApp.db, path)
-            pdf.employeePTOReport(self.currentEmployee.idNum)
-            startfile(path)
+            return
+        path = tempReportPath(f"employee-{self.currentEmployee.idNum}-pto")
+        pdf = PDFReport(self.mainApp.db, path)
+        pdf.employeePTOReport(self.currentEmployee.idNum)
+        startfile(path)
     
     def refresh(self):
         self.setEmployee(self.mainTab.employeeID)
@@ -224,9 +243,12 @@ class PTOCarryWindow(QWidget):
             raise RuntimeError('self.attendanceDB is None')
         if self.employee is None:
             raise RuntimeError('self.employee is None')
+        if self.employee.anniversary is None:
+            raise RuntimeError('self.employee.anniversary is None')
 
+        lastYearEnd = datetime.date(year=datetime.date.today().year - 1, month=12, day=31)
         self.unusedHours = max(
-            self.PTODB.getAvailableHours(self.employee.anniversary, self.attendanceDB, datetime.date(year=datetime.date.today().year - 1, month=12, day=31)) - self.PTODB.getUsedHours(datetime.date.today().year - 1),
+            self.PTODB.getAvailableHours(self.employee.anniversary, self.attendanceDB, lastYearEnd) - self.PTODB.getUsedHours(datetime.date.today().year - 1),
             0
         )
         self.unusedType = self.PTODB.getCarryType(datetime.date.today().year)
@@ -308,8 +330,9 @@ class PTOCarryWindow(QWidget):
                 else:
                     abort = True
             if not abort:
-                self.PTORange = EmployeePTORange(self.employeeID, datetime.date.today(), "CARRY", self.toUseSlider.value())
-                self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)] = self.PTORange
+                today = datetime.date.today()
+                self.PTORange = EmployeePTORange(self.employeeID, today, "CARRY", self.toUseSlider.value())
+                self.PTODB.PTO[(today, "CARRY")] = self.PTORange
                 QMessageBox.information(self, "Success", "PTO successfully carried over!")
         self.mainApp.overviewTab.PTOTab.refresh()
         self.close()
@@ -326,8 +349,9 @@ class PTOCarryWindow(QWidget):
                 else:
                     abort = True
             if not abort:
-                self.PTORange = EmployeePTORange(self.employeeID, datetime.date.today(), "CASH", self.toUseSlider.value())
-                self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)] = self.PTORange
+                today = datetime.date.today()
+                self.PTORange = EmployeePTORange(self.employeeID, today, "CASH", self.toUseSlider.value())
+                self.PTODB.PTO[(today, "CASH")] = self.PTORange
                 QMessageBox.information(self, "Success", "PTO successfully cashed out!")
         self.mainApp.overviewTab.PTOTab.refresh()
         self.close()
@@ -344,8 +368,9 @@ class PTOCarryWindow(QWidget):
                 else:
                     abort = True
             if not abort:
-                self.PTORange = EmployeePTORange(self.employeeID, datetime.date.today(), "DROP", self.toUseSlider.value())
-                self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)] = self.PTORange
+                today = datetime.date.today()
+                self.PTORange = EmployeePTORange(self.employeeID, today, "DROP", self.toUseSlider.value())
+                self.PTODB.PTO[(today, "DROP")] = self.PTORange
                 QMessageBox.information(self, "Success", "PTO successfully dropped!")
         self.close()
 
@@ -378,34 +403,28 @@ class PTOEditWindow(QWidget):
             raise RuntimeError('self.PTODB is None')
         if self.employee is None:
             raise RuntimeError('self.employee is None')
+        if self.employee.anniversary is None:
+            raise RuntimeError('self.employee.anniversary is None')
 
         self.PTORange = PTORange
         self.isNew = PTORange is None
-        if not self.isNew:
-            if PTORange is None:  # Redundant but the type hinter wants it
-                raise RuntimeError('PTORange is None')
+
+        self.calendarStart = QCalendarWidget()
+        self.calendarEnd = QCalendarWidget()
+        self.hours = QLineEdit()
+
+        if PTORange is not None:
+            if PTORange.start is None or PTORange.end is None:
+                raise RuntimeError('PTORange.start or PTORange.end is None')
+            if isinstance(PTORange.end, str):
+                raise RuntimeError('PTORange.end is a carryover marker; edit window should not have opened')
             if (PTORange.start, PTORange.end) not in self.PTODB.PTO:
                 raise RuntimeError('(PTORange.start, PTORange.end) not in self.PTODB.PTO')
             if not (PTORange == self.PTODB.PTO[(PTORange.start, PTORange.end)]):
                 raise RuntimeError('PTORange == self.PTODB.PTO[(PTORange.start, PTORange.end)]')
-
-        self.calendarStart = QCalendarWidget()
-        if not self.isNew:
-            if self.PTORange is None:  # Redundant but the type hinter wants it
-                raise RuntimeError('self.PTORange is None')
-            self.calendarStart.setSelectedDate(toQDate(self.PTORange.start))
-
-        self.calendarEnd = QCalendarWidget()
-        if not self.isNew:
-            if self.PTORange is None:  # Redundant but the type hinter wants it
-                raise RuntimeError('self.PTORange is None')
-            self.calendarEnd.setSelectedDate(toQDate(self.PTORange.end))
-
-        self.hours = QLineEdit()
-        if not self.isNew:
-            if self.PTORange is None:  # Redundant but the type hinter wants it
-                raise RuntimeError('self.PTORange is None')
-            self.hours.setText(f"{self.PTORange.hours}")
+            self.calendarStart.setSelectedDate(toQDate(PTORange.start))
+            self.calendarEnd.setSelectedDate(toQDate(PTORange.end))
+            self.hours.setText(f"{PTORange.hours}")
 
         self.mainLayout = [
             [
@@ -434,16 +453,17 @@ class PTOEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        
+
         start = fromQDate(self.calendarStart.selectedDate())
         end = fromQDate(self.calendarEnd.selectedDate())
+
+        if self.employee.anniversary is None:
+            raise RuntimeError('self.employee.anniversary is None')
+        anniversary = self.employee.anniversary
 
         if end < start:
             errors.append(f"Start date {start.isoformat()} comes after end date {end.isoformat()}")
         else:
-            # if (start, end) in self.PTODB.PTO and not (not isNew and start == self.PTORange.start and end == self.PTORange.end):
-            #     errors.append(f"Employee {self.employeeID} already has PTO from {start.isoformat()} to {end.isoformat()}")
-            
             for dates in self.PTODB.PTO:
                 if isinstance(dates[1], datetime.date) and not (start > dates[1] or dates[0] > end):
                     # Intersection?
@@ -451,35 +471,38 @@ class PTOEditWindow(QWidget):
                         errors.append(f"Employee {self.employeeID} already has conflicting PTO from {dates[0].isoformat()} to {dates[1].isoformat()}")
         if not start.year == end.year:
             errors.append(f"Range spans multiple calendar years ({start.year} to {end.year})")
-        
-        if (start - self.employee.anniversary).days < PTO_ELIGIBILITY:
-            errors.append(f"Employee {self.employeeID} is not eligible for PTO until {(self.employee.anniversary + datetime.timedelta(days=PTO_ELIGIBILITY)).isoformat()}")
-        
+
+        if (start - anniversary).days < PTO_ELIGIBILITY:
+            errors.append(f"Employee {self.employeeID} is not eligible for PTO until {(anniversary + datetime.timedelta(days=PTO_ELIGIBILITY)).isoformat()}")
+
         hours = checkInput(self.hours.text(), float, "pos", errors, "hours")
 
         used = self.PTODB.getUsedHours(start.year)
-        if not isNew and self.PTORange is not None and self.PTORange.start.year == start.year:
+        if not isNew and self.PTORange is not None and self.PTORange.start is not None and self.PTORange.start.year == start.year:
             used -= self.PTORange.hours
-        available = self.PTODB.getAvailableHours(self.employee.anniversary, self.attendanceDB, end) # In case bonus hours apply mid range
+        available = self.PTODB.getAvailableHours(anniversary, self.attendanceDB, end) # In case bonus hours apply mid range
         if used + hours > available:
             errors.append(f"Employee {self.employeeID} is only eligible for {available} PTO hours in {start.year} (would use {used + hours})")
-        
+
         if len(errors) == 0:
             if isNew:
-                self.PTORange = EmployeePTORange(self.employeeID, start, end, hours)
-            if self.PTORange is None:  # Redundant but the type hinter wants it
-                raise RuntimeError('self.PTORange is None')
-            if not isNew:
+                ptoRange = EmployeePTORange(self.employeeID, start, end, hours)
+                self.PTORange = ptoRange
+            else:
+                if self.PTORange is None:
+                    raise RuntimeError('self.PTORange is None despite not isNew')
+                if self.PTORange.start is None or self.PTORange.end is None:
+                    raise RuntimeError('self.PTORange.start or self.PTORange.end is None')
                 del self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)]
                 self.PTORange.start = start
                 self.PTORange.end = end
                 self.PTORange.hours = hours
-            self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)] = self.PTORange
+                ptoRange = self.PTORange
+            self.PTODB.PTO[(start, end)] = ptoRange
 
             self.mainApp.overviewTab.PTOTab.refresh()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         return res
     

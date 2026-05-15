@@ -78,17 +78,20 @@ class ObservancesTab(QWidget):
         for holiday in self.observancesDB.getHolidays(self.currentYear):
             barLayout = QHBoxLayout()
             label = QLabel(f"{holiday}")
-            date1 = QLabel(f"Shift 1: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 1) is None else self.observancesDB.getObservance(self.currentYear, holiday, 1).isoformat()}")
+            obs1 = self.observancesDB.getObservance(self.currentYear, holiday, 1)
+            obs2 = self.observancesDB.getObservance(self.currentYear, holiday, 2)
+            obs3 = self.observancesDB.getObservance(self.currentYear, holiday, 3)
+            date1 = QLabel(f"Shift 1: {"N/A" if obs1 is None else obs1.isoformat()}")
             select1 = QPushButton("Select")
             clear1 = QPushButton("Clear")
             select1.clicked.connect(self.setObservanceFn(holiday, 1))
             clear1.clicked.connect(self.delObservanceFn(holiday, 1))
-            date2 = QLabel(f"Shift 2: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 2) is None else self.observancesDB.getObservance(self.currentYear, holiday, 2).isoformat()}")
+            date2 = QLabel(f"Shift 2: {"N/A" if obs2 is None else obs2.isoformat()}")
             select2 = QPushButton("Select")
             clear2 = QPushButton("Clear")
             select2.clicked.connect(self.setObservanceFn(holiday, 2))
             clear2.clicked.connect(self.delObservanceFn(holiday, 2))
-            date3 = QLabel(f"Shift 3: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 3) is None else self.observancesDB.getObservance(self.currentYear, holiday, 3).isoformat()}")
+            date3 = QLabel(f"Shift 3: {"N/A" if obs3 is None else obs3.isoformat()}")
             select3 = QPushButton("Select")
             clear3 = QPushButton("Clear")
             select3.clicked.connect(self.setObservanceFn(holiday, 3))
@@ -132,20 +135,32 @@ class ObservancesTab(QWidget):
         if hard:
             while self.selectLayout.count() > 0:
                 row = self.selectLayout.takeAt(0)
-                while row.layout().count() > 0:
-                    widget = row.layout().takeAt(0)
-                    widget.widget().setParent(None)
+                if row is None:
+                    raise RuntimeError('row is None despite count > 0')
+                rowLayout = row.layout()
+                if rowLayout is None:
+                    raise RuntimeError('row.layout() is None')
+                while rowLayout.count() > 0:
+                    item = rowLayout.takeAt(0)
+                    if item is None:
+                        raise RuntimeError('item is None despite count > 0')
+                    widget = item.widget()
+                    if widget is not None:
+                        widget.setParent(None)
             self.observanceRows = []
             self.buildRows()
         else:
             for row in self.observanceRows:
                 holiday: str = row[0]
+                obs1 = self.observancesDB.getObservance(self.currentYear, holiday, 1)
+                obs2 = self.observancesDB.getObservance(self.currentYear, holiday, 2)
+                obs3 = self.observancesDB.getObservance(self.currentYear, holiday, 3)
                 date: QPushButton = row[2]
-                date.setText(f"Shift 1: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 1) is None else self.observancesDB.getObservance(self.currentYear, holiday, 1).isoformat()}")
+                date.setText(f"Shift 1: {"N/A" if obs1 is None else obs1.isoformat()}")
                 date: QPushButton = row[5]
-                date.setText(f"Shift 2: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 2) is None else self.observancesDB.getObservance(self.currentYear, holiday, 2).isoformat()}")
+                date.setText(f"Shift 2: {"N/A" if obs2 is None else obs2.isoformat()}")
                 date: QPushButton = row[8]
-                date.setText(f"Shift 3: {"N/A" if self.observancesDB.getObservance(self.currentYear, holiday, 3) is None else self.observancesDB.getObservance(self.currentYear, holiday, 3).isoformat()}")
+                date.setText(f"Shift 3: {"N/A" if obs3 is None else obs3.isoformat()}")
     
     def refresh(self, hard = True):
         self.observancesDB = self.mainApp.db.holidays
@@ -293,15 +308,16 @@ class DefaultHolidaysTab(QWidget):
         HolidayEditWindow(self, None, self.mainApp)
     
     def openEdits(self):
-        pass
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No holidays selected."])
+            return
         for holiday in self.selection:
             HolidayEditWindow(self, holiday, self.mainApp)
-    
+
     def deleteHolidays(self):
         if len(self.selection) == 0:
             errorMessage(self.mainApp, ["No holidays selected."])
+            return
         for holiday in self.selection:
             confirm = QMessageBox.question(self, f"Delete {holiday}?", f"Are you sure you want to delete the holiday on {holiday}?")
 
@@ -318,7 +334,7 @@ class DefaultHolidaysTab(QWidget):
         self.setSelection(selection)
 
 class HolidayEditWindow(QWidget):
-    def __init__(self, defaultsTab: DefaultHolidaysTab, holiday: str, mainApp: MainWindow):
+    def __init__(self, defaultsTab: DefaultHolidaysTab, holiday: str | None, mainApp: MainWindow):
         super().__init__(mainApp, Qt.WindowType.Window)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.mainApp = mainApp
@@ -329,17 +345,18 @@ class HolidayEditWindow(QWidget):
 
 
         self.isNew = holiday is None
-        if not self.isNew:
-            if holiday not in self.observancesDB.defaults:
-                raise RuntimeError('holiday not in self.observancesDB.defaults')
-        
-        self.holidayName = QLineEdit(holiday if not self.isNew else "")
 
         self.holidayMonth = QComboBox()
         self.holidayMonth.setEditable(False)
         self.holidayMonth.addItems([str(num + 1) for num in range(12)])
-        if not self.isNew:
-            self.holidayMonth.setCurrentText(str(self.observancesDB.defaults[self.holiday]))
+
+        if holiday is not None:
+            if holiday not in self.observancesDB.defaults:
+                raise RuntimeError('holiday not in self.observancesDB.defaults')
+            self.holidayName = QLineEdit(holiday)
+            self.holidayMonth.setCurrentText(str(self.observancesDB.defaults[holiday]))
+        else:
+            self.holidayName = QLineEdit("")
 
         self.mainLayout = [
             [

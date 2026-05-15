@@ -74,23 +74,29 @@ class EmployeeTab(QWidget):
     def genTableData(self):
         db = self.mainApp.db
         self.headers = ["ID Number", "Last Name", "First Name", "Anniversary", "Role", "Shift", "Full Time?", "Address", "Telephone", "Email"]
-        self.tableData = [[
-            entry,
-            "{}".format(db.employees[entry].lastName),
-            "{}".format(db.employees[entry].firstName),
-            "{}".format(db.employees[entry].anniversary.isoformat()),
-            "{}".format(db.employees[entry].role),
-            "{}".format(db.employees[entry].shift),
-            "{}".format(db.employees[entry].fullTime),
-            "{}, {}, {} {}".format(
-                ", ".join([str(line) for line in [db.employees[entry].addressLine1, db.employees[entry].addressLine2] if line is not None or not line == ""]),
-                db.employees[entry].addressCity,
-                db.employees[entry].addressState,
-                db.employees[entry].addressZip
-            ),
-            "{}".format(db.employees[entry].addressTel),
-            "{}".format(db.employees[entry].addressEmail)
-        ] for entry in db.employees if db.employees[entry].status == self.active]
+        self.tableData = []
+        for entry in db.employees:
+            emp = db.employees[entry]
+            if emp.status != self.active:
+                continue
+            anniversary = emp.anniversary.isoformat() if emp.anniversary is not None else "?"
+            self.tableData.append([
+                entry,
+                "{}".format(emp.lastName),
+                "{}".format(emp.firstName),
+                anniversary,
+                "{}".format(emp.role),
+                "{}".format(emp.shift),
+                "{}".format(emp.fullTime),
+                "{}, {}, {} {}".format(
+                    ", ".join([str(line) for line in [emp.addressLine1, emp.addressLine2] if line is not None or not line == ""]),
+                    emp.addressCity,
+                    emp.addressState,
+                    emp.addressZip
+                ),
+                "{}".format(emp.addressTel),
+                "{}".format(emp.addressEmail)
+            ])
         self.tableData.sort(key=lambda row: (row[1], row[2], row[3]))
     
     def setSelection(self, selection):
@@ -170,7 +176,7 @@ class EmployeeEditWindow(QWidget):
         self.employee = employee
 
         self.calendar = QCalendarWidget()
-        if self.employee is not None:
+        if self.employee is not None and self.employee.anniversary is not None:
             self.calendar.setSelectedDate(toQDate(self.employee.anniversary))
 
         self.shift = QComboBox()
@@ -250,9 +256,9 @@ class EmployeeEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        id = checkInput(self.mainLayout[0][1].text(), int, "nonneg", errors, "ID Number")
+        id = int(checkInput(self.mainLayout[0][1].text(), int, "nonneg", errors, "ID Number"))
         if id in self.mainApp.db.employees:
-            if isNew or (not id == self.employee.idNum):
+            if isNew or (self.employee is not None and not id == self.employee.idNum):
                 errors.append(f"Employee number '{id}' already in use")
         lastName = self.mainLayout[1][1].text()
         if lastName == "":
@@ -282,29 +288,28 @@ class EmployeeEditWindow(QWidget):
         if len(errors) == 0:
             isNone = self.employee is None
             if isNew:
-                self.employee = Employee()
-                self.employee.setID(id)
-                self.mainApp.db.addEmployee(self.employee)
-                reviews = EmployeeReviewsDB(id)
-                self.mainApp.db.addEmployeeReviews(reviews)
-                training = EmployeeTrainingDB(id)
-                self.mainApp.db.addEmployeeTraining(training)
-                points = EmployeePointsDB(id)
-                self.mainApp.db.addEmployeePoints(points)
-                PTO = EmployeePTODB(id)
-                self.mainApp.db.addEmployeePTO(PTO)
-                notes = EmployeeNotesDB(id)
-                self.mainApp.db.addEmployeeNotes(notes)
+                employee = Employee()
+                self.employee = employee
+                employee.setID(id)
+                self.mainApp.db.addEmployee(employee)
+                self.mainApp.db.addEmployeeReviews(EmployeeReviewsDB(id))
+                self.mainApp.db.addEmployeeTraining(EmployeeTrainingDB(id))
+                self.mainApp.db.addEmployeePoints(EmployeePointsDB(id))
+                self.mainApp.db.addEmployeePTO(EmployeePTODB(id))
+                self.mainApp.db.addEmployeeNotes(EmployeeNotesDB(id))
             else:
-                if isNone:
-                    raise RuntimeError('isNone')
-                self.mainApp.db.updateEmployee(self.employee.idNum, id)
-            self.employee.setName(lastName, firstName)
+                if self.employee is None:
+                    raise RuntimeError('self.employee is None despite not isNew')
+                employee = self.employee
+                if employee.idNum is None:
+                    raise RuntimeError('employee.idNum is None')
+                self.mainApp.db.updateEmployee(employee.idNum, id)
+            employee.setName(lastName, firstName)
             logging.debug(self.calendar.selectedDate())
-            self.employee.setAnniversary(fromQDate(self.calendar.selectedDate()))
-            self.employee.setStatus(self.active)
-            self.employee.setJob(role, int(self.shift.currentText()), self.fullTime.currentText() == "True")
-            self.employee.setAddress(addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail)
+            employee.setAnniversary(fromQDate(self.calendar.selectedDate()))
+            employee.setStatus(self.active)
+            employee.setJob(role, int(self.shift.currentText()), self.fullTime.currentText() == "True")
+            employee.setAddress(addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail)
             if isNone:
                 self.employee = None
             self.mainApp.overviewTab.refresh()
@@ -312,7 +317,6 @@ class EmployeeEditWindow(QWidget):
             self.mainApp.employeesTab.inactiveEmployeesTab.refreshTable()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         self.setWindowTitle(f"Edit: {self.employee.idNum if self.employee is not None else "New Employee"}")
         return res

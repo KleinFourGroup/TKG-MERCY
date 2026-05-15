@@ -575,7 +575,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36c | ✅ Done | Merge plan Step 36c: records/products.py Database TYPE_CHECKING |
 | 36d | ✅ Done | Merge plan Step 36d: declarative attribute batch |
 | 36e1 | ✅ Done | Merge plan Step 36e1: HR Optional sweep — group A (notes / points / reviews / training) |
-| 36e2 | 📝 Sketched | HR Optional sweep — group B (pto / parts / employees / holidays) |
+| 36e2 | ✅ Done | Merge plan Step 36e2: HR Optional sweep — group B (pto / parts / employees / holidays) |
 | 36f | 📝 Sketched | Production-side cleanup (production_tab.py + report/production.py) |
 | 36g | 📝 Sketched | Bake `pyright --outputjson` into the smoke baseline |
 | 37 | 📝 Sketched | (Future / if time permits) UI fuzz harness for state-machine bugs — see §13.25 |
@@ -791,7 +791,7 @@ Changes:
 
 **On the net-up count.** Baseline rose 158 → 175 (+17) over 36d. Cause: making the Optional types honest exposes ~45 previously-hidden `reportOptionalMemberAccess` / `reportArgumentType` findings — `self.currentEmployee.idNum` could not be flagged when `currentEmployee` was lying as a non-Optional `Employee`. The total is a noisier metric than the categorical health: by rule, `reportAttributeAccessIssue` dropped from 38 → 10, and the Optional findings are now properly categorized as Optional. The exposed surface is exactly 36e's scope, ready for per-call-site judgment.
 
-#### Step 36e — HR tabs Optional sweep 🟡 In progress
+#### Step 36e — HR tabs Optional sweep ✅ Done
 
 The bulk of the work: ~80-100 `reportOptionalMemberAccess` / `reportArgumentType` findings across `pto_tab.py`, `reviews_tab.py`, `employees_tab.py`, `parts_tab.py`, `points_tab.py`, `training_tab.py`, `notes_tab.py`, `holidays_tab.py`. Per-call-site judgment required: either real null-check (the employee picker returns None when nothing is selected — legitimate Optional that the UI should defend against) or `assert` (UI flow guarantees not-None at this call site). The only step that's not mechanical; split into a pair of commits (the sketch's "or pair" option) along a natural axis — group A is the four employee-detail sub-tabs that share the `currentEmployee` / `currentEmployee<X>` pattern from 36d; group B is everything else (PTO date/str polymorphism, parts, employees-list, holidays).
 
@@ -809,9 +809,18 @@ Dominant patterns and the picks made:
 
 **Genuine semantic-equivalent changes worth flagging.** `openEdits` for points / reviews / training originally had `if len(self.selection) == 0: errorMessage()` followed by a loop — with empty selection the loop ran zero times, so the missing `return` was a latent no-op. New code returns after the errorMessage; equivalent in current shape but more legible.
 
-##### Step 36e2 — group B (pto / parts / employees / holidays) 📝 Sketched
+##### Step 36e2 — group B (pto / parts / employees / holidays) ✅ Done
 
-Remaining: pto_tab.py (30, includes the 36d deferral at L91 — `db.PTO[entry].end` is `datetime.date | str` and needs `isinstance` narrowing via a local), parts_tab.py (16, ANIKA-side — different shape than the employee-detail tabs), employees_tab.py (15, the employee list/CRUD tab itself), holidays_tab.py (11, calendar/observance-shaped). 72 findings, similar judgment-per-site approach as 36e1 but with more variety in the per-file patterns.
+Landed 2026-05-15. **72 findings gone, 4 files at 0; baseline 100 → 28** (the remaining 28 are exactly 36f's scope: report/production.py, production_tab.py, report/employees.py, app.py, employee_detail_tab.py). Smoke 18 PASS + manual UI sweep across all four tabs.
+
+The 36e1 patterns (setEmployee param fix, display-label `or "?"` fallback, early-return guards on button-gated methods, EditWindow consolidation, readData local-var pattern) carried over where applicable. The shape-specific work:
+
+- **pto_tab.py** — biggest file at 30 findings. The 36d-deferred L91 case (`db.PTO[entry].end` is `datetime.date | str`) resolved by switching genTableData from a list-comp on `db.PTO` (key-based, no narrowing) to `db.PTO.items()` iteration — pyright tracks `isinstance(end, datetime.date)` narrowing through the local. `refreshPTO` had a giant chain of one-liner f-strings; hoisted `today` / `anniversary` / `attendance` / `available` / `used` / `eligibilityDate` / `eligibilityNote` into locals — same values, dramatically more legible, narrows the Optional in one place. Used `self.currentEmployee.idNum` instead of `self.mainTab.employeeID` for the attendance lookup (identical values per call sites; narrows on the just-checked Employee). `PTOCarryWindow.carry/cash/drop` now use `(today, "CARRY"/"CASH"/"DROP")` directly as the dict key instead of `(self.PTORange.start, self.PTORange.end)` — same values since `EmployeePTORange(employeeID, today, "CARRY"/..., hours)` sets start=today, end=marker. `PTOEditWindow.__init__` got a new raise check for `PTORange.end is str` (defense-in-depth: `openEdits` already filters carryovers before opening the window). Dead commented-out `currentPTO` block dropped from `refreshPTO`.
+- **parts_tab.py** — `PartsDetailsWindow` display fallbacks (`?` for missing greenScrap / fireScrap; `or []` for pad / padsPerBox joins) — would previously crash on `join(None)` / `100 * None`. The 36d-known reportlab-vs-list invariance issue at L146 fixed with an explicit `labels: list[list[QWidget]]` annotation (QLabel is a QWidget; list is invariant so pyright needed the wider element type). `PartsEditWindow` padsLayout loop adds `part.pad is not None and part.padsPerBox is not None` — defense-only since they're set together via `setPackaging`. `readData` uses the local-`part` pattern. **Unrelated polish:** Matthew added the long-missing `centerOnScreen(self)` call to `PartsEditWindow.__init__` while reviewing — the dialog was opening in a default position instead of centered like all the other Edit windows. Rolled into this commit.
+- **employees_tab.py** — `genTableData` restructured to an explicit loop with an `emp` local (cleaner anniversary fallback). `id = int(checkInput(...))` cast is needed because `checkInput` is untyped and infers `int | float` from `res = 1` / `int(raw)` branches — the `int()` cast is a no-op at runtime but narrows for pyright. `readData` uses the local-`employee` pattern + a raise for `employee.idNum is None` before passing it to `updateEmployee`. Inlined a few intermediate names (`reviews = EmployeeReviewsDB(id); addEmployeeReviews(reviews)` → `addEmployeeReviews(EmployeeReviewsDB(id))`) since they were unused after construction.
+- **holidays_tab.py** — biggest improvement here was `buildRows` / `refreshRows`: hoisted the three `getObservance(year, holiday, shift)` calls per row into locals (`obs1`, `obs2`, `obs3`) — narrows the Optional in one place AND halves the call count (was previously called twice per shift, once for the None check and once for `.isoformat()`). `refreshRows hard=True` got explicit raise checks for the `selectLayout.takeAt(0)` / `row.layout()` / `item.widget()` Optional chain. `HolidayEditWindow` sig changed `holiday: str → str | None` (matches the openNew call site that passes None); consolidated the per-block `if not self.isNew:` widget setup into one narrowed `if holiday is not None:` block. Vestigial `pass` no-op dropped from `openEdits`.
+
+**Step 36 status:** 36e done — only 36f (production-side cleanup) and 36g (bake `pyright --outputjson` into smoke) remain before the 0-error baseline.
 
 #### Step 36f — production-side cleanup 📝 Sketched
 

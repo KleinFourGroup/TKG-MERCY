@@ -132,13 +132,17 @@ class PartsDetailsWindow(QWidget):
         self.mainApp = mainApp
         self.setWindowTitle(f"Details: {entry}")
 
-        part = self.mainApp.db.parts[entry]        
-        labels = [
+        part = self.mainApp.db.parts[entry]
+        padsStr = ", ".join(part.pad or [])
+        padsPerBoxStr = ", ".join(map(str, part.padsPerBox or []))
+        greenScrap = part.db.globals.greenScrap if part.db is not None else "?"
+        fireScrapStr = f"{100 * part.fireScrap}" if part.fireScrap is not None else "?"
+        labels: list[list[QWidget]] = [
             [QLabel(f"Part: {entry}")],
             [QLabel(f"Weight: {part.weight} lbs"), QLabel(f"Mix: {part.mix}")],
             [QLabel(f"Pressing: {part.pressing} pieces/hour"), QLabel(f"Turning: {part.turning} pieces/hour")],
-            [QLabel(f"Box: {part.box}"), QLabel(f"Pieces / box: {part.piecesPerBox}"), QLabel(f"Pallet: {part.pallet}"), QLabel(f"Boxes / pallet: {part.boxesPerPallet}"), QLabel(f"Pads: {", ".join(part.pad)}"), QLabel(f"Pads / box: {", ".join(map(str, part.padsPerBox))}"), QLabel(f"Misc.: {", ".join(part.misc)}")],
-            [QLabel(f"Green scrap: {part.db.globals.greenScrap}%"), QLabel(f"Fire scrap: {100 * part.fireScrap}%")],
+            [QLabel(f"Box: {part.box}"), QLabel(f"Pieces / box: {part.piecesPerBox}"), QLabel(f"Pallet: {part.pallet}"), QLabel(f"Boxes / pallet: {part.boxesPerPallet}"), QLabel(f"Pads: {padsStr}"), QLabel(f"Pads / box: {padsPerBoxStr}"), QLabel(f"Misc.: {", ".join(part.misc)}")],
+            [QLabel(f"Green scrap: {greenScrap}%"), QLabel(f"Fire scrap: {fireScrapStr}%")],
             [QLabel(f"Var. Cost: ${part.getVariableCost():.3f}"), QLabel(f"Man. Cost: ${part.getManufacturingCost():.3f}")],
             [QLabel(f"Price: ${part.price}"), QLabel(f"Annual sales: ${part.sales}")]
         ]
@@ -199,7 +203,7 @@ class PartsEditWindow(QWidget):
         pads.extend([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pad"])
 
         for i in range(5):
-            if (part is not None) and i < len(part.pad):
+            if part is not None and part.pad is not None and part.padsPerBox is not None and i < len(part.pad):
                 self.padsLayout.append([
                     QLabel("Pad:"),
                     getComboBox(pads, part.pad[i]),
@@ -248,7 +252,7 @@ class PartsEditWindow(QWidget):
                 miscWidget
             ],
             [
-                QLabel("Fire scrap:"), QLineEdit(f"{100 * part.fireScrap if part is not None else ""}"), QLabel("%")
+                QLabel("Fire scrap:"), QLineEdit(f"{100 * part.fireScrap if part is not None and part.fireScrap is not None else ""}"), QLabel("%")
             ],
             [
                 QLabel("Price:"), QLineEdit(f"{part.price if part is not None else ""}"),
@@ -268,6 +272,8 @@ class PartsEditWindow(QWidget):
             self.mainLayout[5][4].setCheckState(Qt.CheckState.Checked)
         self.mainLayout[6][1].clicked.connect(self.newPart)
         self.mainLayout[5][4].stateChanged.connect(self.quote)
+        
+        centerOnScreen(self)
         self.show()
     
     def quote(self, state):
@@ -283,7 +289,7 @@ class PartsEditWindow(QWidget):
         errors = []
         name = self.mainLayout[0][1].text()
         if name in self.mainApp.db.parts:
-            if isNew or (not name == self.part.name):
+            if isNew or (self.part is not None and not name == self.part.name):
                 errors.append(f"Part name '{name}' already in use")
         weight = checkInput(self.mainLayout[1][1].text(), float, "pos", errors, "weight")
         mix = self.mainLayout[1][4].currentText()
@@ -296,7 +302,7 @@ class PartsEditWindow(QWidget):
         fireScrap = checkInput(self.mainLayout[4][1].text(), float, "nonneg", errors, "fire scrap") / 100
         price = checkInput(self.mainLayout[5][1].text(), float, "nonneg", errors, "price")
         sales = "Quote" if self.mainLayout[5][4].isChecked() else checkInput(self.mainLayout[5][3].text(), int, "nonneg", errors, "annual sales")
-        
+
         pad = []
         padsPerBox = []
         for row in self.padsLayout:
@@ -311,21 +317,22 @@ class PartsEditWindow(QWidget):
         if len(errors) == 0:
             isNone = self.part is None
             if isNew:
-                self.part = Part(name)
-                self.mainApp.db.addPart(self.part)
+                part = Part(name)
+                self.part = part
+                self.mainApp.db.addPart(part)
             else:
-                if isNone:
-                    raise RuntimeError('isNone')
-                self.mainApp.db.updatePart(self.part.name, name)
-            self.part.setProduction(weight, mix, pressing, turning, fireScrap, price)
-            self.part.setPackaging(box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc)
-            self.part.sales = sales
+                if self.part is None:
+                    raise RuntimeError('self.part is None despite not isNew')
+                part = self.part
+                self.mainApp.db.updatePart(part.name, name)
+            part.setProduction(weight, mix, pressing, turning, fireScrap, price)
+            part.setPackaging(box, piecesPerBox, pallet, boxesPerPallet, pad, padsPerBox, misc)
+            part.sales = sales
             if isNone:
                 self.part = None
             self.mainApp.partsTab.refreshTable()
             res = True
         else:
-            # self.error = ErrorWindow(errors)
             errorMessage(self, errors)
         self.setWindowTitle(f"Edit: {self.part.name if self.part is not None else "New Part"}")
         return res
