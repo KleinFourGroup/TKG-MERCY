@@ -576,7 +576,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36d | ✅ Done | Merge plan Step 36d: declarative attribute batch |
 | 36e1 | ✅ Done | Merge plan Step 36e1: HR Optional sweep — group A (notes / points / reviews / training) |
 | 36e2 | ✅ Done | Merge plan Step 36e2: HR Optional sweep — group B (pto / parts / employees / holidays) |
-| 36f | 📝 Sketched | Production-side cleanup (production_tab.py + report/production.py) |
+| 36f | ✅ Done | Merge plan Step 36f: production-side cleanup (report/production.py + production_tab.py + report/employees.py + app.py + employee_detail_tab.py) |
 | 36g | 📝 Sketched | Bake `pyright --outputjson` into the smoke baseline |
 | 37 | 📝 Sketched | (Future / if time permits) UI fuzz harness for state-machine bugs — see §13.25 |
 
@@ -822,9 +822,22 @@ The 36e1 patterns (setEmployee param fix, display-label `or "?"` fallback, early
 
 **Step 36 status:** 36e done — only 36f (production-side cleanup) and 36g (bake `pyright --outputjson` into smoke) remain before the 0-error baseline.
 
-#### Step 36f — production-side cleanup 📝 Sketched
+#### Step 36f — production-side cleanup ✅ Done
 
-Same patterns as 36e but smaller surface: `production_tab.py` (7), `report/production.py` (14), `report/employees.py` (5). Likely one commit.
+Landed 2026-05-15. **28 findings gone — pyright at 0 across the entire codebase.** Smoke 18 PASS + manual UI sweep across production records (single + batch), all 7 production reports, PTO / Notes / Incident reports, employee picker, and the close-app confirm dialog.
+
+Scope expanded slightly from the sketch: the original enumeration was 26 across `report/production.py` / `production_tab.py` / `report/employees.py`, but the actual baseline also had `app.py` (2) and `employee_detail_tab.py` (1) — three stragglers that surfaced through 36b-e. Folded into this commit since 36g (smoke gate) needs the 0-error baseline.
+
+- **report/production.py** (14 → 0). Two real fixes: `actionIsTC` definition restructured from `not allActions` to `action is not None` (pyright narrows directly), and two `assert action is not None` guards added inside the `if actionIsTC:` blocks in `productionEmployeeProductivityReport` (lines 748, 760-area cache lookups). The remaining 12 are reportlab library-stub limitations — `LinePlot.width`/`.height` declared `int` when reportlab accepts float at runtime, `XValueAxis.labels` is a real attr the stub doesn't expose, `Legend.x` same float-vs-int. Handled with per-line `# pyright: ignore[reportArgumentType]` / `[reportAttributeAccessIssue]` on the eight affected lines in `drawLinePlot`, with a comment block at the top explaining the stub limitation so future readers don't mistake the ignores for real bug suppressions.
+- **production_tab.py** (6 → 0). Four `assert X is not None` on guard-already-checked invariants: single-record `readData` (`empId` after the errors check), batch-save `readData` (`empId` inside the per-row `if not rowErrs:` block), and two in `ProductionReportWindow.generate` for the Per Target / Per Employee branches (the upstream early-returns ensure non-None but pyright doesn't carry that across the `reportType ==` elif chain).
+- **report/employees.py** (5 → 0). Three list-comps restructured to explicit loops with locals:
+  - `employeePTOReport`: switched from key-based `for entry in PTO.PTO` to `PTO.PTO.items()` with an `end = ptoRange.end` local — pyright tracks `isinstance(end, datetime.date)` narrowing through the local. This is what the 36d-deferred `db.PTO[entry].end` polymorphism was waiting on. Dropped three legacy `# type: ignore` comments that the restructure made unnecessary.
+  - `employeeNotesReport`: filters out None-date notes upfront in the loop, no narrowing needed downstream.
+  - `employeeIncidentReport`: added a `raise RuntimeError` for `note.date is None` ahead of the date-display block (matches the file's `if employee.lastName is None: raise` pattern).
+- **app.py** (2 → 0). Single `assert self.fileManager.filePath is not None` at the top of `_confirmCloseChoice` — `closeEvent` already returns early when filePath is None, but pyright doesn't carry the narrowing across the method boundary.
+- **employee_detail_tab.py** (1 → 0). `refreshPicker` employee picker uses `(lastName or "?").upper()` — the same display-fallback pattern from 36e1 Group A.
+
+**Pyright is now at a clean 0-error baseline across the whole repo.** 36g (smoke gate) is the closing move.
 
 #### Step 36g — bake `pyright --outputjson` into smoke 📝 Sketched
 

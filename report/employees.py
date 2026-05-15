@@ -84,12 +84,17 @@ class EmployeeReportsMixin:
             today = datetime.date.today()
 
             headers = ["Start", "End", "Hours"]
-            data = [[
-                "{}".format(PTO.PTO[entry].start.isoformat()), # type: ignore
-                "{}".format(PTO.PTO[entry].end.isoformat() if isinstance(PTO.PTO[entry].end, datetime.date) else PTO.PTO[entry].end), # type: ignore
-                "{}{}".format("" if isinstance(PTO.PTO[entry].end, datetime.date) else "", PTO.PTO[entry].hours)
-
-            ] for entry in PTO.PTO if isinstance(PTO.PTO[entry].end, datetime.date) and PTO.PTO[entry].end.year == today.year]
+            data = []
+            for entry, ptoRange in PTO.PTO.items():
+                end = ptoRange.end
+                if not isinstance(end, datetime.date) or end.year != today.year:
+                    continue
+                start = entry[0]
+                data.append([
+                    start.isoformat(),
+                    end.isoformat(),
+                    f"{ptoRange.hours}",
+                ])
             data.sort(key=lambda row: (row[0], row[1]))
             olen = len(data)
 
@@ -150,11 +155,15 @@ class EmployeeReportsMixin:
             today = datetime.date.today()
             headers = ["Date", "Time", "Details"]
             widths = [1.2 * inch, 0.8 * inch, 4.5 * inch]
-            data = [[
-                "{}".format(note.date.isoformat()),
-                "{}".format(note.time),
-                "{}".format(note.details)
-            ] for note in notesDB.notes.values() if (today - note.date).days <= 365]
+            data = []
+            for note in notesDB.notes.values():
+                if note.date is None or (today - note.date).days > 365:
+                    continue
+                data.append([
+                    note.date.isoformat(),
+                    "{}".format(note.time),
+                    "{}".format(note.details),
+                ])
             data.sort(key=lambda row: (row[0], row[1]))
             olen = len(data)
 
@@ -194,6 +203,9 @@ class EmployeeReportsMixin:
             self.drawTitle(f"TKG Incident Report")
             self.drawSubtitle(f"{employee.lastName.upper()} {employee.firstName} ({id})")
             self.skipLines(1)
+
+            if note.date is None:
+                raise RuntimeError('note.date is None')
 
             self.drawSection("Incident Details")
             self.drawText(f"Date: {note.date.isoformat()}")

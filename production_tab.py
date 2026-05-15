@@ -432,6 +432,9 @@ class ProductionEditWindow(QWidget):
         if errors:
             errorMessage(self, errors)
             return False
+        # empId passed the None check at the top of this method (errors would
+        # otherwise contain "No employee selected.").
+        assert empId is not None
 
         newKey = (empId, date, shift, targetType, targetName, action)
 
@@ -589,9 +592,11 @@ class ProductionReportWindow(QWidget):
         elif reportType == "Per Action":
             pdf.productionActionReport(sel.actionText, startDate, endDate)
         elif reportType == "Per Target":
+            assert sel.targetType is not None and sel.targetName is not None  # guarded above
             pdf.productionTargetReport(sel.targetType, sel.targetName,
                                        startDate, endDate)
         elif reportType == "Per Employee":
+            assert sel.employeeId is not None  # guarded above
             pdf.productionEmployeeReport(sel.employeeId, startDate, endDate)
         elif reportType == "Productivity":
             pdf.productionProductivityReport(sel.actionText, sel.targetName,
@@ -966,6 +971,7 @@ class ProductionBatchDialog(QWidget):
             if rowErrs:
                 errors.append(f"Row {i}: " + "; ".join(rowErrs))
             else:
+                assert empId is not None  # rowErrs-empty implies empId passed the None check
                 rec = ProductionRecord()
                 rec.setRecord(empId, batchDate, shift, action, targetName, quantity, scrap, hours)
                 toCreate.append(rec)

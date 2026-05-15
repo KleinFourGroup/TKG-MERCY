@@ -205,6 +205,7 @@ class MainWindow(QWidget):
     def _confirmCloseChoice(self):
         # Factored out so the smoke test can swap the return value without
         # monkeypatching QMessageBox globally.
+        assert self.fileManager.filePath is not None  # closeEvent guards above
         return QMessageBox.warning(
             self, "Close MERCY",
             f"Save changes to "

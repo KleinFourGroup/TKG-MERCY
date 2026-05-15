@@ -64,7 +64,7 @@ class EmployeeDetailTab(QWidget):
     def refreshPicker(self):
         db = self.mainApp.db
         activeEmployees: list[tuple[str, str, int]] = [(
-            "{}".format(db.employees[entry].lastName.upper()),
+            (db.employees[entry].lastName or "?").upper(),
             "{}".format(db.employees[entry].firstName),
             entry
         ) for entry in db.employees if db.employees[entry].status]

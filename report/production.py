@@ -739,11 +739,12 @@ class ProductionReportsMixin:
         if allEmps and len(perEmployee) > 1:
             sortedEmps = sorted(perEmployee.keys(), key=empSortKey)
             rows = []
-            actionIsTC = (not allActions
+            actionIsTC = (action is not None
                           and PRODUCTION_ACTION_TARGET[action] == "")
             for eid in sortedEmps:
                 q, h = perEmployee[eid]
                 if actionIsTC:
+                    assert action is not None
                     # Tool Change: per-employee event count.
                     count = perEmpActionCount.get((eid, action), 0)
                     rows.append([self._employeeName(eid), str(count),
@@ -756,6 +757,7 @@ class ProductionReportsMixin:
                     rows.append([self._employeeName(eid), fmtNum(q),
                                  fmtNum(h), "—"])
             if actionIsTC:
+                assert action is not None
                 totalsRow = ["Total",
                              str(perActionCount.get(action, 0)),
                              fmtNum(totalH), "—"]
@@ -1089,20 +1091,25 @@ class ProductionReportsMixin:
         # Renders one LinePlot + Legend inside a single Drawing placed at
         # self.lastLine. series is [(label, [(date, y), ...]), ...] with every
         # y already non-None and every series having >= 2 points.
+        #
+        # reportlab's type stubs declare LinePlot/Legend dimensions as int and
+        # don't expose XValueAxis.labels — both are wrong (the library accepts
+        # floats at runtime and labels is a real Drawing attr). Per-line pyright
+        # ignores below mark the stub limitations, not real bugs.
         plotWidth = self.right - self.left
         plotHeight = 3.5 * inch
 
-        drawing = Drawing(plotWidth, plotHeight)
+        drawing = Drawing(plotWidth, plotHeight)  # pyright: ignore[reportArgumentType]
 
         lp = LinePlot()
         lp.x = 55
         lp.y = 55
-        lp.width = plotWidth - 180  # reserve space on the right for the legend
-        lp.height = plotHeight - 85
+        lp.width = plotWidth - 180  # pyright: ignore[reportAttributeAccessIssue]
+        lp.height = plotHeight - 85  # pyright: ignore[reportAttributeAccessIssue]
 
         # x-axis in date ordinals so reportlab's numeric axis tick picker works.
         # labelTextFormat converts back to an ISO date for display.
-        lp.data = [[(d.toordinal(), y) for (d, y) in pts]
+        lp.data = [[(d.toordinal(), y) for (d, y) in pts]  # pyright: ignore[reportAttributeAccessIssue]
                    for (_, pts) in series]
 
         for i in range(len(series)):
@@ -1113,13 +1120,13 @@ class ProductionReportsMixin:
         lp.xValueAxis.labelTextFormat = (
             lambda x: datetime.date.fromordinal(int(x)).isoformat()
         )
-        lp.xValueAxis.labels.angle = 45
-        lp.xValueAxis.labels.boxAnchor = 'e'
-        lp.xValueAxis.labels.fontSize = 7
+        lp.xValueAxis.labels.angle = 45  # pyright: ignore[reportAttributeAccessIssue]
+        lp.xValueAxis.labels.boxAnchor = 'e'  # pyright: ignore[reportAttributeAccessIssue]
+        lp.xValueAxis.labels.fontSize = 7  # pyright: ignore[reportAttributeAccessIssue]
         lp.xValueAxis.visibleGrid = True
         lp.xValueAxis.gridStrokeColor = colors.lightgrey
 
-        lp.yValueAxis.labels.fontSize = 8
+        lp.yValueAxis.labels.fontSize = 8  # pyright: ignore[reportAttributeAccessIssue]
         lp.yValueAxis.visibleGrid = True
         lp.yValueAxis.gridStrokeColor = colors.lightgrey
 
@@ -1132,7 +1139,7 @@ class ProductionReportsMixin:
                            yLabel, fontSize=9, textAnchor='start'))
 
         legend = Legend()
-        legend.x = plotWidth - 110
+        legend.x = plotWidth - 110  # pyright: ignore[reportAttributeAccessIssue]
         legend.y = lp.y + lp.height - 10
         legend.colorNamePairs = [
             (_TREND_LINE_COLORS[i % len(_TREND_LINE_COLORS)], series[i][0])
