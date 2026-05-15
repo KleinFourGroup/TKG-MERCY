@@ -583,6 +583,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 37b | ✅ Done | Merge plan Step 37b: employee_detail_populates + 5 dialog_roundtrip checks + cascade |
 | 37c | ✅ Done | Merge plan Step 37c: holidays_tab_observances + holidays_tab_defaults_crud |
 | 38 | ✅ Done | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
+| 39 | ✅ Done | inventory_tab dup-date guard loopholes (Create-in-Edit + Update-same-date) — see §13.27 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -773,6 +774,31 @@ Both root causes have follow-up tasks spawned (chip queue). Until they land, a `
 **Timing.** On a clean tree (post-bug-fixes), 2000 iter clocks ~21-30s depending on seed — slightly over the original 10-20s target but close. Inside the budget once the known crashes are fixed and the fuzzer stops fail-fasting at low iter counts on most seeds. Replay a found crash with explicit `iterations=<reported step + 1>`.
 
 **Reproducibility.** Both `walk_rng` (action choices + `question_stub` Yes/No decisions) and `fixture_rng` (`fuzz_db.populate*` data) are derived from the single `seed` parameter (`fixture_rng = Random(seed ^ 0xCAFEBEEF)`). A reported crash always replays from `crash_fuzz(seed=N, iterations=step+1)`.
+
+### 13.27 Step 39 — inventory_tab dup-date guard loopholes ✅ Done
+
+Landed 2026-05-15. First Step-38 follow-up: the inventory tab's dup-date warning at [`inventory_tab.py`](inventory_tab.py) was already routing legitimate collisions to `errorMessage` (QMessageBox.critical), but two loopholes let crashes through into the db layer's `RuntimeError` guards — both then silently swallowed by Qt's signal-slot wrapper.
+
+**Loophole 1 — Create button in Edit mode hitting an existing date.** `InventoryDateEditWindow` keeps the Create button enabled in Edit mode because the rest of the team uses the Create-in-Edit workflow across other tabs (pre-populate fields, then create a variant part / mix / PTO entry / etc.) — disabling it just for the inventory tab would break that muscle memory and read as a bug. Instead the dup-collision check in `readData` is split by mode:
+
+```python
+if isNew:
+    if date in self.mainApp.db.inventories:
+        errors.append(f"Inventory already exists on {date.isoformat()}")
+else:
+    if date in self.mainApp.db.inventories and date != self.date:
+        errors.append(f"Inventory already exists on {date.isoformat()}")
+```
+
+Create + existing date now surfaces the existing `errorMessage` dialog regardless of mode. The Update branch keeps the same-date exemption because Update + unchanged date is a legitimate no-op (see Loophole 2). The previous check folded both modes into a single expression with an `is not None and date == self.date` exemption — the exemption was intended only for the Update path but accidentally let the Create-in-Edit path through into `db.addInventory`, which then raised `RuntimeError('date already in self.inventories')`.
+
+**Loophole 2 — Update with unchanged date.** Clicking Update without moving the calendar invoked `db.updateInventory(self.date, self.date)`, which the db layer rejected on its `date in self.inventories` guard (the new date is the old date, which is obviously already there). Fix: skip the db call entirely in `readData` when `self.date == date`. The check above already treats this as a non-error; honor that by also making the db call a no-op. The dialog closes with the "Inventory updated successful!" toast, which is correct: the user asked to save with no changes, the system confirms that.
+
+**Variant-create workflow preserved.** Open Edit on inventory A, change the calendar to a fresh date, click Create → fresh inventory at the new date (A unchanged). Matches the cross-tab pattern the team uses elsewhere. The only path that errors is Create on a date that already has an inventory, which is genuinely ambiguous and worth a dialog.
+
+**Verification.** `crash_fuzz(seed=1, iterations=1000)` (Create-in-Edit repro) and `crash_fuzz(seed=2026, iterations=2000)` (Update-same-date repro) both PASS post-fix. Broader 7-seed sweep at iterations=2000 surfaces no inventory crashes; only the remaining known follow-up (PTO `getCarryHours` `count <= 1` — separate chip queued) appears, and only on some seeds. Smoke baseline 30 PASS pre- and post-change. **Db-layer RuntimeError guards stay intact** as defense-in-depth — the fix is at the call sites that were violating the invariants.
+
+**Manual UI sweep:** in MERCY, add an inventory date, open Edit on it, leave the calendar unchanged, and click Create — expect the "Inventory already exists on ..." dialog. Open New Inventory Date twice and create today's date in window #1, then click Create in window #2 — expect the same dialog. Open Edit, change the calendar to a fresh date, click Create — expect a new inventory at the fresh date (original Edit target unchanged). Open Edit, leave the calendar alone, click Update — closes cleanly with the success toast.
 
 ---
 

@@ -146,10 +146,20 @@ class InventoryDateEditWindow(QWidget):
     def readData(self, isNew):
         res = False
         errors = []
-        
+
         date = fromQDate(self.calendar.selectedDate())
-        if date in self.mainApp.db.inventories and not (self.date is not None and date == self.date):
-            errors.append(f"Inventory already exists on {date.isoformat()}")
+        # Split the dup-collision check by mode so Create-in-Edit-on-an-
+        # existing-date surfaces the friendly errorMessage instead of letting
+        # db.addInventory raise. Create in Edit mode is a cross-tab workflow
+        # (pre-populate + create variant), so the button stays enabled — only
+        # the same-date case is rejected. Update legitimately keeps the same
+        # date as a no-op, which is why isNew=False exempts date == self.date.
+        if isNew:
+            if date in self.mainApp.db.inventories:
+                errors.append(f"Inventory already exists on {date.isoformat()}")
+        else:
+            if date in self.mainApp.db.inventories and date != self.date:
+                errors.append(f"Inventory already exists on {date.isoformat()}")
 
         if len(errors) == 0:
             if isNew:
@@ -157,7 +167,11 @@ class InventoryDateEditWindow(QWidget):
             else:
                 if self.date is None:
                     raise RuntimeError('self.date is None')
-                self.mainApp.db.updateInventory(self.date, date)
+                # Update with unchanged date is treated as a no-op by the
+                # check above; the db layer would otherwise reject it on its
+                # own dup guard, so short-circuit here.
+                if self.date != date:
+                    self.mainApp.db.updateInventory(self.date, date)
 
             self.mainApp.inventoryTab.refresh()
             res = True
