@@ -25,6 +25,7 @@ from smoke.ui import (
     production_refresh_on_delete, production_batch_roundtrip,
     qsettings_reopen, close_confirm,
 )
+from smoke.pyright import pyright_baseline
 
 __all__ = [
     "compile_all", "empty_roundtrip",
@@ -37,4 +38,5 @@ __all__ = [
     "product_employee_reports",
     "production_refresh_on_delete", "production_batch_roundtrip",
     "qsettings_reopen", "close_confirm",
+    "pyright_baseline",
 ]

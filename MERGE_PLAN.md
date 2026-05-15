@@ -569,7 +569,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 33 | ✅ Done | Merge plan Step 33: split `report.py` into a `report/` package — see §13.21 |
 | 34 | ✅ Done | Merge plan Step 34: dead-code sweep with vulture — see §13.22 |
 | 35 | ✅ Done | Merge plan Step 35: smoke render every report against fuzzed data — see §13.23 |
-| 36 | 🟡 In progress | Pyright sweep across the codebase — split into 36a-g; see §13.24 |
+| 36 | ✅ Done | Pyright sweep across the codebase — split into 36a-g; see §13.24 |
 | 36a | ✅ Done | Merge plan Step 36a: pyright setup + triage |
 | 36b | ✅ Done | Merge plan Step 36b: file_manager/ Optional sweep |
 | 36c | ✅ Done | Merge plan Step 36c: records/products.py Database TYPE_CHECKING |
@@ -577,7 +577,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 36e1 | ✅ Done | Merge plan Step 36e1: HR Optional sweep — group A (notes / points / reviews / training) |
 | 36e2 | ✅ Done | Merge plan Step 36e2: HR Optional sweep — group B (pto / parts / employees / holidays) |
 | 36f | ✅ Done | Merge plan Step 36f: production-side cleanup (report/production.py + production_tab.py + report/employees.py + app.py + employee_detail_tab.py) |
-| 36g | 📝 Sketched | Bake `pyright --outputjson` into the smoke baseline |
+| 36g | ✅ Done | Merge plan Step 36g: bake `pyright --outputjson` into the smoke baseline |
 | 37 | 📝 Sketched | (Future / if time permits) UI fuzz harness for state-machine bugs — see §13.25 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
@@ -839,9 +839,27 @@ Scope expanded slightly from the sketch: the original enumeration was 26 across 
 
 **Pyright is now at a clean 0-error baseline across the whole repo.** 36g (smoke gate) is the closing move.
 
-#### Step 36g — bake `pyright --outputjson` into smoke 📝 Sketched
+#### Step 36g — bake `pyright --outputjson` into smoke ✅ Done
 
-Once 36b-f get to a 0-error baseline, add a smoke check that runs `pyright --outputjson` and parses the JSON for any `severity == "error"`. PR-time regression net. The §13.24 step (e) closing move.
+Landed 2026-05-15. New `smoke/pyright.py` module with one check function `pyright_baseline()` that subprocess-runs `python -m pyright --outputjson`, parses the JSON, and returns one error string per `severity == "error"` diagnostic in `relpath:line [rule] message` form. Wired into `smoke/__init__.py` re-exports and `smoke/__main__.py` dispatcher.
+
+Smoke now runs **19 PASS** (was 18). Subprocess overhead adds ~5-15s to the smoke battery — the only static-typing regression net we have, and the §13.24 closing move that keeps the 0-error baseline from silently slipping.
+
+**Sanity verified** by induced canary: a temporary `_smoke_canary: int = "wrong"` at the bottom of `smoke/pyright.py` caused `pyright_baseline` to return exactly one error:
+
+```
+smoke\pyright.py:58 [reportAssignmentType] Type "Literal['wrong']" is not assignable to declared type "int"
+```
+
+Removed; smoke 19 PASS confirmed before commit.
+
+Design notes:
+- Uses `sys.executable -m pyright` rather than a bare `pyright` invocation — guarantees the venv's pyright is used regardless of how smoke is launched (PATH order, IDE wrapper, etc.).
+- Pyright's non-zero exit code on findings is **expected** and explicitly NOT treated as a check failure; only the parsed errors count. The check returns a stderr-bearing message ONLY if pyright itself failed to run (not installed, timed out, produced non-JSON output) — the three error paths in the function.
+- 120s subprocess timeout: pyright typically runs in 5-15s; the wide ceiling absorbs first-run-after-pull cache-warming without flaking the smoke battery.
+- Paths reported relative to `os.getcwd()` for readability; falls back to absolute on the cross-drive `ValueError` corner case (Windows-specific, harmless elsewhere).
+
+**Step 36 complete.** All seven substeps landed; pyright at 0; regression gate in place.
 
 **Why split this way:** 36b-d are structural / mechanical fixes that wipe ~99 findings (45% of the backlog) with low judgment risk, so they batch well as single commits. 36e is the judgment-heavy core and deserves its own focused commit (or pair). 36f rounds out the production side. 36g closes the loop. Total realistic estimate: 4-5 substep commits after triage, 1-2 sessions.
 
