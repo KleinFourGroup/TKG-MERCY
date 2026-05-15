@@ -24,6 +24,7 @@ from smoke import (
     production_refresh_on_delete, production_batch_roundtrip,
     production_quantity_validation,
     qsettings_reopen, close_confirm,
+    parts_tab_crud, employees_tab_crud,
     pyright_baseline,
 )
 
@@ -48,6 +49,8 @@ def main() -> int:
                      ("production_quantity_validation", production_quantity_validation),
                      ("qsettings_reopen", qsettings_reopen),
                      ("close_confirm", close_confirm),
+                     ("parts_tab_crud", parts_tab_crud),
+                     ("employees_tab_crud", employees_tab_crud),
                      ("pyright_baseline", pyright_baseline)]:
         errors = fn()
         if errors:

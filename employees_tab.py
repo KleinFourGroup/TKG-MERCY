@@ -45,26 +45,26 @@ class EmployeeTab(QWidget):
         self.selection = []
         self.selectLabel = QLabel("Selection: N/A")
 
-        new = QPushButton("New")
-        new.clicked.connect(self.openNew)
-        edit = QPushButton("Edit")
-        edit.clicked.connect(self.openEdits)
-        toggle = QPushButton(f"Toggle {"Inactive" if self.active else "Active"}")
-        toggle.clicked.connect(self.toggleSelection)
-        delete = QPushButton("Delete")
-        delete.clicked.connect(self.deleteSelection)
-        report = QPushButton("Report")
-        report.clicked.connect(self.reportAll)
-        report.setEnabled(self.active)
+        self.newButton = QPushButton("New")
+        self.newButton.clicked.connect(self.openNew)
+        self.editButton = QPushButton("Edit")
+        self.editButton.clicked.connect(self.openEdits)
+        self.toggleButton = QPushButton(f"Toggle {"Inactive" if self.active else "Active"}")
+        self.toggleButton.clicked.connect(self.toggleSelection)
+        self.deleteButton = QPushButton("Delete")
+        self.deleteButton.clicked.connect(self.deleteSelection)
+        self.reportButton = QPushButton("Report")
+        self.reportButton.clicked.connect(self.reportAll)
+        self.reportButton.setEnabled(self.active)
 
         barLayout = QHBoxLayout()
         barLayout.addWidget(self.selectLabel)
         if self.active:
-            barLayout.addWidget(new)
-            barLayout.addWidget(edit)
-        barLayout.addWidget(toggle)
-        barLayout.addWidget(delete)
-        barLayout.addWidget(report)
+            barLayout.addWidget(self.newButton)
+            barLayout.addWidget(self.editButton)
+        barLayout.addWidget(self.toggleButton)
+        barLayout.addWidget(self.deleteButton)
+        barLayout.addWidget(self.reportButton)
 
         layout = QVBoxLayout()
         layout.addWidget(self.table)
@@ -209,79 +209,78 @@ class EmployeeEditWindow(QWidget):
                 tries += 1
             return SCREEN + ((idRand + tries * tries) % (9 * SCREEN))
 
+        self.idEdit = QLineEdit(f"{entry if entry is not None else randID()}")
+        self.lastNameEdit = QLineEdit(f"{employee.lastName if employee is not None else ""}")
+        self.firstNameEdit = QLineEdit(f"{employee.firstName if employee is not None else ""}")
+        self.roleEdit = QLineEdit(f"{employee.role if employee is not None else ""}")
+        self.addressLine1Edit = QLineEdit(f"{employee.addressLine1 if employee is not None else ""}")
+        self.addressLine2Edit = QLineEdit(f"{employee.addressLine2 if employee is not None else ""}")
+        self.addressCityEdit = QLineEdit(f"{employee.addressCity if employee is not None else ""}")
+        self.addressZipEdit = QLineEdit(f"{employee.addressZip if employee is not None else ""}")
+        self.addressTelEdit = QLineEdit(f"{employee.addressTel if employee is not None else ""}")
+        self.addressEmailEdit = QLineEdit(f"{employee.addressEmail if employee is not None else ""}")
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [QLabel("ID Number:"), QLineEdit(f"{entry if entry is not None else randID()}")],
+            [QLabel("ID Number:"), self.idEdit],
             [
-                QLabel("Last Name:"), QLineEdit(f"{employee.lastName if employee is not None else ""}"),
-                QLabel("First Name:"), QLineEdit(f"{employee.firstName if employee is not None else ""}")
+                QLabel("Last Name:"), self.lastNameEdit,
+                QLabel("First Name:"), self.firstNameEdit
             ],
+            [QLabel("Role:"), self.roleEdit],
+            [QLabel("Shift:"), self.shift, QLabel("Full Time:"), self.fullTime],
+            [QLabel("Address Line 1:"), self.addressLine1Edit],
+            [QLabel("Address Line 2:"), self.addressLine2Edit],
             [
-                QLabel("Role:"), QLineEdit(f"{employee.role if employee is not None else ""}")
+                QLabel("City:"), self.addressCityEdit,
+                QLabel("State:"), self.states,
+                QLabel("ZIP:"), self.addressZipEdit
             ],
-            [
-                QLabel("Shift:"), self.shift, QLabel("Full Time:"), self.fullTime
-            ],
-            [
-                QLabel("Address Line 1:"), QLineEdit(f"{employee.addressLine1 if employee is not None else ""}")
-            ],
-            [
-                QLabel("Address Line 2:"), QLineEdit(f"{employee.addressLine2 if employee is not None else ""}")
-            ],
-            [
-                QLabel("City:"), QLineEdit(f"{employee.addressCity if employee is not None else ""}"), QLabel("State:"), self.states, QLabel("ZIP:"), QLineEdit(f"{employee.addressZip if employee is not None else ""}")
-            ],
-            [
-                QLabel("Telephone:"), QLineEdit(f"{employee.addressTel if employee is not None else ""}")
-            ],
-            [
-                QLabel("Email:"), QLineEdit(f"{employee.addressEmail if employee is not None else ""}")
-            ],
-            [
-                QLabel("Anniversary:"), self.calendar
-            ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [QLabel("Telephone:"), self.addressTelEdit],
+            [QLabel("Email:"), self.addressEmailEdit],
+            [QLabel("Anniversary:"), self.calendar],
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if employee is not None:
-            self.mainLayout[-1][0].clicked.connect(self.updateEmployee)
+            self.updateButton.clicked.connect(self.updateEmployee)
         else:
-            self.mainLayout[-1][0].setEnabled(False)
-        self.mainLayout[-1][1].clicked.connect(self.newEmployee)
+            self.updateButton.setEnabled(False)
+        self.createButton.clicked.connect(self.newEmployee)
         centerOnScreen(self)
         self.show()
 
     def readData(self, isNew):
         res = False
         errors = []
-        id = int(checkInput(self.mainLayout[0][1].text(), int, "nonneg", errors, "ID Number"))
+        id = int(checkInput(self.idEdit.text(), int, "nonneg", errors, "ID Number"))
         if id in self.mainApp.db.employees:
             if isNew or (self.employee is not None and not id == self.employee.idNum):
                 errors.append(f"Employee number '{id}' already in use")
-        lastName = self.mainLayout[1][1].text()
+        lastName = self.lastNameEdit.text()
         if lastName == "":
             errors.append(f"Employee last name is blank")
-        firstName = self.mainLayout[1][3].text()
+        firstName = self.firstNameEdit.text()
         if firstName == "":
             errors.append(f"Employee first name is blank")
-        role = self.mainLayout[2][1].text()
+        role = self.roleEdit.text()
         if role == "":
             errors.append(f"Employee role is blank")
-        addressLine1 = self.mainLayout[4][1].text()
+        addressLine1 = self.addressLine1Edit.text()
         if addressLine1 == "":
             errors.append(f"Employee address is blank")
-        addressLine2 = self.mainLayout[5][1].text()
-        addressCity = self.mainLayout[6][1].text()
+        addressLine2 = self.addressLine2Edit.text()
+        addressCity = self.addressCityEdit.text()
         if addressCity == "":
             errors.append(f"Employee city is blank")
         addressState = self.states.currentText()
-        addressZip = self.mainLayout[6][5].text()
+        addressZip = self.addressZipEdit.text()
         if addressZip == "":
             errors.append(f"Employee ZIP is blank")
-        addressTel = self.mainLayout[7][1].text()
-        addressEmail = self.mainLayout[8][1].text()
+        addressTel = self.addressTelEdit.text()
+        addressEmail = self.addressEmailEdit.text()
         if addressTel == "" and addressEmail == "":
             errors.append(f"Employee telephone and email are both blank")
 

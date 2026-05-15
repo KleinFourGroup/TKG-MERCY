@@ -22,27 +22,27 @@ class PartsTab(QWidget):
         self.selection = []
         self.selectLabel = QLabel("Selection: N/A")
 
-        details = QPushButton("Details")
-        details.clicked.connect(self.openDetails)
-        edit = QPushButton("Edit")
-        edit.clicked.connect(self.openEdits)
-        margins = QPushButton("Margins")
-        margins.clicked.connect(self.openMargins)
-        new = QPushButton("New")
-        new.clicked.connect(self.openNew)
-        delete = QPushButton("Delete")
-        delete.clicked.connect(self.deleteSelection)
-        report = QPushButton("Report")
-        report.clicked.connect(self.reportSales)
+        self.detailsButton = QPushButton("Details")
+        self.detailsButton.clicked.connect(self.openDetails)
+        self.editButton = QPushButton("Edit")
+        self.editButton.clicked.connect(self.openEdits)
+        self.marginsButton = QPushButton("Margins")
+        self.marginsButton.clicked.connect(self.openMargins)
+        self.newButton = QPushButton("New")
+        self.newButton.clicked.connect(self.openNew)
+        self.deleteButton = QPushButton("Delete")
+        self.deleteButton.clicked.connect(self.deleteSelection)
+        self.reportButton = QPushButton("Report")
+        self.reportButton.clicked.connect(self.reportSales)
 
         barLayout = QHBoxLayout()
         barLayout.addWidget(self.selectLabel)
-        barLayout.addWidget(details)
-        barLayout.addWidget(edit)
-        barLayout.addWidget(margins)
-        barLayout.addWidget(new)
-        barLayout.addWidget(delete)
-        barLayout.addWidget(report)
+        barLayout.addWidget(self.detailsButton)
+        barLayout.addWidget(self.editButton)
+        barLayout.addWidget(self.marginsButton)
+        barLayout.addWidget(self.newButton)
+        barLayout.addWidget(self.deleteButton)
+        barLayout.addWidget(self.reportButton)
 
         layout = QVBoxLayout()
         layout.addWidget(self.table)
@@ -233,45 +233,62 @@ class PartsEditWindow(QWidget):
         
         widgetFromList(miscWidget, self.miscLayout)
 
+        boxNames = [key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "box"]
+        palletNames = [key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pallet"]
+
+        self.nameEdit = QLineEdit(f"{entry if entry is not None else "New Part"}")
+        self.weightEdit = QLineEdit(f"{part.weight if part is not None else ""}")
+        self.mixCombo = getComboBox(list(self.mainApp.db.mixtures.keys()), part.mix if part is not None else None)
+        self.pressingEdit = QLineEdit(f"{part.pressing if part is not None else ""}")
+        self.turningEdit = QLineEdit(f"{part.turning if part is not None else ""}")
+        self.boxCombo = getComboBox(boxNames, part.box if part is not None else None)
+        self.piecesPerBoxEdit = QLineEdit(f"{part.piecesPerBox if part is not None else ""}")
+        self.palletCombo = getComboBox(palletNames, part.pallet if part is not None else None)
+        self.boxesPerPalletEdit = QLineEdit(f"{part.boxesPerPallet if part is not None else ""}")
+        self.fireScrapEdit = QLineEdit(f"{100 * part.fireScrap if part is not None and part.fireScrap is not None else ""}")
+        self.priceEdit = QLineEdit(f"{part.price if part is not None else ""}")
+        self.salesEdit = QLineEdit(f"{part.sales if part is not None else ""}")
+        self.quoteCheck = QCheckBox("Quote")
+        self.updateButton = QPushButton("Update")
+        self.createButton = QPushButton("Create")
+
         self.mainLayout = [
-            [QLabel("Part:"), QLineEdit(f"{entry if entry is not None else "New Part"}")],
+            [QLabel("Part:"), self.nameEdit],
             [
-                QLabel("Weight:"), QLineEdit(f"{part.weight if part is not None else ""}"), QLabel("lbs"),
-                QLabel("Mix:"), getComboBox(list(self.mainApp.db.mixtures.keys()), part.mix if part is not None else None)
+                QLabel("Weight:"), self.weightEdit, QLabel("lbs"),
+                QLabel("Mix:"), self.mixCombo
             ],
             [
-                QLabel("Pressing:"), QLineEdit(f"{part.pressing if part is not None else ""}"), QLabel("pieces/hour"),
-                QLabel("Turning:"), QLineEdit(f"{part.turning if part is not None else ""}"), QLabel("pieces/hour")
+                QLabel("Pressing:"), self.pressingEdit, QLabel("pieces/hour"),
+                QLabel("Turning:"), self.turningEdit, QLabel("pieces/hour")
             ],
             [
-                QLabel("Box:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "box"], part.box if part is not None else None),
-                QLabel("Pieces / box:"), QLineEdit(f"{part.piecesPerBox if part is not None else ""}"),
-                QLabel("Pallet:"), getComboBox([key for key in self.mainApp.db.packaging if self.mainApp.db.packaging[key].kind == "pallet"], part.pallet if part is not None else None),
-                QLabel("Boxes / pallet:"), QLineEdit(f"{part.boxesPerPallet if part is not None else ""}"),
+                QLabel("Box:"), self.boxCombo,
+                QLabel("Pieces / box:"), self.piecesPerBoxEdit,
+                QLabel("Pallet:"), self.palletCombo,
+                QLabel("Boxes / pallet:"), self.boxesPerPalletEdit,
                 padsWidget,
                 miscWidget
             ],
             [
-                QLabel("Fire scrap:"), QLineEdit(f"{100 * part.fireScrap if part is not None and part.fireScrap is not None else ""}"), QLabel("%")
+                QLabel("Fire scrap:"), self.fireScrapEdit, QLabel("%")
             ],
             [
-                QLabel("Price:"), QLineEdit(f"{part.price if part is not None else ""}"),
-                QLabel("Annual sales:"), QLineEdit(f"{part.sales if part is not None else ""}"), QCheckBox("Quote")
+                QLabel("Price:"), self.priceEdit,
+                QLabel("Annual sales:"), self.salesEdit, self.quoteCheck
             ],
-            [
-                QPushButton("Update"), QPushButton("Create")
-            ]
+            [self.updateButton, self.createButton],
         ]
 
         widgetFromList(self, self.mainLayout)
         if part is not None:
-            self.mainLayout[6][0].clicked.connect(self.updatePart)
+            self.updateButton.clicked.connect(self.updatePart)
         else:
-            self.mainLayout[6][0].setEnabled(False)
-            self.mainLayout[5][3].setEnabled(False)
-            self.mainLayout[5][4].setCheckState(Qt.CheckState.Checked)
-        self.mainLayout[6][1].clicked.connect(self.newPart)
-        self.mainLayout[5][4].stateChanged.connect(self.quote)
+            self.updateButton.setEnabled(False)
+            self.salesEdit.setEnabled(False)
+            self.quoteCheck.setCheckState(Qt.CheckState.Checked)
+        self.createButton.clicked.connect(self.newPart)
+        self.quoteCheck.stateChanged.connect(self.quote)
         
         centerOnScreen(self)
         self.show()
@@ -279,29 +296,29 @@ class PartsEditWindow(QWidget):
     def quote(self, state):
         if state == Qt.CheckState.Checked.value:
             logging.debug("Disable")
-            self.mainLayout[5][3].setEnabled(False)
+            self.salesEdit.setEnabled(False)
         else:
             logging.debug("Enable")
-            self.mainLayout[5][3].setEnabled(True)
+            self.salesEdit.setEnabled(True)
 
     def readData(self, isNew):
         res = False
         errors = []
-        name = self.mainLayout[0][1].text()
+        name = self.nameEdit.text()
         if name in self.mainApp.db.parts:
             if isNew or (self.part is not None and not name == self.part.name):
                 errors.append(f"Part name '{name}' already in use")
-        weight = checkInput(self.mainLayout[1][1].text(), float, "pos", errors, "weight")
-        mix = self.mainLayout[1][4].currentText()
-        pressing = checkInput(self.mainLayout[2][1].text(), float, "pos", errors, "pressing")
-        turning = checkInput(self.mainLayout[2][4].text(), float, "pos", errors, "turning")
-        box = self.mainLayout[3][1].currentText()
-        piecesPerBox = checkInput(self.mainLayout[3][3].text(), int, "pos", errors, "pieces / box")
-        pallet = self.mainLayout[3][5].currentText()
-        boxesPerPallet = checkInput(self.mainLayout[3][7].text(), int, "pos", errors, "boxes / pallet")
-        fireScrap = checkInput(self.mainLayout[4][1].text(), float, "nonneg", errors, "fire scrap") / 100
-        price = checkInput(self.mainLayout[5][1].text(), float, "nonneg", errors, "price")
-        sales = "Quote" if self.mainLayout[5][4].isChecked() else checkInput(self.mainLayout[5][3].text(), int, "nonneg", errors, "annual sales")
+        weight = checkInput(self.weightEdit.text(), float, "pos", errors, "weight")
+        mix = self.mixCombo.currentText()
+        pressing = checkInput(self.pressingEdit.text(), float, "pos", errors, "pressing")
+        turning = checkInput(self.turningEdit.text(), float, "pos", errors, "turning")
+        box = self.boxCombo.currentText()
+        piecesPerBox = checkInput(self.piecesPerBoxEdit.text(), int, "pos", errors, "pieces / box")
+        pallet = self.palletCombo.currentText()
+        boxesPerPallet = checkInput(self.boxesPerPalletEdit.text(), int, "pos", errors, "boxes / pallet")
+        fireScrap = checkInput(self.fireScrapEdit.text(), float, "nonneg", errors, "fire scrap") / 100
+        price = checkInput(self.priceEdit.text(), float, "nonneg", errors, "price")
+        sales = "Quote" if self.quoteCheck.isChecked() else checkInput(self.salesEdit.text(), int, "nonneg", errors, "annual sales")
 
         pad = []
         padsPerBox = []

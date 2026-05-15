@@ -1,10 +1,61 @@
 """UI-path checks: production-tab refresh on employee delete, the batch
-entry dialog roundtrip, QSettings last-DB reopen, and the close-event
-Save / Don't Save / Cancel prompt."""
+entry dialog roundtrip, QSettings last-DB reopen, the close-event
+Save / Don't Save / Cancel prompt, and the records-side (Parts / Employees)
+Edit dialog roundtrips (Step 37)."""
 import os
+import random
 import sys
 import tempfile
 from datetime import date as datetime_date
+
+
+def _silenceMessageBoxes():
+    """Stub QMessageBox.information/critical/warning/question so dialogs that
+    pop them don't block offscreen. Returns a restore callable for finally blocks."""
+    from PySide6.QtWidgets import QMessageBox
+    orig = {
+        "information": QMessageBox.information,
+        "critical": QMessageBox.critical,
+        "warning": QMessageBox.warning,
+        "question": QMessageBox.question,
+    }
+    QMessageBox.information = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.critical = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.warning = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Ok)  # type: ignore[assignment]
+    QMessageBox.question = staticmethod(lambda *a, **_kw: QMessageBox.StandardButton.Yes)  # type: ignore[assignment]
+    def restore():
+        QMessageBox.information = orig["information"]  # type: ignore[assignment]
+        QMessageBox.critical = orig["critical"]  # type: ignore[assignment]
+        QMessageBox.warning = orig["warning"]  # type: ignore[assignment]
+        QMessageBox.question = orig["question"]  # type: ignore[assignment]
+    return restore
+
+
+def _seedTinyFuzzDB(w):
+    """Populate ``w.db`` in place using fuzz_db's tiny preset with seed=1.
+    Mirrors the pattern from ``product_employee_reports`` (Step 35) but without
+    file I/O. Returns ``(partNames, idNums, mixtureNames)`` for fixture lookup."""
+    import datetime
+    import fuzz_db as F
+    rng = random.Random(1)
+    cfg = F.SCALES["tiny"]
+    today = datetime.date.today()
+    db = w.db
+    materialNames = F.populateMaterials(db, rng, cfg["materials"])
+    mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+    F.populatePackaging(db, rng, cfg["packaging"])
+    packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+    for name in db.packaging:
+        packagingByKind[db.packaging[name].kind].append(name)
+    partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+    idNums = F.populateEmployees(db, rng, cfg["employees"], today)
+    F.populateReviews(db, rng, idNums, today)
+    F.populateTraining(db, rng, idNums, today)
+    F.populateAttendance(db, rng, idNums, today)
+    F.populatePTO(db, rng, idNums, today)
+    F.populateNotes(db, rng, idNums, today)
+    F.populateHolidays(db, rng, today)
+    return partNames, idNums, mixtureNames
 
 
 def production_refresh_on_delete() -> list[str]:
@@ -448,6 +499,274 @@ def close_confirm() -> list[str]:
                 f"(should be 0)"
             )
     finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def parts_tab_crud() -> list[str]:
+    """Step 37: PartsTab dialog roundtrips against a tiny fuzz DB.
+
+    Seeds tiny-scale fuzz data (seed=1), picks the first part by name, then:
+      - opens ``PartsDetailsWindow`` and confirms the constructed labels
+        carry the fixture's name and weight (label-text scrape — the
+        Details window is display-only so prefill is the only assertion);
+      - opens ``PartsMarginsWindow`` and confirms it constructs and
+        emits at least one ``Apply`` button (the margin-row generator
+        produces one row per percentage bracket);
+      - opens ``PartsEditWindow`` on the fixture, asserts every named
+        editor (nameEdit / weightEdit / mixCombo / pressingEdit /
+        turningEdit / boxCombo / piecesPerBoxEdit / palletCombo /
+        boxesPerPalletEdit / priceEdit) reflects the fixture, then
+        clicks ``updateButton`` after bumping weight + price and
+        confirms ``db.parts`` reflects the change;
+      - opens a *new* ``PartsEditWindow`` (entry=None), fills every
+        named editor with novel values, clicks ``createButton``, and
+        confirms a new entry appears in ``db.parts`` with the values.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from parts_tab import PartsDetailsWindow, PartsMarginsWindow, PartsEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        partNames, _, _ = _seedTinyFuzzDB(w)
+        w.partsTab.refreshTable()
+
+        fixture = sorted(partNames)[0]
+        part = w.db.parts[fixture]
+
+        # --- PartsDetailsWindow ---
+        details = PartsDetailsWindow(fixture, w)
+        from PySide6.QtWidgets import QLabel
+        labelTexts = [lbl.text() for lbl in details.findChildren(QLabel)]
+        joined = " | ".join(labelTexts)
+        if f"Part: {fixture}" not in joined:
+            errors.append(f"Details: missing 'Part: {fixture}' in label set; got {joined[:160]}")
+        if f"{part.weight} lbs" not in joined:
+            errors.append(f"Details: missing weight '{part.weight} lbs' in label set")
+        details.close()
+
+        # --- PartsMarginsWindow ---
+        margins = PartsMarginsWindow(fixture, w)
+        from PySide6.QtWidgets import QPushButton
+        applyButtons = [b for b in margins.findChildren(QPushButton) if b.text() == "Apply"]
+        if not applyButtons:
+            errors.append("Margins: no Apply buttons rendered (expected one per percentage row)")
+        margins.close()
+
+        # --- PartsEditWindow: prefill + Update roundtrip ---
+        editor = PartsEditWindow(fixture, w)
+        if editor.nameEdit.text() != fixture:
+            errors.append(f"Edit prefill: nameEdit={editor.nameEdit.text()!r}, want {fixture!r}")
+        if editor.weightEdit.text() != str(part.weight):
+            errors.append(f"Edit prefill: weightEdit={editor.weightEdit.text()!r}, want {part.weight!r}")
+        if editor.mixCombo.currentText() != part.mix:
+            errors.append(f"Edit prefill: mixCombo={editor.mixCombo.currentText()!r}, want {part.mix!r}")
+        if editor.pressingEdit.text() != str(part.pressing):
+            errors.append(f"Edit prefill: pressingEdit={editor.pressingEdit.text()!r}, want {part.pressing!r}")
+        if editor.turningEdit.text() != str(part.turning):
+            errors.append(f"Edit prefill: turningEdit={editor.turningEdit.text()!r}, want {part.turning!r}")
+        if editor.boxCombo.currentText() != part.box:
+            errors.append(f"Edit prefill: boxCombo={editor.boxCombo.currentText()!r}, want {part.box!r}")
+        if editor.piecesPerBoxEdit.text() != str(part.piecesPerBox):
+            errors.append(f"Edit prefill: piecesPerBoxEdit={editor.piecesPerBoxEdit.text()!r}, want {part.piecesPerBox!r}")
+        if editor.palletCombo.currentText() != part.pallet:
+            errors.append(f"Edit prefill: palletCombo={editor.palletCombo.currentText()!r}, want {part.pallet!r}")
+        if editor.boxesPerPalletEdit.text() != str(part.boxesPerPallet):
+            errors.append(f"Edit prefill: boxesPerPalletEdit={editor.boxesPerPalletEdit.text()!r}, want {part.boxesPerPallet!r}")
+        if editor.priceEdit.text() != str(part.price):
+            errors.append(f"Edit prefill: priceEdit={editor.priceEdit.text()!r}, want {part.price!r}")
+
+        editor.weightEdit.setText("12.5")
+        editor.priceEdit.setText("99.99")
+        editor.updateButton.click()
+        updated = w.db.parts.get(fixture)
+        if updated is None:
+            errors.append(f"after Update: db.parts[{fixture!r}] missing")
+        else:
+            if updated.weight != 12.5:
+                errors.append(f"after Update: weight={updated.weight!r}, want 12.5")
+            if updated.price != 99.99:
+                errors.append(f"after Update: price={updated.price!r}, want 99.99")
+
+        # --- PartsEditWindow: Create new part ---
+        newEditor = PartsEditWindow(None, w)
+        newName = "SmokeTestPart"
+        # Pick valid combo choices from the fuzz DB so the create succeeds.
+        mixChoice = newEditor.mixCombo.itemText(0)
+        boxChoice = newEditor.boxCombo.itemText(0)
+        palletChoice = newEditor.palletCombo.itemText(0)
+        newEditor.nameEdit.setText(newName)
+        newEditor.weightEdit.setText("7.25")
+        newEditor.mixCombo.setCurrentText(mixChoice)
+        newEditor.pressingEdit.setText("250")
+        newEditor.turningEdit.setText("180")
+        newEditor.boxCombo.setCurrentText(boxChoice)
+        newEditor.piecesPerBoxEdit.setText("12")
+        newEditor.palletCombo.setCurrentText(palletChoice)
+        newEditor.boxesPerPalletEdit.setText("40")
+        newEditor.fireScrapEdit.setText("3.5")
+        newEditor.priceEdit.setText("12.34")
+        # quoteCheck starts Checked + salesEdit disabled for new parts; that's fine.
+        newEditor.createButton.click()
+        created = w.db.parts.get(newName)
+        if created is None:
+            errors.append(f"after Create: db.parts[{newName!r}] missing")
+        else:
+            if created.weight != 7.25:
+                errors.append(f"new part: weight={created.weight!r}, want 7.25")
+            if created.mix != mixChoice:
+                errors.append(f"new part: mix={created.mix!r}, want {mixChoice!r}")
+            if created.box != boxChoice:
+                errors.append(f"new part: box={created.box!r}, want {boxChoice!r}")
+            if created.sales != "Quote":
+                errors.append(f"new part: sales={created.sales!r}, want 'Quote' (default when quoteCheck checked)")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def employees_tab_crud() -> list[str]:
+    """Step 37: EmployeeEditWindow roundtrips against a tiny fuzz DB.
+
+    Seeds tiny-scale fuzz data (seed=1), picks the first active employee,
+    then:
+      - opens ``EmployeeEditWindow`` on the fixture, asserts every named
+        editor (idEdit / lastNameEdit / firstNameEdit / roleEdit /
+        addressLine1Edit / addressLine2Edit / addressCityEdit /
+        addressZipEdit / addressTelEdit / addressEmailEdit / shift /
+        fullTime / states) reflects the fixture, then clicks
+        ``updateButton`` after changing role + zip and confirms
+        ``db.employees`` reflects the change;
+      - opens a *new* ``EmployeeEditWindow`` (entry=None, active=True),
+        fills every named editor with novel values, clicks
+        ``createButton``, and confirms a new entry appears in
+        ``db.employees`` with the values plus the shadow collections
+        (reviews / training / attendance / PTO / notes) are seeded.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from employees_tab import EmployeeEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _, idNums, _ = _seedTinyFuzzDB(w)
+        w.employeesTab.activeEmployeesTab.refreshTable()
+        w.employeesTab.inactiveEmployeesTab.refreshTable()
+
+        activeIds = [i for i in idNums if w.db.employees[i].status]
+        if not activeIds:
+            errors.append("fuzz fixture produced no active employees (test setup bug)")
+            return errors
+        fixtureId = sorted(activeIds)[0]
+        emp = w.db.employees[fixtureId]
+
+        # --- EmployeeEditWindow: prefill + Update roundtrip ---
+        editor = EmployeeEditWindow(fixtureId, w, True)
+        if editor.idEdit.text() != str(fixtureId):
+            errors.append(f"Edit prefill: idEdit={editor.idEdit.text()!r}, want {fixtureId!r}")
+        if editor.lastNameEdit.text() != emp.lastName:
+            errors.append(f"Edit prefill: lastNameEdit={editor.lastNameEdit.text()!r}, want {emp.lastName!r}")
+        if editor.firstNameEdit.text() != emp.firstName:
+            errors.append(f"Edit prefill: firstNameEdit={editor.firstNameEdit.text()!r}, want {emp.firstName!r}")
+        if editor.roleEdit.text() != emp.role:
+            errors.append(f"Edit prefill: roleEdit={editor.roleEdit.text()!r}, want {emp.role!r}")
+        if editor.addressLine1Edit.text() != emp.addressLine1:
+            errors.append(f"Edit prefill: addressLine1Edit={editor.addressLine1Edit.text()!r}, want {emp.addressLine1!r}")
+        if editor.addressCityEdit.text() != emp.addressCity:
+            errors.append(f"Edit prefill: addressCityEdit={editor.addressCityEdit.text()!r}, want {emp.addressCity!r}")
+        if editor.addressZipEdit.text() != str(emp.addressZip):
+            errors.append(f"Edit prefill: addressZipEdit={editor.addressZipEdit.text()!r}, want {emp.addressZip!r}")
+        if editor.shift.currentText() != str(emp.shift):
+            errors.append(f"Edit prefill: shift={editor.shift.currentText()!r}, want {emp.shift!r}")
+        if editor.fullTime.currentText() != str(emp.fullTime):
+            errors.append(f"Edit prefill: fullTime={editor.fullTime.currentText()!r}, want {emp.fullTime!r}")
+        if editor.states.currentText() != emp.addressState:
+            errors.append(f"Edit prefill: states={editor.states.currentText()!r}, want {emp.addressState!r}")
+
+        editor.roleEdit.setText("Smoke Test Lead")
+        editor.addressZipEdit.setText("99999")
+        editor.updateButton.click()
+        updated = w.db.employees.get(fixtureId)
+        if updated is None:
+            errors.append(f"after Update: db.employees[{fixtureId!r}] missing")
+        else:
+            if updated.role != "Smoke Test Lead":
+                errors.append(f"after Update: role={updated.role!r}, want 'Smoke Test Lead'")
+            if updated.addressZip != "99999":
+                errors.append(f"after Update: addressZip={updated.addressZip!r}, want '99999'")
+
+        # --- EmployeeEditWindow: Create new ---
+        newEditor = EmployeeEditWindow(None, w, True)
+        newId = 999999
+        # idEdit is pre-populated with a random ID; overwrite for determinism.
+        newEditor.idEdit.setText(str(newId))
+        newEditor.lastNameEdit.setText("Smoke")
+        newEditor.firstNameEdit.setText("Tester")
+        newEditor.roleEdit.setText("QA")
+        newEditor.addressLine1Edit.setText("1 Smoke St")
+        newEditor.addressCityEdit.setText("Testville")
+        newEditor.states.setCurrentText("OH")
+        newEditor.addressZipEdit.setText("12345")
+        newEditor.addressTelEdit.setText("555-0100")
+        newEditor.shift.setCurrentText("2")
+        newEditor.fullTime.setCurrentText("True")
+        newEditor.createButton.click()
+        created = w.db.employees.get(newId)
+        if created is None:
+            errors.append(f"after Create: db.employees[{newId!r}] missing")
+        else:
+            if created.lastName != "Smoke" or created.firstName != "Tester":
+                errors.append(f"new employee: name={created.lastName!r}/{created.firstName!r}, want 'Smoke'/'Tester'")
+            if created.role != "QA":
+                errors.append(f"new employee: role={created.role!r}, want 'QA'")
+            if created.shift != 2:
+                errors.append(f"new employee: shift={created.shift!r}, want 2")
+            if created.fullTime is not True:
+                errors.append(f"new employee: fullTime={created.fullTime!r}, want True")
+            # Shadow collections must be seeded so subsequent reviews/training/etc work.
+            for shadow, dictName in [(w.db.reviews, "reviews"),
+                                     (w.db.training, "training"),
+                                     (w.db.attendance, "attendance"),
+                                     (w.db.PTO, "PTO"),
+                                     (w.db.notes, "notes")]:
+                if newId not in shadow:
+                    errors.append(f"new employee: db.{dictName}[{newId}] not seeded")
+    finally:
+        restore()
         if w is not None and w.fileManager.dbFile is not None:
             w.fileManager.dbFile.close()
         for suffix in ("", "-wal", "-shm"):
