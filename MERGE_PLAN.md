@@ -585,6 +585,7 @@ Step 7 was split into sub-steps to keep each review surface small. The hygiene s
 | 38 | ✅ Done | UI crash fuzzer (random-walk through enabled actions, seed-reproducible) — see §13.26 |
 | 39 | ✅ Done | inventory_tab dup-date guard loopholes (Create-in-Edit + Update-same-date) — see §13.27 |
 | 40 | ✅ Done | PTO carryover dialog stale-snapshot fix + fuzz_db carry-type invariant — see §13.28 |
+| 41 | ✅ Done | Graduate `crash_fuzz` to smoke baseline (final fuzz_db invariant + dispatcher wire-in) — see §13.29 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -776,6 +777,8 @@ Both root causes have follow-up tasks spawned (chip queue). Until they land, a `
 
 **Reproducibility.** Both `walk_rng` (action choices + `question_stub` Yes/No decisions) and `fixture_rng` (`fuzz_db.populate*` data) are derived from the single `seed` parameter (`fixture_rng = Random(seed ^ 0xCAFEBEEF)`). A reported crash always replays from `crash_fuzz(seed=N, iterations=step+1)`.
 
+*The "not in the smoke baseline yet" note above was retired 2026-05-15 by Step 41 (§13.29) — both follow-up bugs landed (§13.27, §13.28) and `crash_fuzz` now runs as the 31st smoke check.*
+
 ### 13.27 Step 39 — inventory_tab dup-date guard loopholes ✅ Done
 
 Landed 2026-05-15. First Step-38 follow-up: the inventory tab's dup-date warning at [`inventory_tab.py`](inventory_tab.py) was already routing legitimate collisions to `errorMessage` (QMessageBox.critical), but two loopholes let crashes through into the db layer's `RuntimeError` guards — both then silently swallowed by Qt's signal-slot wrapper.
@@ -826,6 +829,18 @@ Cash had written a duplicate disposition one line earlier; the refresh's read fo
 **Verification.** `crash_fuzz` 10-seed sweep at iter=3000 — all PASS, no `count <= 1` anywhere. Both originally-reported seeds (7 for the Active Employees report, 99 for New PTO entry) clean. Smoke baseline 30 PASS pre- and post-change. **Db / records-layer `RuntimeError` guards untouched** — they're correct invariant assertions and now stay genuinely unreachable.
 
 **Manual UI sweep:** Run two PTO Carryover dialogs in parallel for the same employee (Overview tab → PTO sub-tab on the main window plus a second employee-detail tab open elsewhere if there's a path), click Carry Over in one and Cash Out in the other in quick succession — expect the second action to see the first's write and either show the overwrite-confirm dialog (if the user clicks Yes the previous disposition is cleared first) or the "already carried over/cashed out" `errorMessage`. Generate the Active Employees report and add new PTO entries across a few employee shapes — no crashes, reports render.
+
+### 13.29 Step 41 — graduate `crash_fuzz` to smoke baseline ✅ Done
+
+Landed 2026-05-15, same session as Steps 39 and 40. With both Step-38 follow-ups in, `crash_fuzz` runs cleanly on `seed=None` — a 20-run sweep at `iterations=1000` clocked 7.03-12.70s (median ~11s, 0/20 failures), comfortably inside the 10-20s budget Matthew set during Step 38. Two changes shipped:
+
+**`DEFAULT_ITERATIONS = 1000` (was 2000).** The 2000 sketch from §13.26 assumed timings measured against bug-ridden code that fail-fasted on most seeds; once the bugs were fixed and runs actually completed, 2000 took 40+s median — well over budget. 1000 is the new fixture-stable knob.
+
+**Dispatcher wire-in.** `crash_fuzz` is now the 31st smoke check in [`smoke/__main__.py`](smoke/__main__.py). The "intentionally not wired" comment from §13.26 was retired. Smoke baseline 30 → 31 PASS.
+
+**One more fuzz_db invariant gap closed.** The Step-41 stability sweep surfaced one final invariant break the fuzzer was creating itself: `fuzz_db.populatePTO` could roll a `start` near year-end and a `length` that pushed `end` into the next year, but the model rejects year-spanning PTO ranges (production [`pto_tab.py`](pto_tab.py) `readData` errors on `start.year != end.year`; [`records/employees.py`](records/employees.py) `EmployeePTODB.getUsedHours` raises `RuntimeError('dates[1].year == year')` if it ever encounters one). Fix: clip `end` to `Dec 31` of `start.year` in the fuzzer fixture. Same family as the Step-40 carry-type-invariant fix — production maintains the invariant via its input validation; the fixture generator just needed to follow the same rule.
+
+The fuzzer is now self-sustaining as a regression net: any new RuntimeError-via-slot crash anyone introduces will start failing the smoke baseline on a fraction of `seed=None` runs (and reproducibly on at least one seed once the trajectory hits the bug), with the seed + step + label + traceback printed for replay.
 
 ---
 

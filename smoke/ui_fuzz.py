@@ -13,14 +13,14 @@ offscreen; crashes inside the click handlers still surface. The stubs
 themselves consume the walk RNG for Yes/No decisions, so a Save → Yes vs
 Save → No branch is part of the reproducible sequence.
 
-**Not wired into the smoke baseline yet.** PySide6 swallows exceptions
-raised in slot handlers (prints to stderr via sys.excepthook, then
-returns from click() normally). This fuzzer hooks sys.excepthook to
-capture them, but doing so reveals that several existing slot handlers
-raise RuntimeError on user-reachable edge cases that today are silent.
-Until those land as separate fixes, a seed=None baseline run would flake
-on the seeds that happen to hit them. Run on demand for now:
-``./Scripts/python.exe -c "from smoke import crash_fuzz; print(crash_fuzz())"``
+**Slot-raised exceptions.** PySide6 wraps slot execution: a slot that
+raises has its exception routed through sys.excepthook and then
+SWALLOWED — click() returns normally. The walk hooks sys.excepthook so
+the failure list actually reflects what crashed.
+
+**Wired into the smoke baseline as of Step 41.** Default iterations
+tuned to land in the 10-20s budget on a Windows dev box. Replay a found
+crash with explicit ``iterations=<reported step + 1>``.
 """
 import os
 import random
@@ -214,12 +214,10 @@ def _executeAction(kind, target, rng):
         target.setChecked(not target.isChecked())
 
 
-# Default tuned for ~10-20s offscreen on a Windows dev box once the known
-# slot-handler RuntimeError bugs are fixed; today most seeds fail-fast well
-# before 2000 (the inventory duplicate-date guard hits around iter ~500-3000
-# depending on seed). Replay uses an explicit ``iterations=`` matching the
-# reported crash step + 1.
-DEFAULT_ITERATIONS = 2000
+# Default tuned for ~10-20s offscreen on a Windows dev box (20-run sweep at
+# 1000 iter post-Steps-39/40/41 saw 7.03-12.70s, median ~11s, 0/20 failures).
+# Replay uses an explicit ``iterations=`` matching the reported crash step + 1.
+DEFAULT_ITERATIONS = 1000
 
 
 def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS) -> list[str]:

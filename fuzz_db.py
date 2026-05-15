@@ -378,7 +378,13 @@ def populatePTO(db, rng, idNums, today):
             if rng.random() < 0.85:
                 length = rng.randint(1, 5)
                 end = start + datetime.timedelta(days=length)
-                hours = 8 * length
+                # Production PTOEditWindow.readData rejects year-spanning
+                # ranges, and EmployeePTODB.getUsedHours raises if it ever
+                # sees one. Clip end to Dec 31 of start's year so the
+                # fixture matches production invariants.
+                if end.year != start.year:
+                    end = datetime.date(start.year, 12, 31)
+                hours = 8 * max(1, (end - start).days)
             else:
                 if today.year in carryYears:
                     continue
