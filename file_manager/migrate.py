@@ -227,3 +227,14 @@ class MigrateMixin:
             self.dbFile.execute("ALTER TABLE production ADD COLUMN hours REAL DEFAULT 0")
         self._setDbVersion(4)
         logging.info(" --> v3->v4 migration complete")
+
+    def _migrateV4ToV5(self):
+        # Production Scheduling (Step 43): add the (initially empty) `presses` table.
+        # Purely additive + idempotent (CREATE TABLE IF NOT EXISTS) — no existing data
+        # is touched, no backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v4->v5 migration: add presses table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
+        self._setDbVersion(5)
+        logging.info(" --> v4->v5 migration complete")

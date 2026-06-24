@@ -20,7 +20,10 @@ from .import_db import ImportMixin
 #   v3 — Step 9: BECKY schema normalized. `employees.shift` split into `shift INTEGER` +
 #        `fullTime INTEGER`; `reviews.details` and `notes.details` stored as plain TEXT
 #        (base64 wrapping removed); orphan rows in training/attendance/PTO swept out (§3.1, §3.3).
-MERCY_DB_VERSION = 4
+#   v4 — Step 17: `hours REAL DEFAULT 0` column added to the production table.
+#   v5 — Step 43: Production Scheduling subsystem. `presses` table added (additive;
+#        first of ~7 new scheduling/sales tables landing across Steps 43–49).
+MERCY_DB_VERSION = 5
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -68,6 +71,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                 self._createAnikaTables()
                 self._createBeckyTables()
                 self._createProductionTable()
+                self._createSchedulingTables()
                 self._setDbVersion(MERCY_DB_VERSION)
                 self.dbFile.commit()
                 logging.info(f" --> Created unified MERCY schema (db_version={MERCY_DB_VERSION})")
@@ -86,6 +90,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateBeckyV2ToV3()
                 if dbVersion is not None and dbVersion < 4:
                     self._migrateV3ToV4()
+                if dbVersion is not None and dbVersion < 5:
+                    self._migrateV4ToV5()
                 self.dbFile.commit()
                 return True
 
@@ -100,6 +106,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self.dbFile.execute("ALTER TABLE materials ADD COLUMN otherChem DEFAULT 0")
                 self._createBeckyTables()
                 self._createProductionTable()
+                self._createSchedulingTables()
                 # Stamp v1 first so _migrateAnikaV1ToV2's version update from 1->2 is meaningful
                 # if the migration throws partway; the outer try/except will still close the
                 # connection without committing, leaving the original file untouched.
@@ -122,6 +129,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self.dbFile.execute("CREATE TABLE notes(idNum, date, time, details, UNIQUE(idNum, date, time))")
                 self._createAnikaTables()
                 self._createProductionTable()
+                self._createSchedulingTables()
                 # Stamp v2 so that if the BECKY migration throws partway, the outer try/except
                 # closes the connection without committing and leaves the file untouched.
                 self._setDbVersion(2)

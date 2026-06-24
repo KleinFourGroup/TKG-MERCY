@@ -9,6 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
+from records.scheduling import Press
 
 
 class Database:
@@ -26,7 +27,8 @@ class Database:
                  PTO: dict[int, EmployeePTODB],
                  notes: dict[int, EmployeeNotesDB],
                  holidays: ObservancesDB,
-                 production: dict[tuple, ProductionRecord]) -> None:
+                 production: dict[tuple, ProductionRecord],
+                 presses: dict[str, Press]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -41,6 +43,7 @@ class Database:
         self.notes = notes
         self.holidays = holidays
         self.production = production
+        self.presses = presses
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -299,6 +302,27 @@ class Database:
             raise RuntimeError('employeeNotes.idNum already in self.notes')
         self.notes[employeeNotes.idNum] = employeeNotes
 
+    # ---- Production Scheduling: presses ----------------------------------------------------
+
+    def updatePress(self, entry, name):
+        # Rekey the presses dict on rename, mirroring updatePackaging/updateMaterial.
+        # Nothing references a press by name yet, so there are no cross-table fixups.
+        # Name-collision is rejected at the tab (PressEditWindow.readData).
+        if not name == entry:
+            presses = {name if key == entry else key: val for key, val in self.presses.items()}
+            self.presses = presses
+            self.presses[name].name = name
+
+    def addPress(self, press: Press):
+        if press.name in self.presses:
+            raise RuntimeError('press.name already in self.presses')
+        self.presses[press.name] = press
+
+    def delPress(self, name):
+        if name not in self.presses:
+            raise RuntimeError('name not in self.presses')
+        del self.presses[name]
+
     # ---- mergeFrom -------------------------------------------------------------------------
 
     def planMergeFrom(self, other: "Database") -> dict:
@@ -436,5 +460,6 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
+        {},
         {}
     )

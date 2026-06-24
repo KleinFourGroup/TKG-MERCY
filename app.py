@@ -82,6 +82,11 @@ class MainWindow(QWidget):
         # Scheduling config group — Presses, Pressers, Shift Workweek,
         # Part-Press Preference (Steps 43–45, 48).
         self.schedulingConfigTab = QTabWidget()
+
+        from presses_tab import PressesTab
+        self.pressesTab = PressesTab(self)
+        self.schedulingConfigTab.addTab(self.pressesTab, "Presses")
+
         self.prodSchedTab.addTab(self.schedulingConfigTab, "Scheduling config")
 
         # Schedule group — the Production Schedule Report (Step 53).
@@ -161,6 +166,8 @@ class MainWindow(QWidget):
         self.holidaysTab.refresh()
         # Production domain
         self.productionTab.refresh()
+        # Production Scheduling domain
+        self.pressesTab.refreshTable()
 
     def _loadPath(self, path: str) -> bool:
         # Shared entry point for loading a DB from a known path — used by the

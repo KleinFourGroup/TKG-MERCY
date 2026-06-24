@@ -8,6 +8,10 @@ BECKY_TABLES = {"globals", "employees", "reviews", "training", "attendance",
                 "PTO", "notes", "holidays", "observances"}
 MERCY_EXTRA_TABLES = {"production"}
 UNIFIED_TABLES = ANIKA_TABLES | BECKY_TABLES | MERCY_EXTRA_TABLES
+# NB: the Production Scheduling tables (presses, ...) are deliberately NOT part of
+# UNIFIED_TABLES. They're added by additive migrations (db_version >= 5), so a
+# pre-v5 MERCY DB legitimately lacks them; requiring them in the issubset fingerprint
+# would mis-classify older MERCY files as "unknown". Detection keys off the v4 shape.
 
 
 class SchemaMixin:
@@ -67,6 +71,15 @@ class SchemaMixin:
             "hours REAL DEFAULT 0, "
             "UNIQUE(employeeId, date, shift, targetType, targetName, action))"
         )
+
+    def _createSchedulingTables(self):
+        # Production Scheduling subsystem tables (spec §3; added incrementally from
+        # Step 43). Called on the fresh-schema paths (empty / legacy ANIKA / legacy
+        # BECKY); existing MERCY DBs reach the same shape via the v4->v5+ migrations.
+        # All additive — CREATE TABLE IF NOT EXISTS — so the chain replays cleanly.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
 
     def _setDbVersion(self, version: int):
         if self.dbFile is None:

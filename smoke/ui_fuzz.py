@@ -110,6 +110,7 @@ def _seedFuzzData(w, rng):
     F.populatePTO(db, rng, idNums, today)
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
+    F.populatePresses(db, rng, cfg["presses"])
 
 
 # Action kind tags. Tuples are (kind, target, label) so the dispatcher can

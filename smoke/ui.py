@@ -55,6 +55,7 @@ def _seedTinyFuzzDB(w):
     F.populatePTO(db, rng, idNums, today)
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
+    F.populatePresses(db, rng, cfg["presses"])
     return partNames, idNums, mixtureNames
 
 
@@ -641,6 +642,102 @@ def parts_tab_crud() -> list[str]:
         restore()
         if w is not None and w.fileManager.dbFile is not None:
             w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def presses_tab_crud() -> list[str]:
+    """Step 43: PressesTab CRUD + save/reload roundtrip.
+
+    Seeds tiny fuzz data (which now populates presses), then via
+    ``PressEditWindow`` and the tab buttons:
+      - opens an Edit window on the first press, confirms ``nameEdit``
+        prefills, renames it, clicks ``updateButton``, and confirms
+        ``db.presses`` rekeys (new name in, old name out);
+      - opens a *new* ``PressEditWindow`` (entry=None), types a novel
+        name, clicks ``createButton``, and confirms it appears;
+      - selects that new press and calls ``deleteSelection`` (the
+        confirm dialog is stubbed to Yes), confirming removal;
+      - saves, reloads into a fresh ``MainWindow``, and confirms the
+        surviving presses roundtrip through SQLite unchanged.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from presses_tab import PressEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w.pressesTab.refreshTable()
+
+        if len(w.db.presses) == 0:
+            errors.append("expected fuzz seed to populate presses, got 0")
+            return errors
+
+        # --- Edit: rename an existing press ---
+        fixture = sorted(w.db.presses)[0]
+        editor = PressEditWindow(fixture, w)
+        if editor.nameEdit.text() != fixture:
+            errors.append(f"Edit prefill: nameEdit={editor.nameEdit.text()!r}, want {fixture!r}")
+        renamed = "Renamed Press"
+        editor.nameEdit.setText(renamed)
+        editor.updateButton.click()
+        if renamed not in w.db.presses:
+            errors.append(f"after Update: {renamed!r} missing from db.presses")
+        if fixture in w.db.presses:
+            errors.append(f"after Update: old key {fixture!r} still present")
+
+        # --- Create a new press ---
+        newEditor = PressEditWindow(None, w)
+        newName = "SmokeTestPress"
+        newEditor.nameEdit.setText(newName)
+        newEditor.createButton.click()
+        if newName not in w.db.presses:
+            errors.append(f"after Create: {newName!r} missing from db.presses")
+
+        # --- Delete that press via the tab (confirm dialog stubbed to Yes) ---
+        before = len(w.db.presses)
+        w.pressesTab.setSelection([newName])
+        w.pressesTab.deleteSelection()
+        if newName in w.db.presses:
+            errors.append(f"after Delete: {newName!r} still present")
+        if len(w.db.presses) != before - 1:
+            errors.append(f"after Delete: count {len(w.db.presses)} != {before - 1}")
+
+        # --- save / reload roundtrip ---
+        expected = set(w.db.presses)
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading presses DB")
+        else:
+            w2.fileManager.loadFile()
+            got = set(w2.db.presses)
+            if got != expected:
+                errors.append(f"presses roundtrip mismatch: expected {sorted(expected)}, got {sorted(got)}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.unlink(tmp.name + suffix)

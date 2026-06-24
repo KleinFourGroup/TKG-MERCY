@@ -49,19 +49,20 @@ from records.employees import (  # noqa: E402
     EmployeePTODB, EmployeeNotesDB,
 )
 from records.production import ProductionRecord  # noqa: E402
+from records.scheduling import Press  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------
 
 SCALES = {
     "tiny":   dict(materials=4,  mixtures=2,  packaging=5,  parts=3,
-                   employees=3,  inventorySnapshots=1, productionDays=5),
+                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3),
     "small":  dict(materials=6,  mixtures=3,  packaging=6,  parts=6,
-                   employees=6,  inventorySnapshots=2, productionDays=60),
+                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4),
     "medium": dict(materials=12, mixtures=5,  packaging=10, parts=20,
-                   employees=15, inventorySnapshots=2, productionDays=180),
+                   employees=15, inventorySnapshots=2, productionDays=180, presses=6),
     "large":  dict(materials=25, mixtures=10, packaging=18, parts=60,
-                   employees=40, inventorySnapshots=4, productionDays=540),
+                   employees=40, inventorySnapshots=4, productionDays=540, presses=10),
 }
 
 
@@ -145,6 +146,12 @@ HOLIDAY_MONTHS = {
 
 
 # ---- helpers ----------------------------------------------------------------
+
+PRESS_POOL = [
+    "Press 1", "Press 2", "Press 3", "Press 4", "Press 5",
+    "Press 6", "Press 7", "Press 8", "Press 9", "Press 10",
+]
+
 
 def pickUnique(rng: random.Random, pool: list[str], count: int) -> list[str]:
     """Return `count` unique names; synthesizes suffixed names if the pool is too small."""
@@ -481,6 +488,15 @@ def populateProduction(db, rng, idNums, partNames, mixtureNames, days, today):
 
 # ---- entry ------------------------------------------------------------------
 
+# ---- population: Production Scheduling side ----------------------------------
+
+def populatePresses(db, rng, n):
+    names = pickUnique(rng, PRESS_POOL, n)
+    for name in names:
+        db.addPress(Press(name))
+    return names
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -523,6 +539,10 @@ def build(output: str, seed: int | None, scale: str):
     nprod = populateProduction(db, rng, idNums, partNames, mixtureNames,
                                cfg["productionDays"], today)
     print(f"  production: {nprod} records over {cfg['productionDays']} days")
+
+    # Production Scheduling subsystem (Steps 43+).
+    pressNames = populatePresses(db, rng, cfg["presses"])
+    print(f"  presses:   {len(pressNames)}")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)
