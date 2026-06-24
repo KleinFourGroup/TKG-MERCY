@@ -88,7 +88,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 39 | ✅ Done | inventory_tab dup-date guard loopholes (Create-in-Edit + Update-same-date) — see §13.27 |
 | 40 | ✅ Done | PTO carryover dialog stale-snapshot fix + fuzz_db carry-type invariant — see §13.28 |
 | 41 | ✅ Done | Graduate `crash_fuzz` to smoke baseline (final fuzz_db invariant + dispatcher wire-in) — see §13.29 |
-| 42 | ⬜ Planned | Production Scheduling: "Production and Scheduling" tab shell (rename + nested sub-tab skeleton) — see §13.30 |
+| 42 | ✅ Done | Merge plan Step 42: Production and Scheduling tab shell (rename + nested sub-tab skeleton) — see §13.30 |
 | 43 | ⬜ Planned | Production Scheduling: Press table + tab — see §13.30 |
 | 44 | ⬜ Planned | Production Scheduling: Pressers table + tab — see §13.30 |
 | 45 | ⬜ Planned | Production Scheduling: Shift Workweek table + tab — see §13.30 |

@@ -61,10 +61,40 @@ class MainWindow(QWidget):
 
         self.tab_widget.addTab(self.employeesTopTab, "Employees")
 
-        # ---- Production top-level tab (MERCY-native, Step 11) ----
+        # ---- Production and Scheduling top-level tab ----
+        # Step 11 shipped this as a flat "Production" tab. Step 42 renames it
+        # "Production and Scheduling" and nests it: the existing production
+        # tracker becomes the "Daily Entry / Reports" sub-tab, and three empty
+        # groups are stubbed for the Production Scheduling subsystem (spec §7).
+        # Sales / Scheduling config are genuine tab groups (nested QTabWidgets
+        # that later steps addTab into); Schedule is a single report view, so a
+        # labeled placeholder stands in until Step 53 builds it.
+        self.prodSchedTab = QTabWidget()
+
         from production_tab import ProductionTab
         self.productionTab = ProductionTab(self)
-        self.tab_widget.addTab(self.productionTab, "Production")
+        self.prodSchedTab.addTab(self.productionTab, "Daily Entry / Reports")
+
+        # Sales group — Clients, Orders, Order Status (Steps 46–49).
+        self.salesTab = QTabWidget()
+        self.prodSchedTab.addTab(self.salesTab, "Sales")
+
+        # Scheduling config group — Presses, Pressers, Shift Workweek,
+        # Part-Press Preference (Steps 43–45, 48).
+        self.schedulingConfigTab = QTabWidget()
+        self.prodSchedTab.addTab(self.schedulingConfigTab, "Scheduling config")
+
+        # Schedule group — the Production Schedule Report (Step 53).
+        self.scheduleTab = QWidget()
+        scheduleLayout = QVBoxLayout(self.scheduleTab)
+        scheduleLayout.addStretch()
+        scheduleLayout.addWidget(
+            QLabel("The Production Schedule Report will be generated here (Step 53).")
+        )
+        scheduleLayout.addStretch()
+        self.prodSchedTab.addTab(self.scheduleTab, "Schedule")
+
+        self.tab_widget.addTab(self.prodSchedTab, "Production and Scheduling")
 
         # ---- Inventory top-level tab (ANIKA's existing InventoryTab has its own nested Materials|Parts) ----
         from inventory_tab import InventoryTab
