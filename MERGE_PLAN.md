@@ -511,17 +511,11 @@ All production tracking design questions have been answered by the team lead.
 
 ## 12. Implementation Progress
 
-*Last updated 2026-05-14. All 13 planned steps complete, plus the Step 9.5 polish. Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files (see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md)). Post-release feature backlog from the team's first look at the release is tracked in §13; Steps 14–23 and 25–27 have landed, plus Step 24 (the previously-deferred per-employee productivity report, landed 2026-05-08 once the team confirmed scope). The second round of team feedback (2026-04-24) added Step 23 (quantity positive-check, landed same day) and Step 24 (per-employee reports, initially deferred), finalized the scope of Steps 18 and 19 (both landed 2026-04-24), and surfaced Step 25 (confirm-on-close dialog, also landed 2026-04-24). The third round (2026-05-08) added Step 26 (rate columns on the production-family reports) to address persistent team confusion between the production and productivity reports, confirmed the spec for Step 24, and — after Matthew's manual test of Step 24 — surfaced Step 27 (Employee Productivity polish). All four landed same-day. With team feedback running slow, Steps 28-32 were sketched 2026-05-09 as a code-quality / refactor backlog (records.py split, code hygiene sweep, selector helper, smoke.py split, file_manager.py split) — all gated on the team blessing the recent reports. Team blessing came in 2026-05-10; Step 29 (code hygiene sweep) landed same day as the first of the refactor steps. 2026-05-11 archival sweep collapsed the §13.6/§13.12/§13.13/§13.14/§13.15/§13.17 done-step bodies and the tail-of-doc legacy Step 16 sketch into pointer-stubs to keep this doc under the single-read budget; full narratives are in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Step 28 (the `records.py` → `records/` package split) landed 2026-05-11 — smoke 17 PASS on the first try since the backwards-compat re-export shim kept every existing `from records import ...` line working unchanged. Step 30 (selector helper widget) landed same day, factoring the five-combo cluster out of `ProductionReportWindow` into a new `production_report_selector.py`. Step 31 (smoke.py split) followed the same day, slicing the 2068-line `smoke.py` into a `smoke/` package along the records/migrations/reports/ui domain split called out in §13.19; CLI shifted to `./Scripts/python.exe -m smoke`. Step 32 (file_manager.py split) closed out the refactor backlog the same day — 1123-line `file_manager.py` carved into a six-file `file_manager/` package using mixin composition (schema / migrate / save / load / import_db, with the `FileManager` class itself orchestrating in `__init__.py`); smoke 17 PASS first try and a fuzz-DB load → save → reload roundtrip across 19 populated tables (3522 production records) compared row-for-row identical post-save. 2026-05-13 session closed the Step 28.1 follow-up (`file_manager/load.py` and `fuzz_db.py` switched to per-module records imports), renamed `EmployeeOverviewTab` → `EmployeeListTab` to close the §12.3 follow-up, added `TYPE_CHECKING` attribute-stub blocks to all five `file_manager/` mixins so Pylance can resolve `self.dbFile`/etc., and landed Step 33 — the `report.py` → `report/` package split using the same mixin composition as Step 32 (PDFReportCore base + Product/Employee/Production reports mixins; smoke 17 PASS first try). Steps 34-37 sketched at the end of the same session as the next-up backlog (in ROI order): dead-code sweep with vulture, smoke coverage of all reports against fuzzed data, Pyright sweep across the codebase, and (aspirational, if time permits) a UI fuzz harness for state-machine bugs like the Step 20 save-stuck-disabled class. 2026-05-14 session opened the trio: Step 34 (vulture dead-code sweep) landed first — vulture added to a new "Dev / lint" section of requirements.txt; confidence-80 sweep then re-sweep surfaced eight classes of dead code (11 unused `ErrorWindow` imports + the `ErrorWindow` class, 3 module-level `createTab()` stubs, `defaults.REVIEW_DATES`, `globals_tab.self.calls`, `report/core.pageNum`, the four `*Inventory` mutate methods + three debug `*Costs` helpers on `Database`, plus the `delMaterialRecord`/`delPartRecord`/`getProductivity` cascade once their callers were gone); vulture at confidence 80 is now empty, smoke 17 PASS pre- and post-change. Step 35 (smoke render-every-report) landed next: new `product_employee_reports` check in `smoke/reports.py` drives `fuzz_db`'s `populate*` functions directly against `MainWindow().db` (no file write, no captured stdout, seed=1 for determinism), then exercises all 9 product/employee reports — each output is checked for non-empty + `%PDF-` magic bytes; runs in 0.67s in isolation; smoke is now 18 PASS. Step 36 (pyright sweep) was then split into 36a-g substeps a la Step 7 since the §13.24 sketch had flagged it as "likely 1-2 sessions, not single-commit"; Step 36a (setup + triage) landed same session — pyright added to requirements.txt, `pyrightconfig.json` written (key call: `extraPaths: ["Lib/site-packages"]` so pyright sees the repo-rooted venv), and the initial baseline (219 errors / 0 warnings, 47 files) bucketed by rule and file in §13.24's triage table. Each step is committed separately on `main` with a message that names the step. 2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the step-by-step roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec.*
+*Last updated 2026-06-24. The original 13-step merge is complete (plus the Step 9.5 polish); Step 13 verified the end-to-end path against real legacy ANIKA + BECKY files — see [`plan_archive/real_data_findings.md`](plan_archive/real_data_findings.md). Post-release work continues as a running backlog in §13: Steps 14–41 have all landed — per-step status in §12.1, full narratives in [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md). Broadly: UI / report polish (Steps 14–27), a refactor / package-split + code-quality run (28–36 — the `records/`, `file_manager/`, `report/`, and `smoke/` splits plus the vulture and pyright sweeps), and a UI-test + crash-fuzz hardening run (37–41). Each step is one commit on `main` whose message names the step.*
 
-Step 7 was split into sub-steps to keep each review surface small. The hygiene sweep (7c) turned out to be large enough that it was further split into three; 7e was added when 7c-3's window-retention fix surfaced a centering regression:
+*Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-- **7a** — correctness / data-integrity fixes (done).
-- **7b** — promote `Database.__init__`'s optional BECKY kwargs to required args (done).
-- **7c-1** — `assert` → `raise` (237 sites across the repo; judgment calls between `RuntimeError` for internal invariants vs `ValueError` for method-boundary input).
-- **7c-2** — `print()` → `logging` (136 sites; 120 of them in `file_manager.py` save chatter) + drop the BECKY debug `print` in points logic.
-- **7c-3** — mechanical + polish: `not x == None` → `x is not None`, window-close leak (`Qt.WA_DeleteOnClose` + parent-retention), `LBS_PER_TON` constant, `requirements.txt`.
-- **7d** — clean up 2 double-negation leftovers from 7c-1.
-- **7e** — restore window centering regressed by 7c-3's parent-retention change.
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec.*
 
 ### 12.1 Step status
 
@@ -733,127 +727,23 @@ The dual-mandate-on-failure-handling guidance Matthew established during 36e1 (u
 
 ### 13.25 Step 37 — UI regression coverage (replace manual sweeps) ✅ Done
 
-Landed across 37a-c on 2026-05-15. **Smoke 19 → 30 PASS** (11 new checks).
-Each Edit/Select dialog's input widgets are now reachable as `self.*Edit` /
-`self.*Combo` / `self.updateButton` / `self.createButton` etc., so the
-checks (and any future test code) no longer have to reach through
-`self.mainLayout[i][j]` layout indexes — closing the "let's name some
-widgets" follow-up flagged in the planning notes below. Shared helpers
-in `smoke/ui.py`: `_silenceMessageBoxes`, `_seedTinyFuzzDB`,
-`_pickerSelectionFor`, `_detailTabsScratchSetup`. The original sketched
-shape that drove the split is preserved below for reference.
-
-**Sketched shape (preserved).** The bulk of every Step-36-sized refactor's manual UI sweep was deterministic checking: pick a fixture employee → confirm fields populate; click New/Edit/Delete → confirm dialog prefilled and round-trip works; switch employees → confirm tabs refresh. PySide6's `QTest` + introspectable widget state (`.text()` / `.isEnabled()` / `.currentIndex()`) make this directly automatable. The existing smoke patterns (`QApplication.instance()` reuse, `QMessageBox.warning` monkeypatch from `close_confirm`) carry over.
-
-**Shipped shape (sketched).** Extend `smoke/ui.py` with ~10-12 new checks, each ~150 lines:
-
-- `parts_tab_crud` — open Details/Margins/Edit dialogs for a fixture part, assert field prefill matches the fixture; click Create with new values, assert `db.parts[name]` reflects them.
-- `employees_tab_crud` — same for active + inactive employee dialogs.
-- `employee_detail_populates` — pick a fixture employee, assert all 5 detail sub-tabs (Reviews / Training / Points / PTO / Notes) render expected label values; switch to "None", assert all go to "Employee: N/A".
-- `holidays_tab_observances` — pick year, assert Shift 1/2/3 dates populate; click ◀/▶ year nav, assert year label updates.
-- `holidays_tab_defaults_crud` — New/Edit/Delete holiday roundtrip.
-- `notes_dialog_roundtrip` / `points_dialog_roundtrip` / `pto_dialog_roundtrip` / `reviews_dialog_roundtrip` / `training_dialog_roundtrip` — programmatically fill an Edit dialog and click Create; assert the data lands in `db.X`.
-- `employee_delete_cascades_detail_tabs` — delete an employee while their detail sub-tabs are visible; assert all 5 sub-tabs go to "N/A".
-
-**Fixture reuse — no duplicate fuzz code.** Step 35 already established the pattern of driving `fuzz_db.populate*` directly against `MainWindow().db` (rather than file-roundtripping). Step 37 reuses this exact path: each check seeds a tiny fuzz DB (seed=1 fixed for reproducibility), then drives the UI. Picking specific fixture entries — "the first employee", "the first part" — works because `fuzz_db` is deterministic. New fixture helpers belong in `fuzz_db.py` if reusable, not in `smoke/ui.py` — avoid the duplicate-generator trap.
-
-**Possible refactor magnet.** Several Edit dialogs reach widgets via layout index (`self.mainLayout[1][1].text()`). Tests would need the same indexes — fragile if layout changes. May surface "let's name some widgets" as a small follow-up; not a blocker.
-
-**Splittable into ~3 commits** along tab boundaries (records-side, employee-detail-side, holidays+production). Total estimate: 12-15 hours, 1-2 sessions.
-
-**What's out of scope:** anything that requires pixel-level rendering (icon visibility, text overflow, layout positioning). For MERCY, that's negligible — the manual sweep wasn't checking pixels.
+Landed across 37a-c on 2026-05-15. **Smoke 19 → 30 PASS** (11 new checks). See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 37 for the widget-naming-for-testability change (Edit/Select dialogs expose `self.*Edit` / `self.*Combo` instead of `mainLayout[i][j]` indexes), the shared `smoke/ui.py` helpers, and the per-check breakdown.
 
 ### 13.26 Step 38 — UI crash fuzzer (random-walk, seed-reproducible) ✅ Done
 
-Landed 2026-05-15. New module `smoke/ui_fuzz.py` with `crash_fuzz(seed=None, iterations=2000)`. Exported from `smoke/__init__.py` but **deliberately not wired into the `smoke/__main__.py` dispatcher** — see "Bugs surfaced" below.
-
-**Shipped shape.** Action enumeration filters `window.findChildren(...)` by `isEnabled()` only (drops the original sketch's `isVisible()` filter — exercising click handlers on non-current tabs is more coverage, not less). Action kinds: `QPushButton.click()`, `QComboBox.setCurrentIndex(rng-pick)`, `QTabWidget.setCurrentIndex(rng-pick)`, `QLineEdit.setText(rng-string)`, `QSpinBox` / `QDoubleSpinBox.setValue(edge-or-uniform)`, `QCheckBox.setChecked(toggle)`. Re-enumerated every step.
-
-**Blocking-UI silence.** `_silenceBlockingUI(walk_rng)` stubs `QMessageBox.information / critical / warning / question`, `QFileDialog.getOpenFileName / getSaveFileName / getExistingDirectory`, `QDialog.exec`, and `os.startfile` (which `utils.startfile` delegates to on Windows — neutralizes report-tab PDF launches too). The `question` stub is randomized off `walk_rng` so Yes/No branches of confirm dialogs (delete employee, import db, etc.) are both exercised reproducibly. `warning` returns `Cancel` so a stray close prompt vetoes itself.
-
-**Catching slot-raised exceptions.** PySide6 wraps every slot in a try/except that prints to `sys.excepthook` and then returns from `click()` normally — a plain `try` around `_executeAction` sees nothing. The check installs a `sys.excepthook` that records `(type, value, tb)` into a list cleared before each action; if anything lands there during the click, the loop returns it as the failure with full traceback. This was the key correctness fix mid-implementation — without it, the fuzzer ran "successfully" through crashes that were silently lost to stderr.
-
-**`w.close()` skipped in cleanup.** Offscreen, `MainWindow.closeEvent` calls `QMessageBox.warning` (our stub → Cancel → `event.ignore()`), but `w.close()` itself never returns cleanly even when the close is vetoed. Match the existing smoke checks that leak the window until process exit.
-
-**Bugs surfaced (and why this isn't in the baseline dispatcher yet).** First three real seeds hit three distinct crash classes, two root causes — all `RuntimeError` raised from slot handlers and today silently swallowed by Qt's signal-slot wrapper:
-
-1. **Inventory duplicate-date guard** — `inventory_tab.py:170 newInventory` / `:176 updateInventory` → `db.addInventory` / `db.updateInventory` raise `RuntimeError('date already in self.inventories')`. Hits across many seeds (e.g., seed=1 step 576, seed=2026 step 1485, seed=42 step 2864).
-2. **PTO `getCarryHours` `count <= 1` invariant** — surfaces from two call paths: `employees_tab.py:143 reportAll` → `report/employees.py:229 employeeActiveReport` (seed=7 step 2009), and `pto_tab.py:505 newPTO` → `getAvailableHours` → `getCarryHours` (seed=99 step 2083).
-
-Both root causes have follow-up tasks spawned (chip queue). Until they land, a `seed=None` baseline call flakes on whichever bug the time-seeded run happens to hit; that's why the dispatcher wiring was reverted before commit. Once fixed, a later step adds `crash_fuzz(seed=None, iterations=2000)` to `smoke/__main__.py`. Run on demand today:
-
-```
-./Scripts/python.exe -c "from smoke import crash_fuzz; r = crash_fuzz(); print(r[0] if r else 'PASS')"
-```
-
-**Timing.** On a clean tree (post-bug-fixes), 2000 iter clocks ~21-30s depending on seed — slightly over the original 10-20s target but close. Inside the budget once the known crashes are fixed and the fuzzer stops fail-fasting at low iter counts on most seeds. Replay a found crash with explicit `iterations=<reported step + 1>`.
-
-**Reproducibility.** Both `walk_rng` (action choices + `question_stub` Yes/No decisions) and `fixture_rng` (`fuzz_db.populate*` data) are derived from the single `seed` parameter (`fixture_rng = Random(seed ^ 0xCAFEBEEF)`). A reported crash always replays from `crash_fuzz(seed=N, iterations=step+1)`.
-
-*The "not in the smoke baseline yet" note above was retired 2026-05-15 by Step 41 (§13.29) — both follow-up bugs landed (§13.27, §13.28) and `crash_fuzz` now runs as the 31st smoke check.*
+Landed 2026-05-15. New `smoke/ui_fuzz.py` with `crash_fuzz(seed=None, iterations=2000)` — random-walk over enabled widgets, with a `sys.excepthook` installed to catch the `RuntimeError`s that Qt's signal-slot wrapper otherwise swallows; `walk_rng` + `fixture_rng` both derive from the one `seed`. Shipped **deliberately unwired** from the dispatcher because the first three seeds surfaced two real root causes (inventory dup-date guard; PTO `getCarryHours` `count <= 1` invariant). See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 38 for the action/silencing design and the full bug analysis; both root causes were fixed in Steps 39–40 and the check wired in by Step 41.
 
 ### 13.27 Step 39 — inventory_tab dup-date guard loopholes ✅ Done
 
-Landed 2026-05-15. First Step-38 follow-up: the inventory tab's dup-date warning at [`inventory_tab.py`](inventory_tab.py) was already routing legitimate collisions to `errorMessage` (QMessageBox.critical), but two loopholes let crashes through into the db layer's `RuntimeError` guards — both then silently swallowed by Qt's signal-slot wrapper.
-
-**Loophole 1 — Create button in Edit mode hitting an existing date.** `InventoryDateEditWindow` keeps the Create button enabled in Edit mode because the rest of the team uses the Create-in-Edit workflow across other tabs (pre-populate fields, then create a variant part / mix / PTO entry / etc.) — disabling it just for the inventory tab would break that muscle memory and read as a bug. Instead the dup-collision check in `readData` is split by mode:
-
-```python
-if isNew:
-    if date in self.mainApp.db.inventories:
-        errors.append(f"Inventory already exists on {date.isoformat()}")
-else:
-    if date in self.mainApp.db.inventories and date != self.date:
-        errors.append(f"Inventory already exists on {date.isoformat()}")
-```
-
-Create + existing date now surfaces the existing `errorMessage` dialog regardless of mode. The Update branch keeps the same-date exemption because Update + unchanged date is a legitimate no-op (see Loophole 2). The previous check folded both modes into a single expression with an `is not None and date == self.date` exemption — the exemption was intended only for the Update path but accidentally let the Create-in-Edit path through into `db.addInventory`, which then raised `RuntimeError('date already in self.inventories')`.
-
-**Loophole 2 — Update with unchanged date.** Clicking Update without moving the calendar invoked `db.updateInventory(self.date, self.date)`, which the db layer rejected on its `date in self.inventories` guard (the new date is the old date, which is obviously already there). Fix: skip the db call entirely in `readData` when `self.date == date`. The check above already treats this as a non-error; honor that by also making the db call a no-op. The dialog closes with the "Inventory updated successful!" toast, which is correct: the user asked to save with no changes, the system confirms that.
-
-**Variant-create workflow preserved.** Open Edit on inventory A, change the calendar to a fresh date, click Create → fresh inventory at the new date (A unchanged). Matches the cross-tab pattern the team uses elsewhere. The only path that errors is Create on a date that already has an inventory, which is genuinely ambiguous and worth a dialog.
-
-**Verification.** `crash_fuzz(seed=1, iterations=1000)` (Create-in-Edit repro) and `crash_fuzz(seed=2026, iterations=2000)` (Update-same-date repro) both PASS post-fix. Broader 7-seed sweep at iterations=2000 surfaces no inventory crashes; only the remaining known follow-up (PTO `getCarryHours` `count <= 1` — separate chip queued) appears, and only on some seeds. Smoke baseline 30 PASS pre- and post-change. **Db-layer RuntimeError guards stay intact** as defense-in-depth — the fix is at the call sites that were violating the invariants.
-
-**Manual UI sweep:** in MERCY, add an inventory date, open Edit on it, leave the calendar unchanged, and click Create — expect the "Inventory already exists on ..." dialog. Open New Inventory Date twice and create today's date in window #1, then click Create in window #2 — expect the same dialog. Open Edit, change the calendar to a fresh date, click Create — expect a new inventory at the fresh date (original Edit target unchanged). Open Edit, leave the calendar alone, click Update — closes cleanly with the success toast.
+Landed 2026-05-15. First Step-38 follow-up: closed two [`inventory_tab.py`](inventory_tab.py) dup-date loopholes (Create-in-Edit hitting an existing date; Update with an unchanged date) that bypassed the `errorMessage` dialog into the db layer's `RuntimeError` guards. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 39 for the mode-split `readData` check, the preserved variant-create workflow, and the crash_fuzz repro seeds. Smoke baseline 30 PASS.
 
 ### 13.28 Step 40 — PTO carryover stale-snapshot + fuzz_db carry-type invariant ✅ Done
 
-Landed 2026-05-15. Second Step-38 follow-up: `getCarryHours` / `getCarryType` in [`records/employees.py`](records/employees.py) raised `RuntimeError('count <= 1')` from four distinct call paths (Active Employees report, New PTO entry, Carry Over button, Cash Out button), all silently swallowed by Qt's signal-slot wrapper. Root cause was two complementary bugs, both fixed in this step.
-
-**The invariant.** `getCarryHours(year)` and `getCarryType(year)` walk an employee's PTO records counting entries where `dates[1] in ("CARRY", "CASH", "DROP")` for the given year. The model permits at most one such disposition per employee per year — the user picks CARRY, CASH, or DROP for unused hours at year-end and lives with the choice. Two or more is data corruption.
-
-**Bug 1 — `fuzz_db.populatePTO` could generate multiple carry-type entries per year.** Each employee got 0–4 random PTO entries; 15% of those rolled the CARRY/CASH/DROP branch with `start = datetime.date(today.year, 1, 1)`. The de-dup was `(start, end) in seen` — `(Jan 1, "CARRY")` and `(Jan 1, "CASH")` are distinct tuples, so both could land. Fixture violated the invariant before any UI action.
-
-Fix: track per-employee `carryYears` and skip the carry branch if the year is already taken. Comment ties the loop's invariant to `getCarryType`'s guard.
-
-**Bug 2 — `PTOCarryWindow.carry/cash/drop` used stale `self.unusedType`.** The constructor snapshots `self.unusedType = self.PTODB.getCarryType(today.year)` at dialog open; the three handlers compare against that snapshot to decide whether to call `clearCarry` before writing the new disposition. If another action wrote a CARRY/CASH/DROP for the same employee+year between dialog open and the click — easy under crash_fuzz because the dialog is non-modal (`QWidget` with `WA_DeleteOnClose`) and the fuzzer can drive the main window while it stays open — the handler saw `unusedType=None`, skipped `clearCarry`, and wrote a second disposition. The trailing `PTOTab.refresh()` then called `getCarryHours` and crashed.
-
-Fix: each handler re-reads `currentType = self.PTODB.getCarryType(today.year)` at click time and branches on that fresh value. `self.unusedType` is retained for display-only purposes (the status label + reset button enable state). Trace from seed=271 showed the crash landing exactly here:
-
-```
-pto_tab.py:356 cash → PTOTab.refresh → refreshPTO → getAvailableHours → getCarryHours → raise
-```
-
-Cash had written a duplicate disposition one line earlier; the refresh's read found the corruption immediately.
-
-**Why both fixes are needed.** The fixture fix alone leaves the run-time creator unchanged: 10-seed sweep at iter=3000 with fuzz_db fixed but pto_tab unchanged still surfaced `count <= 1` from four distinct buttons across five seeds. The pto_tab fix alone would let the bug surface immediately on opening a Carry Over dialog against the broken fixture data (the constructor's `getCarryType` call would crash before the handler ever runs). With both fixes the invariant holds end-to-end.
-
-**Verification.** `crash_fuzz` 10-seed sweep at iter=3000 — all PASS, no `count <= 1` anywhere. Both originally-reported seeds (7 for the Active Employees report, 99 for New PTO entry) clean. Smoke baseline 30 PASS pre- and post-change. **Db / records-layer `RuntimeError` guards untouched** — they're correct invariant assertions and now stay genuinely unreachable.
-
-**Manual UI sweep:** Run two PTO Carryover dialogs in parallel for the same employee (Overview tab → PTO sub-tab on the main window plus a second employee-detail tab open elsewhere if there's a path), click Carry Over in one and Cash Out in the other in quick succession — expect the second action to see the first's write and either show the overwrite-confirm dialog (if the user clicks Yes the previous disposition is cleared first) or the "already carried over/cashed out" `errorMessage`. Generate the Active Employees report and add new PTO entries across a few employee shapes — no crashes, reports render.
+Landed 2026-05-15. Second Step-38 follow-up: fixed `getCarryHours` / `getCarryType` `RuntimeError('count <= 1')` crashes from two complementary bugs — `fuzz_db.populatePTO` generating multiple carry-type entries per year, and `PTOCarryWindow` acting on a stale `unusedType` snapshot. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 40 for both fixes and why both were needed. Smoke baseline 30 PASS.
 
 ### 13.29 Step 41 — graduate `crash_fuzz` to smoke baseline ✅ Done
 
-Landed 2026-05-15, same session as Steps 39 and 40. With both Step-38 follow-ups in, `crash_fuzz` runs cleanly on `seed=None` — a 20-run sweep at `iterations=1000` clocked 7.03-12.70s (median ~11s, 0/20 failures), comfortably inside the 10-20s budget Matthew set during Step 38. Two changes shipped:
-
-**`DEFAULT_ITERATIONS = 1000` (was 2000).** The 2000 sketch from §13.26 assumed timings measured against bug-ridden code that fail-fasted on most seeds; once the bugs were fixed and runs actually completed, 2000 took 40+s median — well over budget. 1000 is the new fixture-stable knob.
-
-**Dispatcher wire-in.** `crash_fuzz` is now the 31st smoke check in [`smoke/__main__.py`](smoke/__main__.py). The "intentionally not wired" comment from §13.26 was retired. Smoke baseline 30 → 31 PASS.
-
-**One more fuzz_db invariant gap closed.** The Step-41 stability sweep surfaced one final invariant break the fuzzer was creating itself: `fuzz_db.populatePTO` could roll a `start` near year-end and a `length` that pushed `end` into the next year, but the model rejects year-spanning PTO ranges (production [`pto_tab.py`](pto_tab.py) `readData` errors on `start.year != end.year`; [`records/employees.py`](records/employees.py) `EmployeePTODB.getUsedHours` raises `RuntimeError('dates[1].year == year')` if it ever encounters one). Fix: clip `end` to `Dec 31` of `start.year` in the fuzzer fixture. Same family as the Step-40 carry-type-invariant fix — production maintains the invariant via its input validation; the fixture generator just needed to follow the same rule.
-
-The fuzzer is now self-sustaining as a regression net: any new RuntimeError-via-slot crash anyone introduces will start failing the smoke baseline on a fraction of `seed=None` runs (and reproducibly on at least one seed once the trajectory hits the bug), with the seed + step + label + traceback printed for replay.
+Landed 2026-05-15, same session as Steps 39–40. With both follow-ups in, `crash_fuzz` runs clean on `seed=None`; lowered `DEFAULT_ITERATIONS` 2000 → 1000 and wired it in as the **31st smoke check** (30 → 31 PASS), plus a final `fuzz_db` clip closing a year-spanning-PTO invariant gap. See [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) Step 41 for timing data and the self-sustaining-regression-net rationale.
 
 ### 13.30 Production Scheduling subsystem (approved 2026-06-24) — Steps 42–54
 
