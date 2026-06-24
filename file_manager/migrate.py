@@ -238,3 +238,14 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
         self._setDbVersion(5)
         logging.info(" --> v4->v5 migration complete")
+
+    def _migrateV5ToV6(self):
+        # Production Scheduling (Step 44): add the (initially empty) `pressers`
+        # table. Same additive + idempotent shape as v4->v5 — no existing data is
+        # touched, no backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v5->v6 migration: add pressers table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
+        self._setDbVersion(6)
+        logging.info(" --> v5->v6 migration complete")

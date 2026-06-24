@@ -135,6 +135,9 @@ class EmployeeTab(QWidget):
                 self.mainTab.activeEmployeesTab.refreshTable()
                 self.mainTab.inactiveEmployeesTab.refreshTable()
                 self.mainApp.productionTab.refresh()
+                # delEmployee cascades the presser row (records.Database.delEmployee),
+                # so the Pressers tab needs re-rendering too or it shows a stale row.
+                self.mainApp.pressersTab.refreshTable()
                 QMessageBox.information(self, "Success", "Update successful!")
 
     def reportAll(self):

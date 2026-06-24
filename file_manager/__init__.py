@@ -23,7 +23,9 @@ from .import_db import ImportMixin
 #   v4 — Step 17: `hours REAL DEFAULT 0` column added to the production table.
 #   v5 — Step 43: Production Scheduling subsystem. `presses` table added (additive;
 #        first of ~7 new scheduling/sales tables landing across Steps 43–49).
-MERCY_DB_VERSION = 5
+#   v6 — Step 44: `pressers` table added (employeeId FK -> employees.idNum,
+#        hoursPerShift REAL; additive).
+MERCY_DB_VERSION = 6
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -92,6 +94,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV3ToV4()
                 if dbVersion is not None and dbVersion < 5:
                     self._migrateV4ToV5()
+                if dbVersion is not None and dbVersion < 6:
+                    self._migrateV5ToV6()
                 self.dbFile.commit()
                 return True
 

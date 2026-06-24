@@ -49,20 +49,20 @@ from records.employees import (  # noqa: E402
     EmployeePTODB, EmployeeNotesDB,
 )
 from records.production import ProductionRecord  # noqa: E402
-from records.scheduling import Press  # noqa: E402
+from records.scheduling import Press, Presser  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------
 
 SCALES = {
     "tiny":   dict(materials=4,  mixtures=2,  packaging=5,  parts=3,
-                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3),
+                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3,  pressers=2),
     "small":  dict(materials=6,  mixtures=3,  packaging=6,  parts=6,
-                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4),
+                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4,  pressers=4),
     "medium": dict(materials=12, mixtures=5,  packaging=10, parts=20,
-                   employees=15, inventorySnapshots=2, productionDays=180, presses=6),
+                   employees=15, inventorySnapshots=2, productionDays=180, presses=6,  pressers=8),
     "large":  dict(materials=25, mixtures=10, packaging=18, parts=60,
-                   employees=40, inventorySnapshots=4, productionDays=540, presses=10),
+                   employees=40, inventorySnapshots=4, productionDays=540, presses=10, pressers=20),
 }
 
 
@@ -497,6 +497,16 @@ def populatePresses(db, rng, n):
     return names
 
 
+def populatePressers(db, rng, idNums, n):
+    # Make `n` of the existing employees pressers (capped at the headcount so some
+    # employees stay non-pressers). hoursPerShift is a near-constant shift length.
+    count = min(n, len(idNums))
+    chosen = rng.sample(idNums, count)
+    for empId in chosen:
+        db.addPresser(Presser(empId, round(rng.uniform(6, 10), 1)))
+    return chosen
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -543,6 +553,8 @@ def build(output: str, seed: int | None, scale: str):
     # Production Scheduling subsystem (Steps 43+).
     pressNames = populatePresses(db, rng, cfg["presses"])
     print(f"  presses:   {len(pressNames)}")
+    presserIds = populatePressers(db, rng, idNums, cfg["pressers"])
+    print(f"  pressers:  {len(presserIds)}")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)

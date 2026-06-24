@@ -56,6 +56,7 @@ def _seedTinyFuzzDB(w):
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
     F.populatePresses(db, rng, cfg["presses"])
+    F.populatePressers(db, rng, idNums, cfg["pressers"])
     return partNames, idNums, mixtureNames
 
 
@@ -744,6 +745,140 @@ def presses_tab_crud() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+def pressers_tab_crud() -> list[str]:
+    """Step 44: PressersTab CRUD + save/reload roundtrip + employee-delete cascade.
+
+    Seeds tiny fuzz data (which now populates pressers against existing
+    employees), then via ``PresserEditWindow`` and the tab buttons:
+      - opens an Edit window on the first presser, confirms the employee
+        combo preselects and ``hoursEdit`` prefills, changes the hours,
+        clicks ``updateButton``, and confirms ``hoursPerShift`` updates
+        while the employeeId key is unchanged;
+      - opens a *new* ``PresserEditWindow`` (entry=None), selects an
+        employee who isn't yet a presser, enters hours, clicks
+        ``createButton``, and confirms it appears;
+      - selects that new presser and calls ``deleteSelection`` (the
+        confirm dialog is stubbed to Yes), confirming removal;
+      - saves, reloads into a fresh ``MainWindow``, and confirms the
+        surviving pressers (employeeId -> hoursPerShift) roundtrip
+        through SQLite unchanged;
+      - deletes an employee who is a presser and confirms the presser
+        record is cascaded away (no orphaned FK).
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from pressers_tab import PresserEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w.pressersTab.refreshTable()
+
+        if len(w.db.pressers) == 0:
+            errors.append("expected fuzz seed to populate pressers, got 0")
+            return errors
+
+        # --- Edit: change an existing presser's hours ---
+        fixtureId = sorted(w.db.pressers)[0]
+        editor = PresserEditWindow(fixtureId, w)
+        if editor.employeeCombo.currentData() != fixtureId:
+            errors.append(f"Edit prefill: employeeCombo={editor.employeeCombo.currentData()!r}, want {fixtureId!r}")
+        if editor.hoursEdit.text() != f"{w.db.pressers[fixtureId].hoursPerShift}":
+            errors.append(f"Edit prefill: hoursEdit={editor.hoursEdit.text()!r}, "
+                          f"want {w.db.pressers[fixtureId].hoursPerShift!r}")
+        editor.hoursEdit.setText("9.5")
+        editor.updateButton.click()
+        if fixtureId not in w.db.pressers:
+            errors.append(f"after Update: presser {fixtureId!r} vanished")
+        elif w.db.pressers[fixtureId].hoursPerShift != 9.5:
+            errors.append(f"after Update: hoursPerShift={w.db.pressers[fixtureId].hoursPerShift}, want 9.5")
+
+        # --- Create a new presser on an employee who isn't one yet ---
+        freeId = next((e for e in w.db.employees if e not in w.db.pressers), None)
+        if freeId is None:
+            errors.append("expected at least one non-presser employee in tiny seed")
+            return errors
+        newEditor = PresserEditWindow(None, w)
+        for i in range(newEditor.employeeCombo.count()):
+            if newEditor.employeeCombo.itemData(i) == freeId:
+                newEditor.employeeCombo.setCurrentIndex(i)
+                break
+        newEditor.hoursEdit.setText("7.0")
+        newEditor.createButton.click()
+        if freeId not in w.db.pressers:
+            errors.append(f"after Create: presser {freeId!r} missing from db.pressers")
+        elif w.db.pressers[freeId].hoursPerShift != 7.0:
+            errors.append(f"after Create: hoursPerShift={w.db.pressers[freeId].hoursPerShift}, want 7.0")
+
+        # --- Delete that presser via the tab (confirm dialog stubbed to Yes) ---
+        before = len(w.db.pressers)
+        w.pressersTab.setSelection([_presserLabelFor(w.db, freeId)])
+        w.pressersTab.deleteSelection()
+        if freeId in w.db.pressers:
+            errors.append(f"after Delete: presser {freeId!r} still present")
+        if len(w.db.pressers) != before - 1:
+            errors.append(f"after Delete: count {len(w.db.pressers)} != {before - 1}")
+
+        # --- save / reload roundtrip ---
+        expected = {e: p.hoursPerShift for e, p in w.db.pressers.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading pressers DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {e: p.hoursPerShift for e, p in w2.db.pressers.items()}
+            if got != expected:
+                errors.append(f"pressers roundtrip mismatch: expected {expected}, got {got}")
+
+        # --- deleting an employee via the Employee List tab cascades the presser
+        #     FK *and* re-renders the Pressers tab (drives the real UI path, not
+        #     db.delEmployee directly, so a missing tab refresh is caught here). ---
+        if w.db.pressers:
+            victim = sorted(w.db.pressers)[0]
+            emp = w.db.employees[victim]
+            subTab = (w.employeesTab.activeEmployeesTab if emp.status
+                      else w.employeesTab.inactiveEmployeesTab)
+            subTab.setSelection([victim])
+            subTab.deleteSelection()  # confirm dialog stubbed to Yes
+            if victim in w.db.pressers:
+                errors.append(f"after delete of employee {victim}: presser FK not cascaded")
+            if victim in w.pressersTab._idByLabel.values():
+                errors.append(f"after delete of employee {victim}: Pressers tab not refreshed (stale row)")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def _presserLabelFor(db, employeeId):
+    # Mirror PressersTab's column-0 label so the test can drive setSelection,
+    # which maps labels back to employeeIds.
+    from pressers_tab import _presserLabel
+    return _presserLabel(db, employeeId)
 
 
 def employees_tab_crud() -> list[str]:

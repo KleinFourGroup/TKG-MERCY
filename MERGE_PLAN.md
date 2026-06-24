@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell) and 43 (Press table + first schema/migration to db_version 5) have landed; next up is Step 44 (Pressers).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5) and 44 (Pressers table → db_version 6) have landed; next up is Step 45 (Shift Workweek).*
 
 ### 12.1 Step status
 
@@ -90,7 +90,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 41 | ✅ Done | Graduate `crash_fuzz` to smoke baseline (final fuzz_db invariant + dispatcher wire-in) — see §13.29 |
 | 42 | ✅ Done | Merge plan Step 42: Production and Scheduling tab shell (rename + nested sub-tab skeleton) — see §13.30 |
 | 43 | ✅ Done | Merge plan Step 43: Press table (full vertical slice) — see §13.30 |
-| 44 | ⬜ Planned | Production Scheduling: Pressers table + tab — see §13.30 |
+| 44 | ✅ Done | Merge plan Step 44: Pressers table (full vertical slice) — see §13.30 |
 | 45 | ⬜ Planned | Production Scheduling: Shift Workweek table + tab — see §13.30 |
 | 46 | ⬜ Planned | Production Scheduling: Client table + tab — see §13.30 |
 | 47 | ⬜ Planned | Production Scheduling: Order (shop order) table + tab — see §13.30 |

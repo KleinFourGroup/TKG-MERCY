@@ -48,14 +48,17 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error saving {name} = {getattr(db.globals, name)}: {repr(e)}")
 
-        def clearOld(dbName, currDict):
+        def clearOld(dbName, currDict, keyCol="name"):
+            # Delete rows whose single-column key is no longer in currDict. keyCol
+            # defaults to "name" (every name-keyed table); pass e.g. "employeeId"
+            # for tables keyed on a different scalar column.
             if self.dbFile is None:
                 raise RuntimeError('self.dbFile is None')
-            res = self.dbFile.execute(f"SELECT name FROM {dbName}")
+            res = self.dbFile.execute(f"SELECT {keyCol} FROM {dbName}")
             deleted = [vals for vals in res.fetchall() if not vals[0] in currDict]
             if len(deleted) > 0:
                 try:
-                    self.dbFile.executemany(f"DELETE FROM {dbName} WHERE name=?", deleted)
+                    self.dbFile.executemany(f"DELETE FROM {dbName} WHERE {keyCol}=?", deleted)
                     logging.info(f" * Deleting old entries {", ".join([f"{name[0]}" for name in deleted])}")
                 except Exception as e:
                     logging.error(f" * Error deleting old entries {", ".join([f"{name[0]}" for name in deleted])}: {repr(e)}")
@@ -400,3 +403,14 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("presses", db.presses)
+
+        # --- Production Scheduling: pressers (employeeId-keyed) ---
+        logging.info(f"Saving pressers to {self.filePath}")
+        for empId in db.pressers:
+            vals = db.pressers[empId].getTuple()
+            try:
+                self.dbFile.execute("INSERT OR REPLACE INTO pressers VALUES (?, ?)", vals)
+                logging.info(f" * Saving {vals}")
+            except Exception as e:
+                logging.error(f" * Error saving {vals}: {repr(e)}")
+        clearOld("pressers", db.pressers, "employeeId")

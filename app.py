@@ -87,6 +87,10 @@ class MainWindow(QWidget):
         self.pressesTab = PressesTab(self)
         self.schedulingConfigTab.addTab(self.pressesTab, "Presses")
 
+        from pressers_tab import PressersTab
+        self.pressersTab = PressersTab(self)
+        self.schedulingConfigTab.addTab(self.pressersTab, "Pressers")
+
         self.prodSchedTab.addTab(self.schedulingConfigTab, "Scheduling config")
 
         # Schedule group — the Production Schedule Report (Step 53).
@@ -168,6 +172,7 @@ class MainWindow(QWidget):
         self.productionTab.refresh()
         # Production Scheduling domain
         self.pressesTab.refreshTable()
+        self.pressersTab.refreshTable()
 
     def _loadPath(self, path: str) -> bool:
         # Shared entry point for loading a DB from a known path — used by the

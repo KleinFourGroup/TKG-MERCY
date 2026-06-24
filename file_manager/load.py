@@ -7,7 +7,7 @@ from records.employees import (
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press
+from records.scheduling import Press, Presser
 
 if TYPE_CHECKING:
     import sqlite3
@@ -286,3 +286,13 @@ class LoadMixin:
             db.presses[press.name] = press
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded press {press}")
+
+        # --- Production Scheduling: pressers ---
+        logging.info(f"Loading pressers from {self.filePath}")
+        res = self.dbFile.execute("SELECT * FROM pressers")
+        for values in res.fetchall():
+            presser = Presser(-1)
+            presser.fromTuple(values)
+            db.pressers[presser.employeeId] = presser
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded presser {presser}")

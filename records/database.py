@@ -9,7 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press
+from records.scheduling import Press, Presser
 
 
 class Database:
@@ -28,7 +28,8 @@ class Database:
                  notes: dict[int, EmployeeNotesDB],
                  holidays: ObservancesDB,
                  production: dict[tuple, ProductionRecord],
-                 presses: dict[str, Press]) -> None:
+                 presses: dict[str, Press],
+                 pressers: dict[int, Presser]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -44,6 +45,7 @@ class Database:
         self.holidays = holidays
         self.production = production
         self.presses = presses
+        self.pressers = pressers
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -276,6 +278,12 @@ class Database:
         if employeeID not in self.notes:
             raise RuntimeError('employeeID not in self.notes')
         del self.notes[employeeID]
+        # A presser is current config tied 1:1 to a live employee (unlike the
+        # historical production records, which intentionally survive), so drop the
+        # presser record too if this employee was one. Optional — not every
+        # employee is a presser — so this is a guarded delete, not a raise.
+        if employeeID in self.pressers:
+            del self.pressers[employeeID]
 
     def addEmployeeReviews(self, employeeReviews: EmployeeReviewsDB):
         if employeeReviews.idNum in self.reviews:
@@ -322,6 +330,28 @@ class Database:
         if name not in self.presses:
             raise RuntimeError('name not in self.presses')
         del self.presses[name]
+
+    # ---- Production Scheduling: pressers ---------------------------------------------------
+
+    def updatePresser(self, oldId, newId):
+        # Rekey the pressers dict when the presser is reassigned to a different
+        # employee, mirroring updateEmployee's rekey. employeeId is the PK; the
+        # hoursPerShift field is set directly on the record by the edit window.
+        # A new-id collision is rejected at the tab (PresserEditWindow.readData).
+        if not newId == oldId:
+            pressers = {newId if key == oldId else key: val for key, val in self.pressers.items()}
+            self.pressers = pressers
+            self.pressers[newId].employeeId = newId
+
+    def addPresser(self, presser: Presser):
+        if presser.employeeId in self.pressers:
+            raise RuntimeError('presser.employeeId already in self.pressers')
+        self.pressers[presser.employeeId] = presser
+
+    def delPresser(self, employeeId):
+        if employeeId not in self.pressers:
+            raise RuntimeError('employeeId not in self.pressers')
+        del self.pressers[employeeId]
 
     # ---- mergeFrom -------------------------------------------------------------------------
 
@@ -460,6 +490,7 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
+        {},
         {},
         {}
     )
