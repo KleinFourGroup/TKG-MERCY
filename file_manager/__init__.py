@@ -29,7 +29,9 @@ from .import_db import ImportMixin
 #        per working day; additive).
 #   v8 — Step 46: Sales subsystem. `clients` table added (name PK, transportDays
 #        INTEGER business days; additive).
-MERCY_DB_VERSION = 8
+#   v9 — Step 47: `orders` table added (orderNum PK; client + part FK names;
+#        quantity INTEGER, price REAL order total, dueDate ISO TEXT; additive).
+MERCY_DB_VERSION = 9
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -105,6 +107,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV6ToV7()
                 if dbVersion is not None and dbVersion < 8:
                     self._migrateV7ToV8()
+                if dbVersion is not None and dbVersion < 9:
+                    self._migrateV8ToV9()
                 self.dbFile.commit()
                 return True
 

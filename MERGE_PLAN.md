@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7) and 46 (Client table → db_version 8, first Sales-group table) have landed; next up is Step 47 (Order table, under Sales).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table) and 47 (Order table → db_version 9, with the first block-on-delete FK guards) have landed; next up is Step 48 (Part-Press Preference nested editor).*
 
 ### 12.1 Step status
 
@@ -93,7 +93,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 44 | ✅ Done | Merge plan Step 44: Pressers table (full vertical slice) — see §13.30 |
 | 45 | ✅ Done | Merge plan Step 45: Shift Workweek table (full vertical slice) — see §13.30 |
 | 46 | ✅ Done | Merge plan Step 46: Client table (full vertical slice) — see §13.30 |
-| 47 | ⬜ Planned | Production Scheduling: Order (shop order) table + tab — see §13.30 |
+| 47 | ✅ Done | Merge plan Step 47: Order (shop order) table (full vertical slice) — see §13.30 |
 | 48 | ⬜ Planned | Production Scheduling: Part-Press Preference nested editor — see §13.30 |
 | 49 | ⬜ Planned | Production Scheduling: Order Status nested editor — see §13.30 |
 | 50 | ⬜ Planned | Production Scheduling: scheduling-algorithm design round (addendum doc) — see §13.30 |

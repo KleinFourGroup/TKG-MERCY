@@ -58,7 +58,8 @@ def _seedTinyFuzzDB(w):
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
-    F.populateClients(db, rng, cfg["clients"])
+    clientNames = F.populateClients(db, rng, cfg["clients"])
+    F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
     return partNames, idNums, mixtureNames
 
 
@@ -841,6 +842,181 @@ def clients_tab_crud() -> list[str]:
             got = {name: w2.db.clients[name].transportDays for name in w2.db.clients}
             if got != expected:
                 errors.append(f"clients roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def orders_tab_crud() -> list[str]:
+    """Step 47: OrdersTab CRUD + FK combos + auto-suggest + block-on-delete + roundtrip.
+
+    Seeds tiny fuzz data (now populating clients, parts, and orders), then:
+      - confirms deleting a client/part an order references is BLOCKED (the
+        client/part and the order both survive);
+      - opens an Edit window on an order, confirms the order-number / client /
+        part / quantity prefill, changes quantity + price + part + renames the
+        order number, and confirms the rekey and field updates land;
+      - opens a *new* OrderEditWindow, confirms the order number auto-suggests
+        (and re-suggests when the client changes while untouched), then creates
+        an order with an explicit number;
+      - deletes that order via the tab;
+      - saves, reloads into a fresh MainWindow, and confirms every order's
+        fields roundtrip through SQLite unchanged.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from orders_tab import OrderEditWindow
+    from clients_tab import ClientEditWindow
+    from parts_tab import PartsEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        if len(w.db.orders) == 0:
+            errors.append("expected fuzz seed to populate orders, got 0")
+            return errors
+
+        fixtureNum = sorted(w.db.orders)[0]
+        fixture = w.db.orders[fixtureNum]
+        fixtureClient, fixturePart = fixture.client, fixture.part
+
+        # --- block-on-delete: a client referenced by an order can't be deleted ---
+        if fixtureClient in w.db.clients:
+            w.clientsTab.setSelection([fixtureClient])
+            w.clientsTab.deleteSelection()
+            if fixtureClient not in w.db.clients:
+                errors.append(f"block-on-delete: client {fixtureClient!r} was deleted despite order {fixtureNum!r}")
+            if fixtureNum not in w.db.orders:
+                errors.append(f"block-on-delete: order {fixtureNum!r} vanished when its client delete was attempted")
+
+        # --- block-on-delete: a part referenced by an order can't be deleted ---
+        if fixturePart in w.db.parts:
+            w.partsTab.setSelection([fixturePart])
+            w.partsTab.deleteSelection()
+            if fixturePart not in w.db.parts:
+                errors.append(f"block-on-delete: part {fixturePart!r} was deleted despite order {fixtureNum!r}")
+            if fixtureNum not in w.db.orders:
+                errors.append(f"block-on-delete: order {fixtureNum!r} vanished when its part delete was attempted")
+
+        # --- rename propagation must refresh the Orders table (Step 47 fix) ---
+        # Drive the real client/part edit windows; assert the rename lands in both
+        # the order *data* and the Orders *table view* (ordersTab.data). The
+        # view-refresh half guards the bug where db.updateClient/updatePart fixed up
+        # the order but no one called ordersTab.refreshTable().
+        def _orderRow(num):
+            return next((r for r in w.ordersTab.data if r[0] == num), None)
+
+        renamedClient = "Renamed Client Co"
+        ce = ClientEditWindow(fixtureClient, w)
+        ce.nameEdit.setText(renamedClient)
+        ce.updateButton.click()
+        if w.db.orders[fixtureNum].client != renamedClient:
+            errors.append(f"client rename did not propagate to order {fixtureNum!r} data")
+        crow = _orderRow(fixtureNum)
+        if crow is None or crow[1] != renamedClient:
+            errors.append(f"client rename did not refresh the Orders table (row={crow})")
+        fixtureClient = renamedClient
+
+        renamedPart = "Renamed Part Z"
+        pe = PartsEditWindow(fixturePart, w)
+        pe.nameEdit.setText(renamedPart)
+        pe.updateButton.click()
+        if w.db.orders[fixtureNum].part != renamedPart:
+            errors.append(f"part rename did not propagate to order {fixtureNum!r} data")
+        prow = _orderRow(fixtureNum)
+        if prow is None or prow[2] != renamedPart:
+            errors.append(f"part rename did not refresh the Orders table (row={prow})")
+        fixturePart = renamedPart
+
+        # --- Edit: rename order + change quantity / price / part ---
+        editor = OrderEditWindow(fixtureNum, w)
+        if editor.orderNumEdit.text() != fixtureNum:
+            errors.append(f"Edit prefill: orderNumEdit={editor.orderNumEdit.text()!r}, want {fixtureNum!r}")
+        if editor.clientCombo.currentText() != fixtureClient:
+            errors.append(f"Edit prefill: client={editor.clientCombo.currentText()!r}, want {fixtureClient!r}")
+        if editor.partCombo.currentText() != fixturePart:
+            errors.append(f"Edit prefill: part={editor.partCombo.currentText()!r}, want {fixturePart!r}")
+        otherParts = [p for p in sorted(w.db.parts) if p != fixturePart]
+        newPart = otherParts[0] if otherParts else fixturePart
+        renamed = "RENAMED-ORDER-001"
+        editor.orderNumEdit.setText(renamed)
+        editor.partCombo.setCurrentText(newPart)
+        editor.quantityEdit.setText("777")
+        editor.priceEdit.setText("1234.5")
+        editor.updateButton.click()
+        if renamed not in w.db.orders:
+            errors.append(f"after Update: {renamed!r} missing from db.orders")
+        else:
+            o = w.db.orders[renamed]
+            if (o.quantity, o.price, o.part) != (777, 1234.5, newPart):
+                errors.append(f"after Update: fields={(o.quantity, o.price, o.part)}, want (777, 1234.5, {newPart!r})")
+        if fixtureNum in w.db.orders:
+            errors.append(f"after Update: old key {fixtureNum!r} still present")
+
+        # --- Create a new order; confirm the order number auto-suggests ---
+        newEditor = OrderEditWindow(None, w)
+        suggested = newEditor.orderNumEdit.text()
+        if suggested.count("-") != 2 or not suggested.split("-")[-1].isdigit():
+            errors.append(f"auto-suggest order number malformed: {suggested!r}")
+        # Re-suggest when the client changes while the field is untouched.
+        clients = sorted(w.db.clients)
+        if len(clients) >= 2:
+            other = [c for c in clients if c != newEditor.clientCombo.currentText()][0]
+            newEditor.clientCombo.setCurrentText(other)
+            if newEditor.orderNumEdit.text() == suggested:
+                errors.append("auto-suggest did not refresh when the client changed")
+        newName = "SMOKE-NEW-ORDER"
+        newEditor.orderNumEdit.setText(newName)
+        newEditor.quantityEdit.setText("10")
+        newEditor.priceEdit.setText("99.0")
+        newEditor.createButton.click()
+        if newName not in w.db.orders:
+            errors.append(f"after Create: {newName!r} missing from db.orders")
+
+        # --- Delete that order via the tab ---
+        before = len(w.db.orders)
+        w.ordersTab.setSelection([newName])
+        w.ordersTab.deleteSelection()
+        if newName in w.db.orders:
+            errors.append(f"after Delete: {newName!r} still present")
+        if len(w.db.orders) != before - 1:
+            errors.append(f"after Delete: count {len(w.db.orders)} != {before - 1}")
+
+        # --- save / reload roundtrip (all fields) ---
+        expected = {num: o.getTuple() for num, o in w.db.orders.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading orders DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {num: o.getTuple() for num, o in w2.db.orders.items()}
+            if got != expected:
+                errors.append(f"orders roundtrip mismatch: expected {expected}, got {got}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

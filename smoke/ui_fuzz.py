@@ -102,7 +102,7 @@ def _seedFuzzData(w, rng):
     packagingByKind = {k: [] for k in F.PACKAGING_POOL}
     for name in db.packaging:
         packagingByKind[db.packaging[name].kind].append(name)
-    F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+    partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
     idNums = F.populateEmployees(db, rng, cfg["employees"], today)
     F.populateReviews(db, rng, idNums, today)
     F.populateTraining(db, rng, idNums, today)
@@ -113,7 +113,8 @@ def _seedFuzzData(w, rng):
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
-    F.populateClients(db, rng, cfg["clients"])
+    clientNames = F.populateClients(db, rng, cfg["clients"])
+    F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
 
 
 # Action kind tags. Tuples are (kind, target, label) so the dispatcher can

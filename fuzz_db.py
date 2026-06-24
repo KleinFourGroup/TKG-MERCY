@@ -50,20 +50,20 @@ from records.employees import (  # noqa: E402
 )
 from records.production import ProductionRecord  # noqa: E402
 from records.scheduling import Press, Presser, SHIFTS  # noqa: E402
-from records.sales import Client  # noqa: E402
+from records.sales import Client, Order, formatOrderNum  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------
 
 SCALES = {
     "tiny":   dict(materials=4,  mixtures=2,  packaging=5,  parts=3,
-                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3,  pressers=2,  clients=3),
+                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3,  pressers=2,  clients=3,  orders=4),
     "small":  dict(materials=6,  mixtures=3,  packaging=6,  parts=6,
-                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4,  pressers=4,  clients=5),
+                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4,  pressers=4,  clients=5,  orders=12),
     "medium": dict(materials=12, mixtures=5,  packaging=10, parts=20,
-                   employees=15, inventorySnapshots=2, productionDays=180, presses=6,  pressers=8,  clients=10),
+                   employees=15, inventorySnapshots=2, productionDays=180, presses=6,  pressers=8,  clients=10, orders=40),
     "large":  dict(materials=25, mixtures=10, packaging=18, parts=60,
-                   employees=40, inventorySnapshots=4, productionDays=540, presses=10, pressers=20, clients=25),
+                   employees=40, inventorySnapshots=4, productionDays=540, presses=10, pressers=20, clients=25, orders=120),
 }
 
 
@@ -527,6 +527,32 @@ def populateClients(db, rng, n):
     return names
 
 
+def populateOrders(db, rng, clientNames, partNames, n, today):
+    # `n` shop orders against the existing clients/parts. orderNum uses the real
+    # {client}-{part}-{6 digits} format (formatOrderNum) with a uniqueness retry so
+    # fuzz data looks like hand-entered data. Due dates land 1-90 days out; price is
+    # the order total. Needs at least one client and one part.
+    if not clientNames or not partNames:
+        return []
+    made = []
+    for _ in range(n):
+        client = rng.choice(clientNames)
+        part = rng.choice(partNames)
+        orderNum = formatOrderNum(client, part, rng.randint(0, 999999))
+        tries = 0
+        while orderNum in db.orders and tries < 50:
+            orderNum = formatOrderNum(client, part, rng.randint(0, 999999))
+            tries += 1
+        if orderNum in db.orders:
+            continue
+        quantity = rng.randint(50, 5000)
+        price = round(quantity * rng.uniform(0.5, 12.0), 2)
+        dueDate = today + datetime.timedelta(days=rng.randint(1, 90))
+        db.addOrder(Order(orderNum, client, part, quantity, price, dueDate))
+        made.append(orderNum)
+    return made
+
+
 def populateShiftWorkweek(db, rng):
     # Realistic Mon-Fri base for all three shifts (weekdays 0-4, Mon=0..Sun=6),
     # with an occasional Saturday (5) crew on shift 1. No scale knob — there are
@@ -593,6 +619,8 @@ def build(output: str, seed: int | None, scale: str):
     # Sales subsystem (Steps 46+).
     clientNames = populateClients(db, rng, cfg["clients"])
     print(f"  clients:   {len(clientNames)}")
+    orderNums = populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+    print(f"  orders:    {len(orderNums)}")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)

@@ -1,7 +1,7 @@
 """Legacy DB migration checks: ANIKA v1, BECKY v2, the merge path,
 the unified-MERCY v3->v4 (hours column), v4->v5 (presses table),
-v5->v6 (pressers table), v6->v7 (shift_workweek table) and v7->v8
-(clients table) migrations."""
+v5->v6 (pressers table), v6->v7 (shift_workweek table), v7->v8
+(clients table) and v8->v9 (orders table) migrations."""
 import glob
 import os
 import sys
@@ -16,7 +16,7 @@ def legacy_anika_migration() -> list[str]:
       - 2 mixtures: MixA with 3 materials, MixB with 1 material
       - 3 parts: PartA with 2 pads, PartB with 2 misc, PartC with 1 pad + 1 misc
     Expected post-open state:
-      - db_version = 8 (Case 3 stamps MERCY_DB_VERSION after the ANIKA normalization;
+      - db_version = 9 (Case 3 stamps MERCY_DB_VERSION after the ANIKA normalization;
         BECKY/production/scheduling/sales tables are created fresh at current shape)
       - mixture_components has 4 rows
       - part_pads has 3 rows, part_misc has 3 rows
@@ -105,8 +105,8 @@ def legacy_anika_migration() -> list[str]:
         # --- schema assertions ---
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"db_version expected 9, got {version}")
 
         mix_cols = [r[1] for r in conn.execute("PRAGMA table_info(mixtures)").fetchall()]
         if mix_cols != ["name"]:
@@ -217,7 +217,7 @@ def legacy_becky_migration() -> list[str]:
       - 1 orphan PTO row
       - 1 valid training / attendance / PTO row each to confirm sweep is selective
     Expected post-open state:
-      - db_version = 8
+      - db_version = 9
       - employees table has `shift INTEGER, fullTime INTEGER` as separate cols (15 total)
       - shift/fullTime split correctly for each seeded employee
       - reviews.details and notes.details are plain text (not b64)
@@ -297,8 +297,8 @@ def legacy_becky_migration() -> list[str]:
         # --- schema assertions ---
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"db_version expected 9, got {version}")
 
         emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employees)").fetchall()]
         expected_emp = ["idNum", "lastName", "firstName", "anniversary", "role",
@@ -579,9 +579,9 @@ def legacy_merge() -> list[str]:
 def mercy_v3_to_v4_migration() -> list[str]:
     """Seed a unified MERCY DB stamped at v3 with a pre-hours production row,
     open with current MERCY, verify the v3->v4 hours column is added and existing
-    data is preserved with hours=0. (The chain continues to v8; terminal
-    db_version is asserted as 8, and the v4->v5 presses / v5->v6 pressers /
-    v6->v7 shift_workweek / v7->v8 clients tables land too.)"""
+    data is preserved with hours=0. (The chain continues to v9; terminal
+    db_version is asserted as 9, and the v4->v5 presses / v5->v6 pressers /
+    v6->v7 shift_workweek / v7->v8 clients / v8->v9 orders tables land too.)"""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     import sqlite3
@@ -639,8 +639,8 @@ def mercy_v3_to_v4_migration() -> list[str]:
 
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"post-migration db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
         prod_cols = [r[1] for r in conn.execute("PRAGMA table_info(production)").fetchall()]
         if "hours" not in prod_cols:
             errors.append(f"production.hours missing after migration: cols={prod_cols}")
@@ -674,9 +674,9 @@ def mercy_v3_to_v4_migration() -> list[str]:
 def mercy_v4_to_v5_migration() -> list[str]:
     """Step 43: seed a unified MERCY DB stamped at v4 (no presses table),
     open with current MERCY, verify the v4->v5 presses table is created and
-    existing production data survives untouched. (The chain continues to v8;
-    terminal db_version is asserted as 8, and the v5->v6 pressers / v6->v7
-    shift_workweek / v7->v8 clients tables land too.)"""
+    existing production data survives untouched. (The chain continues to v9;
+    terminal db_version is asserted as 9, and the v5->v6 pressers / v6->v7
+    shift_workweek / v7->v8 clients / v8->v9 orders tables land too.)"""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     import sqlite3
@@ -734,8 +734,8 @@ def mercy_v4_to_v5_migration() -> list[str]:
 
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"post-migration db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
         tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
         if "presses" not in tables:
             errors.append(f"presses table missing after migration: tables={sorted(tables)}")
@@ -770,8 +770,8 @@ def mercy_v4_to_v5_migration() -> list[str]:
 def mercy_v5_to_v6_migration() -> list[str]:
     """Step 44: seed a unified MERCY DB stamped at v5 (presses table present,
     no pressers table), open with current MERCY, verify the pressers table is
-    created and db_version reaches 8 (the chain continues through v6->v7 / v7->v8),
-    with existing presses / production data surviving untouched."""
+    created and db_version reaches 9 (the chain continues through v6->v7 / v7->v8 /
+    v8->v9), with existing presses / production data surviving untouched."""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     import sqlite3
@@ -832,8 +832,8 @@ def mercy_v5_to_v6_migration() -> list[str]:
 
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"post-migration db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
         tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
         if "pressers" not in tables:
             errors.append(f"pressers table missing after migration: tables={sorted(tables)}")
@@ -874,9 +874,9 @@ def mercy_v5_to_v6_migration() -> list[str]:
 def mercy_v6_to_v7_migration() -> list[str]:
     """Step 45: seed a unified MERCY DB stamped at v6 (presses + pressers tables
     present, no shift_workweek table), open with current MERCY, verify the
-    shift_workweek table is created and db_version reaches 8 (the chain continues
-    through v7->v8), with existing presses / pressers / production data surviving
-    untouched."""
+    shift_workweek table is created and db_version reaches 9 (the chain continues
+    through v7->v8 / v8->v9), with existing presses / pressers / production data
+    surviving untouched."""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     import sqlite3
@@ -940,8 +940,8 @@ def mercy_v6_to_v7_migration() -> list[str]:
 
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"post-migration db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
         tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
         if "shift_workweek" not in tables:
             errors.append(f"shift_workweek table missing after migration: tables={sorted(tables)}")
@@ -987,8 +987,9 @@ def mercy_v6_to_v7_migration() -> list[str]:
 def mercy_v7_to_v8_migration() -> list[str]:
     """Step 46: seed a unified MERCY DB stamped at v7 (presses + pressers +
     shift_workweek tables present, no clients table), open with current MERCY,
-    verify the clients table is created, db_version is bumped to 8, and existing
-    presses / pressers / shift_workweek / production data survive untouched."""
+    verify the clients table is created and db_version reaches 9 (the chain
+    continues through v8->v9), with existing presses / pressers / shift_workweek /
+    production data surviving untouched."""
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     import sqlite3
@@ -1053,8 +1054,8 @@ def mercy_v7_to_v8_migration() -> list[str]:
 
         conn = sqlite3.connect(tmp.name)
         version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
-        if version is None or int(version[0]) != 8:
-            errors.append(f"post-migration db_version expected 8, got {version}")
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
         tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
         if "clients" not in tables:
             errors.append(f"clients table missing after migration: tables={sorted(tables)}")
@@ -1089,6 +1090,121 @@ def mercy_v7_to_v8_migration() -> list[str]:
             errors.append(f"expected 1 presser in-memory, got {len(w.db.pressers)}")
         if len(w.db.shiftWorkweek) != 1:
             errors.append(f"expected 1 shift workweek in-memory, got {len(w.db.shiftWorkweek)}")
+        if len(w.db.production) != 1:
+            errors.append(f"expected 1 production record in-memory, got {len(w.db.production)}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def mercy_v8_to_v9_migration() -> list[str]:
+    """Step 47: seed a unified MERCY DB stamped at v8 (clients + scheduling tables
+    present, no orders table), open with current MERCY, verify the orders table is
+    created, db_version is bumped to 9, and existing clients / presses / pressers /
+    shift_workweek / production data survive untouched."""
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import sqlite3
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        # Build a v8-shape MERCY DB by hand: full unified schema with the scheduling
+        # tables + clients populated, db_version=8, and NO orders table — exactly
+        # what a pre-Step-47 MERCY file looks like.
+        conn = sqlite3.connect(tmp.name)
+        conn.execute("CREATE TABLE globals(name PRIMARY KEY, value)")
+        conn.execute("INSERT INTO globals VALUES ('db_version', 8)")
+        conn.execute("CREATE TABLE materials(name PRIMARY KEY, cost, freight, SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, LOI, Plus50, Sub50Plus100, Sub100Plus200, Sub200Plus325, Sub325, otherChem)")
+        conn.execute("CREATE TABLE mixtures(name PRIMARY KEY)")
+        conn.execute("CREATE TABLE mixture_components(mixture, material, weight REAL, sort_order INTEGER, UNIQUE(mixture, material))")
+        conn.execute("CREATE TABLE packaging(name PRIMARY KEY, kind, cost)")
+        conn.execute("CREATE TABLE parts(name PRIMARY KEY, weight, mix, pressing, turning, fireScrap, box, piecesPerBox, pallet, boxesPerPallet, price, sales)")
+        conn.execute("CREATE TABLE part_pads(part, pad, padsPerBox INTEGER, sort_order INTEGER, UNIQUE(part, pad))")
+        conn.execute("CREATE TABLE part_misc(part, item, sort_order INTEGER, UNIQUE(part, item))")
+        conn.execute("CREATE TABLE materialInventory(name, date, cost, amount, UNIQUE(name, date))")
+        conn.execute("CREATE TABLE partInventory(name, date, cost, amount40, amount60, amount80, amount100, UNIQUE(name, date))")
+        conn.execute("CREATE TABLE employees(idNum PRIMARY KEY, lastName, firstName, anniversary, role, shift INTEGER, fullTime INTEGER, addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail, status)")
+        conn.execute("CREATE TABLE reviews(idNum, date, nextReview, details TEXT, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE training(idNum, training, date, comment, UNIQUE(idNum, training, date))")
+        conn.execute("CREATE TABLE attendance(idNum, date, reason, value, UNIQUE(idNum, date))")
+        conn.execute("CREATE TABLE PTO(idNum, start, end, hours, UNIQUE(idNum, start, end))")
+        conn.execute("CREATE TABLE notes(idNum, date, time, details TEXT, UNIQUE(idNum, date, time))")
+        conn.execute("CREATE TABLE holidays(holiday PRIMARY KEY, month)")
+        conn.execute("CREATE TABLE observances(holiday, shift, date, UNIQUE(holiday, shift, date))")
+        conn.execute(
+            "CREATE TABLE production("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "employeeId INTEGER, date TEXT, shift INTEGER, "
+            "targetType TEXT, targetName TEXT, action TEXT, "
+            "quantity REAL, scrapQuantity REAL DEFAULT 0, hours REAL DEFAULT 0, "
+            "UNIQUE(employeeId, date, shift, targetType, targetName, action))"
+        )
+        conn.execute(
+            "INSERT INTO production(employeeId, date, shift, targetType, targetName, action, quantity, scrapQuantity, hours) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (101, "2026-04-15", 1, "mix", "MixA", "Batching", 7.5, 0, 2.0)
+        )
+        # v8 scheduling + clients tables (each with data) but deliberately no orders table.
+        conn.execute("CREATE TABLE presses(name PRIMARY KEY)")
+        conn.execute("INSERT INTO presses VALUES ('Press 1')")
+        conn.execute("CREATE TABLE pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
+        conn.execute("INSERT INTO pressers VALUES (101, 8.0)")
+        conn.execute("CREATE TABLE shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
+        conn.execute("INSERT INTO shift_workweek VALUES (1, 0)")
+        conn.execute("CREATE TABLE clients(name PRIMARY KEY, transportDays INTEGER)")
+        conn.execute("INSERT INTO clients VALUES ('Acme Ceramics', 5)")
+        conn.commit()
+        conn.close()
+
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on v8 MERCY DB")
+            return errors
+
+        conn = sqlite3.connect(tmp.name)
+        version = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
+        if version is None or int(version[0]) != 9:
+            errors.append(f"post-migration db_version expected 9, got {version}")
+        tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+        if "orders" not in tables:
+            errors.append(f"orders table missing after migration: tables={sorted(tables)}")
+        else:
+            order_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+            if order_count != 0:
+                errors.append(f"orders table should be empty after migration, has {order_count} rows")
+        client_row = conn.execute("SELECT name, transportDays FROM clients").fetchone()
+        if client_row != ("Acme Ceramics", 5):
+            errors.append(f"clients row not preserved after migration: got {client_row}")
+        press_row = conn.execute("SELECT name FROM presses").fetchone()
+        if press_row != ("Press 1",):
+            errors.append(f"presses row not preserved after migration: got {press_row}")
+        row = conn.execute(
+            "SELECT quantity, scrapQuantity, hours FROM production WHERE employeeId=101"
+        ).fetchone()
+        if row != (7.5, 0, 2.0):
+            errors.append(f"production row after migration: expected (7.5, 0, 2.0), got {row}")
+        conn.close()
+
+        # loadFile should reconstruct an empty orders collection and keep the
+        # existing client / scheduling / production records.
+        w.fileManager.loadFile()
+        if len(w.db.orders) != 0:
+            errors.append(f"expected 0 in-memory orders after migration, got {len(w.db.orders)}")
+        if len(w.db.clients) != 1:
+            errors.append(f"expected 1 client in-memory, got {len(w.db.clients)}")
+        if len(w.db.presses) != 1:
+            errors.append(f"expected 1 press in-memory, got {len(w.db.presses)}")
         if len(w.db.production) != 1:
             errors.append(f"expected 1 production record in-memory, got {len(w.db.production)}")
     finally:

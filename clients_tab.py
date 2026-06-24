@@ -11,9 +11,8 @@ import logging
 class ClientsTab(QWidget):
     # Flat CRUD list of clients (Sales, Step 46). Clients are keyed by unique name
     # and carry a transportDays field (typical shipment transit in business days).
-    # Nothing references a client yet, so delete is unconditional (Step 47's orders
-    # will add a usage check, like packaging). Lives under "Production and
-    # Scheduling" -> "Sales" -> "Clients".
+    # Delete is blocked when an order references the client (Step 47, like
+    # packaging). Lives under "Production and Scheduling" -> "Sales" -> "Clients".
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
@@ -66,9 +65,12 @@ class ClientsTab(QWidget):
         for client in self.selection:
             confirm = QMessageBox.question(self, f"Delete {client}?", f"Are you sure you want to delete {client}?")
             if confirm == QMessageBox.StandardButton.Yes:
-                self.mainApp.db.delClient(client)
-                self.refreshTable()
-                QMessageBox.information(self.mainApp, "Success!", f"Deleted client {client}")
+                usedIn = self.mainApp.db.delClient(client)
+                if len(usedIn) == 0:
+                    self.refreshTable()
+                    QMessageBox.information(self.mainApp, "Success!", f"Deleted client {client}")
+                else:
+                    errorMessage(self.mainApp, [f"{client} is used in order {item}!" for item in usedIn])
 
     def refreshTable(self):
         self.genTableData()
@@ -147,6 +149,9 @@ class ClientEditWindow(QWidget):
             if isNone:
                 self.item = None
             self.mainApp.clientsTab.refreshTable()
+            # A client rename propagates to any order referencing it
+            # (db.updateClient), so refresh the Orders table too.
+            self.mainApp.ordersTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)

@@ -10,7 +10,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek
-from records.sales import Client
+from records.sales import Client, Order
 
 
 class Database:
@@ -32,7 +32,8 @@ class Database:
                  presses: dict[str, Press],
                  pressers: dict[int, Presser],
                  shiftWorkweek: dict[int, ShiftWorkweek],
-                 clients: dict[str, Client]) -> None:
+                 clients: dict[str, Client],
+                 orders: dict[str, Order]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -51,6 +52,7 @@ class Database:
         self.pressers = pressers
         self.shiftWorkweek = shiftWorkweek
         self.clients = clients
+        self.orders = orders
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -65,6 +67,11 @@ class Database:
             parts = {name if key == entry else key:val for key, val in self.parts.items()}
             self.parts = parts
             self.parts[name].name = name
+            # Propagate the rename to any order that references this part (Step 47),
+            # the way updatePackaging fixes up parts.
+            for order in self.orders.values():
+                if order.part == entry:
+                    order.part = name
 
     def addPart(self, part: Part):
         if part.name in self.parts:
@@ -75,7 +82,14 @@ class Database:
     def delPart(self, name):
         if name not in self.parts:
             raise RuntimeError('name not in self.parts')
-        del self.parts[name]
+        # Refuse to delete a part an order still references (block-on-delete, like
+        # delPackaging — Step 47). Production / inventory references intentionally
+        # do NOT block; those historical records are meant to survive. Returns the
+        # referencing order numbers (empty list = nothing referenced it, deleted).
+        usedIn = [num for num, order in self.orders.items() if order.part == name]
+        if len(usedIn) == 0:
+            del self.parts[name]
+        return usedIn
 
     def updatePackaging(self, entry, name):
         if not name == entry:
@@ -381,13 +395,15 @@ class Database:
     def updateClient(self, entry, name):
         # Rekey the clients dict on rename, mirroring updatePackaging/updateMaterial.
         # The transportDays field is set directly on the record by the edit window.
-        # Nothing references a client by name yet, so there are no cross-table fixups
-        # (Step 47's orders will add an order->client rekey here, like updatePackaging
-        # fixes up parts). Name-collision is rejected at the tab (ClientEditWindow.readData).
+        # Name-collision is rejected at the tab (ClientEditWindow.readData).
         if not name == entry:
             clients = {name if key == entry else key: val for key, val in self.clients.items()}
             self.clients = clients
             self.clients[name].name = name
+            # Propagate the rename to any order that references this client (Step 47).
+            for order in self.orders.values():
+                if order.client == entry:
+                    order.client = name
 
     def addClient(self, client: Client):
         if client.name in self.clients:
@@ -397,7 +413,35 @@ class Database:
     def delClient(self, name):
         if name not in self.clients:
             raise RuntimeError('name not in self.clients')
-        del self.clients[name]
+        # Refuse to delete a client an order still references (block-on-delete, like
+        # delPackaging — Step 47). Returns the referencing order numbers (empty
+        # list = nothing referenced it, deleted).
+        usedIn = [num for num, order in self.orders.items() if order.client == name]
+        if len(usedIn) == 0:
+            del self.clients[name]
+        return usedIn
+
+    # ---- Sales: orders ---------------------------------------------------------------------
+
+    def updateOrder(self, oldNum, newNum):
+        # Rekey the orders dict when the order number changes (orderNum is the PK),
+        # mirroring updateEmployee's rekey. The client / part / quantity / price /
+        # dueDate fields are set directly on the record by the edit window. A
+        # new-number collision is rejected at the tab (OrderEditWindow.readData).
+        if not newNum == oldNum:
+            orders = {newNum if key == oldNum else key: val for key, val in self.orders.items()}
+            self.orders = orders
+            self.orders[newNum].orderNum = newNum
+
+    def addOrder(self, order: Order):
+        if order.orderNum in self.orders:
+            raise RuntimeError('order.orderNum already in self.orders')
+        self.orders[order.orderNum] = order
+
+    def delOrder(self, orderNum):
+        if orderNum not in self.orders:
+            raise RuntimeError('orderNum not in self.orders')
+        del self.orders[orderNum]
 
     # ---- mergeFrom -------------------------------------------------------------------------
 
@@ -536,6 +580,7 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
+        {},
         {},
         {},
         {},

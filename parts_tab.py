@@ -106,9 +106,12 @@ class PartsTab(QWidget):
             confirm = QMessageBox.question(self, f"Delete {part}?", f"Are you sure you want to delete {part}?")
 
             if confirm == QMessageBox.StandardButton.Yes:
-                self.mainApp.db.delPart(part)
-                self.refreshTable()
-                QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
+                usedIn = self.mainApp.db.delPart(part)
+                if len(usedIn) == 0:
+                    self.refreshTable()
+                    QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
+                else:
+                    errorMessage(self.mainApp, [f"{part} is used in order {item}!" for item in usedIn])
 
     def reportSales(self):
         path = tempReportPath("sales")
@@ -348,6 +351,9 @@ class PartsEditWindow(QWidget):
             if isNone:
                 self.part = None
             self.mainApp.partsTab.refreshTable()
+            # A part rename propagates to any order referencing it (db.updatePart),
+            # so refresh the Orders table too (like packaging refreshes parts).
+            self.mainApp.ordersTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)

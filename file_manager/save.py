@@ -448,3 +448,14 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("clients", db.clients)
+
+        # --- Sales: orders (orderNum-keyed) ---
+        logging.info(f"Saving orders to {self.filePath}")
+        for orderNum in db.orders:
+            vals = db.orders[orderNum].getTuple()
+            try:
+                self.dbFile.execute("INSERT OR REPLACE INTO orders VALUES (?, ?, ?, ?, ?, ?)", vals)
+                logging.info(f" * Saving {vals}")
+            except Exception as e:
+                logging.error(f" * Error saving {vals}: {repr(e)}")
+        clearOld("orders", db.orders, "orderNum")

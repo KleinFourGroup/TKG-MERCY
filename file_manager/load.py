@@ -8,7 +8,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek
-from records.sales import Client
+from records.sales import Client, Order
 
 if TYPE_CHECKING:
     import sqlite3
@@ -318,3 +318,13 @@ class LoadMixin:
             db.clients[client.name] = client
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded client {client}")
+
+        # --- Sales: orders ---
+        logging.info(f"Loading orders from {self.filePath}")
+        res = self.dbFile.execute("SELECT * FROM orders")
+        for values in res.fetchall():
+            order = Order("ERROR")
+            order.fromTuple(values)
+            db.orders[order.orderNum] = order
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded order {order}")

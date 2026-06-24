@@ -271,3 +271,14 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS clients(name PRIMARY KEY, transportDays INTEGER)")
         self._setDbVersion(8)
         logging.info(" --> v7->v8 migration complete")
+
+    def _migrateV8ToV9(self):
+        # Sales subsystem (Step 47): add the (initially empty) `orders` table.
+        # Same additive + idempotent shape as v4->v5 .. v7->v8 — no existing data is
+        # touched, no backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v8->v9 migration: add orders table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS orders(orderNum PRIMARY KEY, client, part, quantity INTEGER, price REAL, dueDate)")
+        self._setDbVersion(9)
+        logging.info(" --> v8->v9 migration complete")
