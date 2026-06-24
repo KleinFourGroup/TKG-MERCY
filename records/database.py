@@ -9,7 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser
+from records.scheduling import Press, Presser, ShiftWorkweek
 
 
 class Database:
@@ -29,7 +29,8 @@ class Database:
                  holidays: ObservancesDB,
                  production: dict[tuple, ProductionRecord],
                  presses: dict[str, Press],
-                 pressers: dict[int, Presser]) -> None:
+                 pressers: dict[int, Presser],
+                 shiftWorkweek: dict[int, ShiftWorkweek]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -46,6 +47,7 @@ class Database:
         self.production = production
         self.presses = presses
         self.pressers = pressers
+        self.shiftWorkweek = shiftWorkweek
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -353,6 +355,24 @@ class Database:
             raise RuntimeError('employeeId not in self.pressers')
         del self.pressers[employeeId]
 
+    # ---- Production Scheduling: shift workweek ---------------------------------------------
+
+    def setShiftWorkday(self, shift, weekday, working):
+        # Toggle one (shift, weekday) working day. Keeps self.shiftWorkweek in
+        # exact lockstep with the persisted presence rows: a shift entry exists
+        # only while it has >= 1 working day, so an all-cleared shift drops out
+        # (and an empty DB has an empty dict — same shape as presses/pressers).
+        # Shifts aren't created/deleted, so there's no add/del; the grid tab just
+        # flips cells through here.
+        if working:
+            if shift not in self.shiftWorkweek:
+                self.shiftWorkweek[shift] = ShiftWorkweek(shift)
+            self.shiftWorkweek[shift].setDay(weekday, True)
+        elif shift in self.shiftWorkweek:
+            self.shiftWorkweek[shift].setDay(weekday, False)
+            if not self.shiftWorkweek[shift].days:
+                del self.shiftWorkweek[shift]
+
     # ---- mergeFrom -------------------------------------------------------------------------
 
     def planMergeFrom(self, other: "Database") -> dict:
@@ -490,6 +510,7 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
+        {},
         {},
         {},
         {}

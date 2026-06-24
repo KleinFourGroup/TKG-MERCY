@@ -81,6 +81,7 @@ class SchemaMixin:
             raise RuntimeError('self.dbFile is None')
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
 
     def _setDbVersion(self, version: int):
         if self.dbFile is None:

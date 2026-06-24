@@ -57,6 +57,7 @@ def _seedTinyFuzzDB(w):
     F.populateHolidays(db, rng, today)
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
+    F.populateShiftWorkweek(db, rng)
     return partNames, idNums, mixtureNames
 
 
@@ -879,6 +880,103 @@ def _presserLabelFor(db, employeeId):
     # which maps labels back to employeeIds.
     from pressers_tab import _presserLabel
     return _presserLabel(db, employeeId)
+
+
+def shift_workweek_roundtrip() -> list[str]:
+    """Step 45: WorkweekTab grid toggles + save/reload roundtrip.
+
+    Seeds tiny fuzz data (which now seeds Mon-Fri for all three shifts), then
+    drives the WorkweekTab checkbox grid the way a user would:
+      - asserts every checkbox state matches db.shiftWorkweek after refresh;
+      - unchecks a working day and confirms db.setShiftWorkday cleared it;
+      - checks a non-working day (Sunday) and confirms it was added;
+      - clears every day of one shift and confirms that shift drops out of
+        db.shiftWorkweek entirely (the presence-row invariant — no empty entry);
+      - saves, reloads into a fresh MainWindow, and confirms the workweek
+        roundtrips through SQLite unchanged (exercises the row-level orphan
+        sweep on the cleared days / dropped shift).
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records.scheduling import SHIFTS
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w.workweekTab.refreshTable()
+
+        tab = w.workweekTab
+        db = w.db
+        if len(db.shiftWorkweek) == 0:
+            errors.append("expected fuzz seed to populate shift workweek, got 0 shifts")
+            return errors
+
+        # --- grid mirrors db after refresh ---
+        for shift in SHIFTS:
+            working = db.shiftWorkweek[shift].days if shift in db.shiftWorkweek else set()
+            for weekday, chk in tab.checks[shift].items():
+                if chk.isChecked() != (weekday in working):
+                    errors.append(f"grid/db mismatch shift {shift} weekday {weekday}: "
+                                  f"checkbox={chk.isChecked()} db={weekday in working}")
+
+        # Preconditions from the deterministic Mon-Fri seed.
+        if 1 not in db.shiftWorkweek or 0 not in db.shiftWorkweek[1].days:
+            errors.append("precondition: expected shift 1 to work Monday (weekday 0) after seed")
+            return errors
+
+        # --- uncheck Monday (weekday 0) on shift 1 via the checkbox (toggled -> db) ---
+        tab.checks[1][0].setChecked(False)
+        if 1 in db.shiftWorkweek and 0 in db.shiftWorkweek[1].days:
+            errors.append("after uncheck: shift 1 Monday still set in db")
+
+        # --- check Sunday (weekday 6) on shift 2 via the checkbox ---
+        tab.checks[2][6].setChecked(True)
+        if 2 not in db.shiftWorkweek or 6 not in db.shiftWorkweek[2].days:
+            errors.append("after check: shift 2 Sunday not set in db")
+
+        # --- clear every day of shift 3: the whole entry should drop out ---
+        for weekday in range(7):
+            tab.checks[3][weekday].setChecked(False)
+        if 3 in db.shiftWorkweek:
+            errors.append(f"after clearing all days: shift 3 still in db.shiftWorkweek "
+                          f"(days={db.shiftWorkweek[3].days})")
+
+        # --- save / reload roundtrip ---
+        expected = {s: set(ww.days) for s, ww in db.shiftWorkweek.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading workweek DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {s: set(ww.days) for s, ww in w2.db.shiftWorkweek.items()}
+            if got != expected:
+                errors.append(f"shift workweek roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
 
 
 def employees_tab_crud() -> list[str]:

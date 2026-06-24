@@ -112,6 +112,7 @@ def _seedFuzzData(w, rng):
     F.populateHolidays(db, rng, today)
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
+    F.populateShiftWorkweek(db, rng)
 
 
 # Action kind tags. Tuples are (kind, target, label) so the dispatcher can

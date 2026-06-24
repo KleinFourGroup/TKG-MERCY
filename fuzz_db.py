@@ -49,7 +49,7 @@ from records.employees import (  # noqa: E402
     EmployeePTODB, EmployeeNotesDB,
 )
 from records.production import ProductionRecord  # noqa: E402
-from records.scheduling import Press, Presser  # noqa: E402
+from records.scheduling import Press, Presser, SHIFTS  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------
@@ -507,6 +507,18 @@ def populatePressers(db, rng, idNums, n):
     return chosen
 
 
+def populateShiftWorkweek(db, rng):
+    # Realistic Mon-Fri base for all three shifts (weekdays 0-4, Mon=0..Sun=6),
+    # with an occasional Saturday (5) crew on shift 1. No scale knob — there are
+    # always exactly the three fixed shifts. Fresh/migrated DBs land blank; this
+    # only fills the fuzzer's demo data so the scheduler/report have a workweek.
+    for shift in SHIFTS:
+        for weekday in range(5):  # Mon-Fri
+            db.setShiftWorkday(shift, weekday, True)
+        if shift == 1 and rng.random() < 0.5:
+            db.setShiftWorkday(shift, 5, True)  # Saturday crew on first shift
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -555,6 +567,8 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  presses:   {len(pressNames)}")
     presserIds = populatePressers(db, rng, idNums, cfg["pressers"])
     print(f"  pressers:  {len(presserIds)}")
+    populateShiftWorkweek(db, rng)
+    print(f"  workweek:  {len(db.shiftWorkweek)} shifts configured")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)

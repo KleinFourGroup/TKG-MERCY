@@ -25,7 +25,9 @@ from .import_db import ImportMixin
 #        first of ~7 new scheduling/sales tables landing across Steps 43–49).
 #   v6 — Step 44: `pressers` table added (employeeId FK -> employees.idNum,
 #        hoursPerShift REAL; additive).
-MERCY_DB_VERSION = 6
+#   v7 — Step 45: `shift_workweek` table added (one (shift, weekday) presence row
+#        per working day; additive).
+MERCY_DB_VERSION = 7
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -96,6 +98,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV4ToV5()
                 if dbVersion is not None and dbVersion < 6:
                     self._migrateV5ToV6()
+                if dbVersion is not None and dbVersion < 7:
+                    self._migrateV6ToV7()
                 self.dbFile.commit()
                 return True
 

@@ -7,7 +7,7 @@ from records.employees import (
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser
+from records.scheduling import Press, Presser, ShiftWorkweek
 
 if TYPE_CHECKING:
     import sqlite3
@@ -296,3 +296,14 @@ class LoadMixin:
             db.pressers[presser.employeeId] = presser
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded presser {presser}")
+
+        # --- Production Scheduling: shift workweek ---
+        # Each (shift, weekday) row is one working day; rebuild the per-shift
+        # ShiftWorkweek on demand so a shift with no rows simply has no entry.
+        logging.info(f"Loading shift workweek from {self.filePath}")
+        res = self.dbFile.execute("SELECT shift, weekday FROM shift_workweek")
+        for (shift, weekday) in res.fetchall():
+            if shift not in db.shiftWorkweek:
+                db.shiftWorkweek[shift] = ShiftWorkweek(shift)
+            db.shiftWorkweek[shift].days.add(weekday)
+            logging.info(f" * Loaded workweek ({shift}, {weekday})")

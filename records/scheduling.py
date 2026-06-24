@@ -1,6 +1,10 @@
 # Production Scheduling subsystem record classes (spec §3, MERGE_PLAN §13.30).
 # Aggregated into Database behind the records/ re-export shim. New scheduling
-# record types (ShiftWorkweek, PartPressPref) land here in later steps.
+# record types (PartPressPref) land here in later steps.
+
+# The three production shifts are fixed (matching Employee.shift, observances,
+# and production — all of which use 1/2/3); nobody creates or deletes a shift.
+SHIFTS = (1, 2, 3)
 
 
 class Press:
@@ -39,3 +43,33 @@ class Presser:
 
     def __str__(self) -> str:
         return "({}, {})".format(self.employeeId, self.hoursPerShift)
+
+
+class ShiftWorkweek:
+    # Which weekdays a single shift normally works (spec §3.2). Presence-based:
+    # `days` holds the weekday integers the shift works (Mon=0..Sun=6, matching
+    # date.weekday() so Step 51's shift-works-on-date helper can compare directly);
+    # a weekday's absence means the shift is off that day. One ShiftWorkweek per
+    # shift, and the three shifts are fixed (see SHIFTS). Stable over time — no
+    # effective-dating in v1. Like Press/Presser, a flat reference record with no
+    # `db` back-reference. Persisted as one (shift, weekday) row per working day in
+    # the `shift_workweek` table, so a shift with no working days has no rows.
+    def __init__(self, shift, days=None) -> None:
+        self.shift = shift
+        self.days: set[int] = set(days) if days is not None else set()
+
+    def worksOn(self, weekday) -> bool:
+        return weekday in self.days
+
+    def setDay(self, weekday, working) -> None:
+        if working:
+            self.days.add(weekday)
+        else:
+            self.days.discard(weekday)
+
+    def getTuples(self):
+        # One (shift, weekday) presence row per working day, weekday-sorted.
+        return [(self.shift, weekday) for weekday in sorted(self.days)]
+
+    def __str__(self) -> str:
+        return "({}, {})".format(self.shift, sorted(self.days))

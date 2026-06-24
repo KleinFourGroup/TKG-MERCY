@@ -249,3 +249,14 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
         self._setDbVersion(6)
         logging.info(" --> v5->v6 migration complete")
+
+    def _migrateV6ToV7(self):
+        # Production Scheduling (Step 45): add the (initially empty) `shift_workweek`
+        # table. Same additive + idempotent shape as v4->v5 / v5->v6 — no existing
+        # data is touched, no backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v6->v7 migration: add shift_workweek table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
+        self._setDbVersion(7)
+        logging.info(" --> v6->v7 migration complete")

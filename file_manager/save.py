@@ -414,3 +414,26 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("pressers", db.pressers, "employeeId")
+
+        # --- Production Scheduling: shift workweek ((shift, weekday) presence rows) ---
+        # Composite-key table like mixture_components / observances, so the single-col
+        # clearOld helper doesn't fit — re-insert every set day, then sweep rows whose
+        # (shift, weekday) is no longer set in memory (covers both cleared days and
+        # whole shifts that dropped out of db.shiftWorkweek).
+        logging.info(f"Saving shift workweek to {self.filePath}")
+        for shift in db.shiftWorkweek:
+            for vals in db.shiftWorkweek[shift].getTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO shift_workweek VALUES (?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT shift, weekday FROM shift_workweek")
+        deleted = [row for row in res.fetchall()
+                   if row[0] not in db.shiftWorkweek or row[1] not in db.shiftWorkweek[row[0]].days]
+        if len(deleted) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM shift_workweek WHERE (shift, weekday)=(?, ?)", deleted)
+                logging.info(f" * Deleting old entries {deleted}")
+            except Exception as e:
+                logging.error(f" * Error deleting old entries {deleted}: {repr(e)}")

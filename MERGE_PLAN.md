@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5) and 44 (Pressers table → db_version 6) have landed; next up is Step 45 (Shift Workweek).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6) and 45 (Shift Workweek → db_version 7) have landed; next up is Step 46 (Client table, under Sales).*
 
 ### 12.1 Step status
 
@@ -91,7 +91,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 42 | ✅ Done | Merge plan Step 42: Production and Scheduling tab shell (rename + nested sub-tab skeleton) — see §13.30 |
 | 43 | ✅ Done | Merge plan Step 43: Press table (full vertical slice) — see §13.30 |
 | 44 | ✅ Done | Merge plan Step 44: Pressers table (full vertical slice) — see §13.30 |
-| 45 | ⬜ Planned | Production Scheduling: Shift Workweek table + tab — see §13.30 |
+| 45 | ✅ Done | Merge plan Step 45: Shift Workweek table (full vertical slice) — see §13.30 |
 | 46 | ⬜ Planned | Production Scheduling: Client table + tab — see §13.30 |
 | 47 | ⬜ Planned | Production Scheduling: Order (shop order) table + tab — see §13.30 |
 | 48 | ⬜ Planned | Production Scheduling: Part-Press Preference nested editor — see §13.30 |
@@ -279,7 +279,7 @@ New post-release subsystem: order tracking plus a **Production Schedule Report**
 
 **What "full vertical slice" means for the table steps (43–47):** one commit each that lands the record class (`records/scheduling.py` or `records/sales.py`), the `CREATE TABLE` in `file_manager/schema.py`, an additive idempotent migration in `file_manager/migrate.py` with a `db_version` bump, the save/load mixin additions, `fuzz_db.py` population so the table stays fully populated, a CRUD tab wired into `app.py`, a `smoke/` CRUD-roundtrip check, and a `crash_fuzz` dispatcher wire-in so the UI fuzzer exercises the new tab. Migrations are additive (`CREATE TABLE IF NOT EXISTS`), so the chain replays cleanly — Step 54 re-runs the whole chain against a real DB.
 
-**Manual UI gate** (per the standing rule that smoke can't cover combo visibility / nested-editor rebuild / selection logic): Steps **42, 48, 49, 53** are the Qt-UI-heavy ones — pause for Matthew's manual sweep before committing each.
+**Manual UI gate** (per the standing rule that smoke can't cover combo visibility / nested-editor rebuild / selection logic): Steps **42, 45, 48, 49, 53** are the Qt-UI-heavy ones — pause for Matthew's manual sweep before committing each. (Step 45 was added to this list at build time: its fixed shift×weekday checkbox grid is a custom widget, not the flat-CRUD template, so it earned a sweep.)
 
 **Two design rounds, as the spec requires:** Step 42 realizes the already-approved UI layout from the spec's §7, so it's implementation rather than a fresh design pass. Step 50 is a genuine design gate — the scheduling heuristic doesn't exist yet, so it lands as a reviewable addendum doc before Steps 51–53 build on a blessed approach. If Step 52 turns out large at review time, split it sub-step-style (à la Step 7 / Step 36): primitives are already carved off into Step 51 to keep the core's surface small.
 
