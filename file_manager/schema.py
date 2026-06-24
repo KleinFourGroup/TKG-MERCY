@@ -83,6 +83,17 @@ class SchemaMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
 
+    def _createSalesTables(self):
+        # Sales subsystem tables (spec §3; added incrementally from Step 46). Sibling
+        # of _createSchedulingTables, split out to mirror the records/sales.py vs
+        # records/scheduling.py module split. Called on the same fresh-schema paths;
+        # existing MERCY DBs reach the same shape via the v7->v8+ migrations. All
+        # additive — CREATE TABLE IF NOT EXISTS — so the chain replays cleanly. The
+        # remaining sales tables (orders, order_status) land here in Steps 47 / 49.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS clients(name PRIMARY KEY, transportDays INTEGER)")
+
     def _setDbVersion(self, version: int):
         if self.dbFile is None:
             raise RuntimeError('self.dbFile is None')

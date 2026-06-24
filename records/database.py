@@ -10,6 +10,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek
+from records.sales import Client
 
 
 class Database:
@@ -30,7 +31,8 @@ class Database:
                  production: dict[tuple, ProductionRecord],
                  presses: dict[str, Press],
                  pressers: dict[int, Presser],
-                 shiftWorkweek: dict[int, ShiftWorkweek]) -> None:
+                 shiftWorkweek: dict[int, ShiftWorkweek],
+                 clients: dict[str, Client]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -48,6 +50,7 @@ class Database:
         self.presses = presses
         self.pressers = pressers
         self.shiftWorkweek = shiftWorkweek
+        self.clients = clients
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -373,6 +376,29 @@ class Database:
             if not self.shiftWorkweek[shift].days:
                 del self.shiftWorkweek[shift]
 
+    # ---- Sales: clients --------------------------------------------------------------------
+
+    def updateClient(self, entry, name):
+        # Rekey the clients dict on rename, mirroring updatePackaging/updateMaterial.
+        # The transportDays field is set directly on the record by the edit window.
+        # Nothing references a client by name yet, so there are no cross-table fixups
+        # (Step 47's orders will add an order->client rekey here, like updatePackaging
+        # fixes up parts). Name-collision is rejected at the tab (ClientEditWindow.readData).
+        if not name == entry:
+            clients = {name if key == entry else key: val for key, val in self.clients.items()}
+            self.clients = clients
+            self.clients[name].name = name
+
+    def addClient(self, client: Client):
+        if client.name in self.clients:
+            raise RuntimeError('client.name already in self.clients')
+        self.clients[client.name] = client
+
+    def delClient(self, name):
+        if name not in self.clients:
+            raise RuntimeError('name not in self.clients')
+        del self.clients[name]
+
     # ---- mergeFrom -------------------------------------------------------------------------
 
     def planMergeFrom(self, other: "Database") -> dict:
@@ -510,6 +536,7 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
+        {},
         {},
         {},
         {},

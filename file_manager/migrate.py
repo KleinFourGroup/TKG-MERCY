@@ -260,3 +260,14 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
         self._setDbVersion(7)
         logging.info(" --> v6->v7 migration complete")
+
+    def _migrateV7ToV8(self):
+        # Sales subsystem (Step 46): add the (initially empty) `clients` table.
+        # Same additive + idempotent shape as v4->v5 .. v6->v7 — no existing data is
+        # touched, no backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v7->v8 migration: add clients table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS clients(name PRIMARY KEY, transportDays INTEGER)")
+        self._setDbVersion(8)
+        logging.info(" --> v7->v8 migration complete")

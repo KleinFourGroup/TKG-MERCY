@@ -77,6 +77,11 @@ class MainWindow(QWidget):
 
         # Sales group — Clients, Orders, Order Status (Steps 46–49).
         self.salesTab = QTabWidget()
+
+        from clients_tab import ClientsTab
+        self.clientsTab = ClientsTab(self)
+        self.salesTab.addTab(self.clientsTab, "Clients")
+
         self.prodSchedTab.addTab(self.salesTab, "Sales")
 
         # Scheduling config group — Presses, Pressers, Shift Workweek,
@@ -178,6 +183,8 @@ class MainWindow(QWidget):
         self.pressesTab.refreshTable()
         self.pressersTab.refreshTable()
         self.workweekTab.refreshTable()
+        # Sales domain
+        self.clientsTab.refreshTable()
 
     def _loadPath(self, path: str) -> bool:
         # Shared entry point for loading a DB from a known path — used by the

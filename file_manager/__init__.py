@@ -27,7 +27,9 @@ from .import_db import ImportMixin
 #        hoursPerShift REAL; additive).
 #   v7 — Step 45: `shift_workweek` table added (one (shift, weekday) presence row
 #        per working day; additive).
-MERCY_DB_VERSION = 7
+#   v8 — Step 46: Sales subsystem. `clients` table added (name PK, transportDays
+#        INTEGER business days; additive).
+MERCY_DB_VERSION = 8
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -76,6 +78,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                 self._createBeckyTables()
                 self._createProductionTable()
                 self._createSchedulingTables()
+                self._createSalesTables()
                 self._setDbVersion(MERCY_DB_VERSION)
                 self.dbFile.commit()
                 logging.info(f" --> Created unified MERCY schema (db_version={MERCY_DB_VERSION})")
@@ -100,6 +103,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV5ToV6()
                 if dbVersion is not None and dbVersion < 7:
                     self._migrateV6ToV7()
+                if dbVersion is not None and dbVersion < 8:
+                    self._migrateV7ToV8()
                 self.dbFile.commit()
                 return True
 
@@ -115,6 +120,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                 self._createBeckyTables()
                 self._createProductionTable()
                 self._createSchedulingTables()
+                self._createSalesTables()
                 # Stamp v1 first so _migrateAnikaV1ToV2's version update from 1->2 is meaningful
                 # if the migration throws partway; the outer try/except will still close the
                 # connection without committing, leaving the original file untouched.
@@ -138,6 +144,7 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                 self._createAnikaTables()
                 self._createProductionTable()
                 self._createSchedulingTables()
+                self._createSalesTables()
                 # Stamp v2 so that if the BECKY migration throws partway, the outer try/except
                 # closes the connection without committing and leaves the file untouched.
                 self._setDbVersion(2)

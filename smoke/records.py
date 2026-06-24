@@ -57,7 +57,8 @@ def empty_roundtrip() -> list[str]:
         db = w2.db
         for name in ("materials", "mixtures", "parts", "packaging",
                      "employees", "reviews", "training", "attendance",
-                     "PTO", "notes", "presses", "pressers", "shiftWorkweek"):
+                     "PTO", "notes", "presses", "pressers", "shiftWorkweek",
+                     "clients"):
             coll = getattr(db, name, None)
             if coll is None:
                 errors.append(f"db.{name} missing after roundtrip")

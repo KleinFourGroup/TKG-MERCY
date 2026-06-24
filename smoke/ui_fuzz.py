@@ -113,6 +113,7 @@ def _seedFuzzData(w, rng):
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
+    F.populateClients(db, rng, cfg["clients"])
 
 
 # Action kind tags. Tuples are (kind, target, label) so the dispatcher can

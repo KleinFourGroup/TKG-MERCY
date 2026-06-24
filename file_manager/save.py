@@ -437,3 +437,14 @@ class SaveMixin:
                 logging.info(f" * Deleting old entries {deleted}")
             except Exception as e:
                 logging.error(f" * Error deleting old entries {deleted}: {repr(e)}")
+
+        # --- Sales: clients (name-keyed, like presses but with a value column) ---
+        logging.info(f"Saving clients to {self.filePath}")
+        for name in db.clients:
+            vals = db.clients[name].getTuple()
+            try:
+                self.dbFile.execute("INSERT OR REPLACE INTO clients VALUES (?, ?)", vals)
+                logging.info(f" * Saving {vals}")
+            except Exception as e:
+                logging.error(f" * Error saving {vals}: {repr(e)}")
+        clearOld("clients", db.clients)

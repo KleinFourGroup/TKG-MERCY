@@ -58,6 +58,7 @@ def _seedTinyFuzzDB(w):
     F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
+    F.populateClients(db, rng, cfg["clients"])
     return partNames, idNums, mixtureNames
 
 
@@ -734,6 +735,112 @@ def presses_tab_crud() -> list[str]:
             got = set(w2.db.presses)
             if got != expected:
                 errors.append(f"presses roundtrip mismatch: expected {sorted(expected)}, got {sorted(got)}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def clients_tab_crud() -> list[str]:
+    """Step 46: ClientsTab CRUD + save/reload roundtrip (incl. transportDays).
+
+    Seeds tiny fuzz data (which now populates clients), then via
+    ``ClientEditWindow`` and the tab buttons:
+      - opens an Edit window on the first client, confirms ``nameEdit`` and
+        ``transportEdit`` prefill, renames it + changes transportDays, clicks
+        ``updateButton``, and confirms ``db.clients`` rekeys (new name in, old
+        name out) and the new transportDays sticks;
+      - opens a *new* ``ClientEditWindow`` (entry=None), types a novel name +
+        transportDays, clicks ``createButton``, and confirms it appears;
+      - selects that new client and calls ``deleteSelection`` (confirm dialog
+        stubbed to Yes), confirming removal;
+      - saves, reloads into a fresh ``MainWindow``, and confirms the surviving
+        clients roundtrip through SQLite unchanged — name *and* transportDays.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from clients_tab import ClientEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w.clientsTab.refreshTable()
+
+        if len(w.db.clients) == 0:
+            errors.append("expected fuzz seed to populate clients, got 0")
+            return errors
+
+        # --- Edit: rename an existing client + change its transportDays ---
+        fixture = sorted(w.db.clients)[0]
+        editor = ClientEditWindow(fixture, w)
+        if editor.nameEdit.text() != fixture:
+            errors.append(f"Edit prefill: nameEdit={editor.nameEdit.text()!r}, want {fixture!r}")
+        if editor.transportEdit.text() != f"{w.db.clients[fixture].transportDays}":
+            errors.append(f"Edit prefill: transportEdit={editor.transportEdit.text()!r}, "
+                          f"want {w.db.clients[fixture].transportDays!r}")
+        renamed = "Renamed Client"
+        editor.nameEdit.setText(renamed)
+        editor.transportEdit.setText("4")
+        editor.updateButton.click()
+        if renamed not in w.db.clients:
+            errors.append(f"after Update: {renamed!r} missing from db.clients")
+        elif w.db.clients[renamed].transportDays != 4:
+            errors.append(f"after Update: transportDays={w.db.clients[renamed].transportDays}, want 4")
+        if fixture in w.db.clients:
+            errors.append(f"after Update: old key {fixture!r} still present")
+
+        # --- Create a new client ---
+        newEditor = ClientEditWindow(None, w)
+        newName = "SmokeTestClient"
+        newEditor.nameEdit.setText(newName)
+        newEditor.transportEdit.setText("0")  # 0 transport days is legal
+        newEditor.createButton.click()
+        if newName not in w.db.clients:
+            errors.append(f"after Create: {newName!r} missing from db.clients")
+        elif w.db.clients[newName].transportDays != 0:
+            errors.append(f"after Create: transportDays={w.db.clients[newName].transportDays}, want 0")
+
+        # --- Delete that client via the tab (confirm dialog stubbed to Yes) ---
+        before = len(w.db.clients)
+        w.clientsTab.setSelection([newName])
+        w.clientsTab.deleteSelection()
+        if newName in w.db.clients:
+            errors.append(f"after Delete: {newName!r} still present")
+        if len(w.db.clients) != before - 1:
+            errors.append(f"after Delete: count {len(w.db.clients)} != {before - 1}")
+
+        # --- save / reload roundtrip (name + transportDays) ---
+        expected = {name: w.db.clients[name].transportDays for name in w.db.clients}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading clients DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {name: w2.db.clients[name].transportDays for name in w2.db.clients}
+            if got != expected:
+                errors.append(f"clients roundtrip mismatch: expected {expected}, got {got}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

@@ -50,19 +50,20 @@ from records.employees import (  # noqa: E402
 )
 from records.production import ProductionRecord  # noqa: E402
 from records.scheduling import Press, Presser, SHIFTS  # noqa: E402
+from records.sales import Client  # noqa: E402
 
 
 # ---- scale knobs ------------------------------------------------------------
 
 SCALES = {
     "tiny":   dict(materials=4,  mixtures=2,  packaging=5,  parts=3,
-                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3,  pressers=2),
+                   employees=3,  inventorySnapshots=1, productionDays=5,  presses=3,  pressers=2,  clients=3),
     "small":  dict(materials=6,  mixtures=3,  packaging=6,  parts=6,
-                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4,  pressers=4),
+                   employees=6,  inventorySnapshots=2, productionDays=60, presses=4,  pressers=4,  clients=5),
     "medium": dict(materials=12, mixtures=5,  packaging=10, parts=20,
-                   employees=15, inventorySnapshots=2, productionDays=180, presses=6,  pressers=8),
+                   employees=15, inventorySnapshots=2, productionDays=180, presses=6,  pressers=8,  clients=10),
     "large":  dict(materials=25, mixtures=10, packaging=18, parts=60,
-                   employees=40, inventorySnapshots=4, productionDays=540, presses=10, pressers=20),
+                   employees=40, inventorySnapshots=4, productionDays=540, presses=10, pressers=20, clients=25),
 }
 
 
@@ -150,6 +151,14 @@ HOLIDAY_MONTHS = {
 PRESS_POOL = [
     "Press 1", "Press 2", "Press 3", "Press 4", "Press 5",
     "Press 6", "Press 7", "Press 8", "Press 9", "Press 10",
+]
+
+CLIENT_POOL = [
+    "Acme Ceramics", "Borealis Insulators", "Crestline Electric", "Delphi Components",
+    "Everest Refractories", "Foundry Direct", "Granite State Supply", "Helios Industrial",
+    "Ironwood Trading", "Juniper Manufacturing", "Keystone Distributors", "Lakeshore Electric",
+    "Meridian Parts", "Northgate Supply", "Olympia Components", "Pinnacle Ceramics",
+    "Quanta Materials", "Redwood Industrial", "Summit Electric", "Tidewater Supply",
 ]
 
 
@@ -507,6 +516,17 @@ def populatePressers(db, rng, idNums, n):
     return chosen
 
 
+def populateClients(db, rng, n):
+    # `n` clients with a plausible transit time. transportDays is whole business
+    # days; 0 is legal (a local same-ship-day client) but rare, so the range
+    # leans toward 1-10 with the occasional 0.
+    names = pickUnique(rng, CLIENT_POOL, n)
+    for name in names:
+        transportDays = 0 if rng.random() < 0.1 else rng.randint(1, 10)
+        db.addClient(Client(name, transportDays))
+    return names
+
+
 def populateShiftWorkweek(db, rng):
     # Realistic Mon-Fri base for all three shifts (weekdays 0-4, Mon=0..Sun=6),
     # with an occasional Saturday (5) crew on shift 1. No scale knob — there are
@@ -569,6 +589,10 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  pressers:  {len(presserIds)}")
     populateShiftWorkweek(db, rng)
     print(f"  workweek:  {len(db.shiftWorkweek)} shifts configured")
+
+    # Sales subsystem (Steps 46+).
+    clientNames = populateClients(db, rng, cfg["clients"])
+    print(f"  clients:   {len(clientNames)}")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)

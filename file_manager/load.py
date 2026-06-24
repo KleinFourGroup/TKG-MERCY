@@ -8,6 +8,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek
+from records.sales import Client
 
 if TYPE_CHECKING:
     import sqlite3
@@ -307,3 +308,13 @@ class LoadMixin:
                 db.shiftWorkweek[shift] = ShiftWorkweek(shift)
             db.shiftWorkweek[shift].days.add(weekday)
             logging.info(f" * Loaded workweek ({shift}, {weekday})")
+
+        # --- Sales: clients ---
+        logging.info(f"Loading clients from {self.filePath}")
+        res = self.dbFile.execute("SELECT * FROM clients")
+        for values in res.fetchall():
+            client = Client("ERROR")
+            client.fromTuple(values)
+            db.clients[client.name] = client
+            logging.info(f" * Loaded {values}")
+            logging.info(f" --> Loaded client {client}")
