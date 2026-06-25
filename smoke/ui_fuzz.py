@@ -110,9 +110,10 @@ def _seedFuzzData(w, rng):
     F.populatePTO(db, rng, idNums, today)
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
-    F.populatePresses(db, rng, cfg["presses"])
+    pressNames = F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
+    F.populatePartPressPref(db, rng, partNames, pressNames)
     clientNames = F.populateClients(db, rng, cfg["clients"])
     F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
 

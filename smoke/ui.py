@@ -55,9 +55,10 @@ def _seedTinyFuzzDB(w):
     F.populatePTO(db, rng, idNums, today)
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
-    F.populatePresses(db, rng, cfg["presses"])
+    pressNames = F.populatePresses(db, rng, cfg["presses"])
     F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
+    F.populatePartPressPref(db, rng, partNames, pressNames)
     clientNames = F.populateClients(db, rng, cfg["clients"])
     F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
     return partNames, idNums, mixtureNames
@@ -1017,6 +1018,150 @@ def orders_tab_crud() -> list[str]:
             got = {num: o.getTuple() for num, o in w2.db.orders.items()}
             if got != expected:
                 errors.append(f"orders roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def part_press_pref_crud() -> list[str]:
+    """Step 48: PartPressPrefTab nested editor CRUD + cascades + save/reload roundtrip.
+
+    Seeds tiny fuzz data (now scoring some part-press pairs), then:
+      - opens the per-part editor; confirms one selector per press and score prefill;
+      - Update sets one press to 5 and clears the rest to Neutral (neutral => no row);
+      - renames the part: prefs rekey AND the pref table refreshes (FK-rename rule);
+      - renames a press: the score map rekeys AND the table refreshes;
+      - deletes that press: it cascades out of every part's prefs;
+      - deletes a part (after clearing its orders): its prefs cascade away;
+      - saves, reloads into a fresh MainWindow, confirms prefs roundtrip via getTuples.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from part_press_pref_tab import PartPressPrefEditWindow
+    from presses_tab import PressEditWindow
+    from parts_tab import PartsEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        parts = sorted(w.db.parts)
+        presses = sorted(w.db.presses)
+        if len(parts) < 2 or len(presses) < 2:
+            errors.append(f"expected >=2 parts and >=2 presses from tiny seed, got {len(parts)}/{len(presses)}")
+            return errors
+        part = parts[0]
+
+        # --- editor prefill: one selector per press, prefilled from current scores ---
+        w.db.setPartPressScore(part, presses[0], 4)  # known starting state for prefill
+        w.partPressPrefTab.refreshTable()
+        editor = PartPressPrefEditWindow(part, w)
+        if set(editor.scoreCombos) != set(presses):
+            errors.append(f"editor selectors {sorted(editor.scoreCombos)} != presses {presses}")
+        if editor.scoreCombos[presses[0]].currentText() != "4":
+            errors.append(f"prefill: {presses[0]} combo={editor.scoreCombos[presses[0]].currentText()!r}, want '4'")
+
+        # --- Update: clear everything to Neutral, score presses[1] = 5 ---
+        for pr in presses:
+            editor.scoreCombos[pr].setCurrentText("Neutral")
+        editor.scoreCombos[presses[1]].setCurrentText("5")
+        editor.updateButton.click()
+        pref = w.db.partPressPref.get(part)
+        if pref is None or pref.scores != {presses[1]: 5}:
+            errors.append(f"after Update: scores={pref and pref.scores}, want {{{presses[1]!r}: 5}}")
+        prow = next((r for r in w.partPressPrefTab.data if r[0] == part), None)
+        if prow is None or f"{presses[1]}: 5" not in prow[1]:
+            errors.append(f"pref table did not reflect the score (row={prow})")
+
+        # --- part rename: prefs rekey + table refreshes ---
+        renamedPart = "Renamed Pref Part"
+        pe = PartsEditWindow(part, w)
+        pe.nameEdit.setText(renamedPart)
+        pe.updateButton.click()
+        if part in w.db.partPressPref:
+            errors.append(f"part rename: stale key {part!r} still in partPressPref")
+        if renamedPart not in w.db.partPressPref:
+            errors.append(f"part rename: prefs did not rekey to {renamedPart!r}")
+        if not any(r[0] == renamedPart for r in w.partPressPrefTab.data):
+            errors.append("part rename: Part-Press Preference table not refreshed")
+        part = renamedPart
+
+        # --- press rename: score map rekeys + table refreshes ---
+        oldPress = presses[1]
+        renamedPress = "Renamed Press X"
+        pre = PressEditWindow(oldPress, w)
+        pre.nameEdit.setText(renamedPress)
+        pre.updateButton.click()
+        pref = w.db.partPressPref.get(part)
+        if pref is None or oldPress in pref.scores or pref.getScore(renamedPress) != 5:
+            errors.append(f"press rename: score map not rekeyed (scores={pref and pref.scores})")
+        prow = next((r for r in w.partPressPrefTab.data if r[0] == part), None)
+        if prow is None or renamedPress not in prow[1]:
+            errors.append(f"press rename: pref table not refreshed (row={prow})")
+
+        # --- press delete: cascades out of every part's prefs ---
+        w.pressesTab.setSelection([renamedPress])
+        w.pressesTab.deleteSelection()
+        if renamedPress in w.db.presses:
+            errors.append(f"press delete: {renamedPress!r} survived")
+        for p, pr in w.db.partPressPref.items():
+            if renamedPress in pr.scores:
+                errors.append(f"press delete: {renamedPress!r} still scored on part {p!r}")
+        # `part` scored only renamedPress (all else neutral), so it should drop out entirely.
+        if part in w.db.partPressPref:
+            errors.append(f"press delete: {part!r} should have no scores left, still present")
+
+        # --- part delete: its prefs cascade away (clear referencing orders first) ---
+        survivor = sorted(w.db.parts)[0]
+        for onum in [n for n, o in w.db.orders.items() if o.part == survivor]:
+            w.db.delOrder(onum)
+        livePress = sorted(w.db.presses)[0]
+        w.db.setPartPressScore(survivor, livePress, 3)
+        w.partPressPrefTab.refreshTable()
+        w.partsTab.setSelection([survivor])
+        w.partsTab.deleteSelection()
+        if survivor in w.db.parts:
+            errors.append(f"part delete: {survivor!r} survived (unexpected order ref?)")
+        elif survivor in w.db.partPressPref:
+            errors.append(f"part delete: prefs for {survivor!r} not cascaded")
+
+        # --- save / reload roundtrip ---
+        anyPart = sorted(w.db.parts)[0]
+        anyPress = sorted(w.db.presses)[0]
+        w.db.setPartPressScore(anyPart, anyPress, 2)
+        expected = {p: pr.getTuples() for p, pr in w.db.partPressPref.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading pref DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {p: pr.getTuples() for p, pr in w2.db.partPressPref.items()}
+            if got != expected:
+                errors.append(f"part-press pref roundtrip mismatch: expected {expected}, got {got}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

@@ -49,7 +49,9 @@ from records.employees import (  # noqa: E402
     EmployeePTODB, EmployeeNotesDB,
 )
 from records.production import ProductionRecord  # noqa: E402
-from records.scheduling import Press, Presser, SHIFTS  # noqa: E402
+from records.scheduling import (  # noqa: E402
+    Press, Presser, PartPressPref, SHIFTS, MIN_PRESS_SCORE, MAX_PRESS_SCORE,
+)
 from records.sales import Client, Order, formatOrderNum  # noqa: E402
 
 
@@ -565,6 +567,25 @@ def populateShiftWorkweek(db, rng):
             db.setShiftWorkday(shift, 5, True)  # Saturday crew on first shift
 
 
+def populatePartPressPref(db, rng, partNames, pressNames):
+    # Score some (part, press) pairs so the nested editor / scheduler have demo
+    # preferences. Each part scores a random subset of the presses 1-5; the rest
+    # stay neutral (no row), exercising the missing-pair-is-neutral path. Needs at
+    # least one part and one press. Returns the number of scored pairs.
+    if not partNames or not pressNames:
+        return 0
+    count = 0
+    for part in partNames:
+        # Roughly half the parts express a preference at all; those score 1-3 presses.
+        if rng.random() < 0.5:
+            continue
+        k = rng.randint(1, min(3, len(pressNames)))
+        for press in rng.sample(pressNames, k):
+            db.setPartPressScore(part, press, rng.randint(MIN_PRESS_SCORE, MAX_PRESS_SCORE))
+            count += 1
+    return count
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -615,6 +636,8 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  pressers:  {len(presserIds)}")
     populateShiftWorkweek(db, rng)
     print(f"  workweek:  {len(db.shiftWorkweek)} shifts configured")
+    nPref = populatePartPressPref(db, rng, partNames, pressNames)
+    print(f"  partPressPref: {nPref} scored pairs over {len(db.partPressPref)} parts")
 
     # Sales subsystem (Steps 46+).
     clientNames = populateClients(db, rng, cfg["clients"])

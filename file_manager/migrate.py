@@ -282,3 +282,15 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS orders(orderNum PRIMARY KEY, client, part, quantity INTEGER, price REAL, dueDate)")
         self._setDbVersion(9)
         logging.info(" --> v8->v9 migration complete")
+
+    def _migrateV9ToV10(self):
+        # Production Scheduling (Step 48): add the (initially empty) `part_press_pref`
+        # table — one (part, press, score) row per scored press. Same additive +
+        # idempotent shape as v4->v5 .. v8->v9 — no existing data is touched, no
+        # backup needed, and the chain replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v9->v10 migration: add part_press_pref table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_press_pref(part, press, score INTEGER, UNIQUE(part, press))")
+        self._setDbVersion(10)
+        logging.info(" --> v9->v10 migration complete")

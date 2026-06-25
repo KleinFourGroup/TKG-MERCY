@@ -7,7 +7,7 @@ from records.employees import (
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
 from records.sales import Client, Order
 
 if TYPE_CHECKING:
@@ -328,3 +328,14 @@ class LoadMixin:
             db.orders[order.orderNum] = order
             logging.info(f" * Loaded {values}")
             logging.info(f" --> Loaded order {order}")
+
+        # --- Production Scheduling: part-press preference ---
+        # Each (part, press, score) row is one scored press; rebuild the per-part
+        # PartPressPref on demand so a part with no rows simply has no entry.
+        logging.info(f"Loading part-press preferences from {self.filePath}")
+        res = self.dbFile.execute("SELECT part, press, score FROM part_press_pref ORDER BY part, press")
+        for (part, press, score) in res.fetchall():
+            if part not in db.partPressPref:
+                db.partPressPref[part] = PartPressPref(part)
+            db.partPressPref[part].setScore(press, score)
+            logging.info(f" * Loaded part-press preference ({part}, {press}, {score})")

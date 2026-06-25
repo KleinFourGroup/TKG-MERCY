@@ -109,6 +109,9 @@ class PartsTab(QWidget):
                 usedIn = self.mainApp.db.delPart(part)
                 if len(usedIn) == 0:
                     self.refreshTable()
+                    # delPart cascade-drops the part's press preferences (Step 48),
+                    # so refresh that table to drop the now-deleted part's row.
+                    self.mainApp.partPressPrefTab.refreshTable()
                     QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
                 else:
                     errorMessage(self.mainApp, [f"{part} is used in order {item}!" for item in usedIn])
@@ -354,6 +357,10 @@ class PartsEditWindow(QWidget):
             # A part rename propagates to any order referencing it (db.updatePart),
             # so refresh the Orders table too (like packaging refreshes parts).
             self.mainApp.ordersTab.refreshTable()
+            # Part-press preferences are keyed by part name (Step 48): a new part
+            # shows up as "(neutral)" and a rename rekeys its prefs, so the
+            # Part-Press Preference table must refresh too.
+            self.mainApp.partPressPrefTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)

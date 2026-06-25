@@ -1,10 +1,14 @@
 # Production Scheduling subsystem record classes (spec §3, MERGE_PLAN §13.30).
-# Aggregated into Database behind the records/ re-export shim. New scheduling
-# record types (PartPressPref) land here in later steps.
+# Aggregated into Database behind the records/ re-export shim.
 
 # The three production shifts are fixed (matching Employee.shift, observances,
 # and production — all of which use 1/2/3); nobody creates or deletes a shift.
 SHIFTS = (1, 2, 3)
+
+# Part-press preference scores run 1 (lowest) to 5 (highest); a missing
+# (part, press) pair means *neutral*, not "cannot press here" (spec §3.4).
+MIN_PRESS_SCORE = 1
+MAX_PRESS_SCORE = 5
 
 
 class Press:
@@ -73,3 +77,38 @@ class ShiftWorkweek:
 
     def __str__(self) -> str:
         return "({}, {})".format(self.shift, sorted(self.days))
+
+
+class PartPressPref:
+    # One part's scored press preferences (spec §3.4). `scores` maps a press name
+    # to its preference score (MIN_PRESS_SCORE..MAX_PRESS_SCORE); a press absent
+    # from the dict is *neutral* (the missing-pair-is-neutral rule), so a part
+    # with no scored presses simply has no PartPressPref. The score is a pure
+    # assignment tiebreaker — it does not affect throughput in v1. Like the other
+    # scheduling records, a flat reference record with no `db` back-reference.
+    # Persisted as one (part, press, score) row per scored press in the
+    # `part_press_pref` table — the nested-relational shape, mirroring how
+    # ShiftWorkweek stores one (shift, weekday) row per working day.
+    def __init__(self, part, scores=None) -> None:
+        self.part = part
+        self.scores: dict[str, int] = dict(scores) if scores is not None else {}
+
+    def getScore(self, press):
+        # The press's score, or None if neutral (no entry).
+        return self.scores.get(press)
+
+    def setScore(self, press, score) -> None:
+        # Set or clear one press's score. A None / 0 score clears it back to
+        # neutral (drops the entry), keeping `scores` free of neutral pairs so
+        # the presence-row persistence stays in lockstep.
+        if score is None or score == 0:
+            self.scores.pop(press, None)
+        else:
+            self.scores[press] = score
+
+    def getTuples(self):
+        # One (part, press, score) row per scored press, press-name-sorted.
+        return [(self.part, press, self.scores[press]) for press in sorted(self.scores)]
+
+    def __str__(self) -> str:
+        return "({}, {})".format(self.part, sorted(self.scores.items()))

@@ -82,6 +82,7 @@ class SchemaMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_press_pref(part, press, score INTEGER, UNIQUE(part, press))")
 
     def _createSalesTables(self):
         # Sales subsystem tables (spec §3; added incrementally from Step 46). Sibling

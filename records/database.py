@@ -9,7 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
 from records.sales import Client, Order
 
 
@@ -32,6 +32,7 @@ class Database:
                  presses: dict[str, Press],
                  pressers: dict[int, Presser],
                  shiftWorkweek: dict[int, ShiftWorkweek],
+                 partPressPref: dict[str, PartPressPref],
                  clients: dict[str, Client],
                  orders: dict[str, Order]) -> None:
         self.globals = globals
@@ -51,6 +52,7 @@ class Database:
         self.presses = presses
         self.pressers = pressers
         self.shiftWorkweek = shiftWorkweek
+        self.partPressPref = partPressPref
         self.clients = clients
         self.orders = orders
         for entry in self.materials:
@@ -72,6 +74,12 @@ class Database:
             for order in self.orders.values():
                 if order.part == entry:
                     order.part = name
+            # Part-press preferences are keyed by part name (Step 48), so rekey the
+            # entry and fix up the stored part on the record.
+            if entry in self.partPressPref:
+                pref = self.partPressPref.pop(entry)
+                pref.part = name
+                self.partPressPref[name] = pref
 
     def addPart(self, part: Part):
         if part.name in self.parts:
@@ -89,6 +97,10 @@ class Database:
         usedIn = [num for num, order in self.orders.items() if order.part == name]
         if len(usedIn) == 0:
             del self.parts[name]
+            # Part-press preferences are config tied to a live part (unlike orders,
+            # which block), so cascade-drop them when the part is deleted (Step 48) —
+            # the same config-cascades-but-history-blocks split as delEmployee/pressers.
+            self.partPressPref.pop(name, None)
         return usedIn
 
     def updatePackaging(self, entry, name):
@@ -333,12 +345,16 @@ class Database:
 
     def updatePress(self, entry, name):
         # Rekey the presses dict on rename, mirroring updatePackaging/updateMaterial.
-        # Nothing references a press by name yet, so there are no cross-table fixups.
         # Name-collision is rejected at the tab (PressEditWindow.readData).
         if not name == entry:
             presses = {name if key == entry else key: val for key, val in self.presses.items()}
             self.presses = presses
             self.presses[name].name = name
+            # Part-press preferences score presses by name (Step 48), so propagate
+            # the rename into every part's score map (the entry, not the value).
+            for pref in self.partPressPref.values():
+                if entry in pref.scores:
+                    pref.scores[name] = pref.scores.pop(entry)
 
     def addPress(self, press: Press):
         if press.name in self.presses:
@@ -349,6 +365,33 @@ class Database:
         if name not in self.presses:
             raise RuntimeError('name not in self.presses')
         del self.presses[name]
+        # Drop this press from every part's preference map (Step 48) — a deleted
+        # press just becomes neutral everywhere (missing pair = neutral), and a
+        # part left with no scored presses drops its now-empty PartPressPref so the
+        # in-memory shape matches the persisted presence rows.
+        for part in list(self.partPressPref):
+            pref = self.partPressPref[part]
+            pref.setScore(name, None)
+            if not pref.scores:
+                del self.partPressPref[part]
+
+    # ---- Production Scheduling: part-press preference ------------------------------------
+
+    def setPartPressScore(self, part, press, score):
+        # Set or clear one (part, press) preference score, keeping self.partPressPref
+        # in exact lockstep with the persisted presence rows: a part entry exists
+        # only while it has >= 1 scored press, so a part scored all-neutral drops out
+        # (and an empty DB has an empty dict — same shape as shiftWorkweek). Parts and
+        # presses are created/deleted from their own tables, so there's no add/del
+        # here; the nested editor just sets scores through this.
+        if score is not None and score != 0:
+            if part not in self.partPressPref:
+                self.partPressPref[part] = PartPressPref(part)
+            self.partPressPref[part].setScore(press, score)
+        elif part in self.partPressPref:
+            self.partPressPref[part].setScore(press, None)
+            if not self.partPressPref[part].scores:
+                del self.partPressPref[part]
 
     # ---- Production Scheduling: pressers ---------------------------------------------------
 
@@ -580,10 +623,11 @@ def emptyDB():
         Globals(), {}, {}, {}, {}, {},
         {}, {}, {}, {}, {}, {},
         ObservancesDB(),
-        {},
-        {},
-        {},
-        {},
-        {},
-        {}
+        {},          # production
+        {},          # presses
+        {},          # pressers
+        {},          # shiftWorkweek
+        {},          # partPressPref
+        {},          # clients
+        {}           # orders
     )

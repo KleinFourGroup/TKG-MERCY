@@ -459,3 +459,27 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")
         clearOld("orders", db.orders, "orderNum")
+
+        # --- Production Scheduling: part-press preference ((part, press) score rows) ---
+        # Composite-key table like part_pads — wipe each part's child rows and re-insert,
+        # then orphan-sweep rows whose part is no longer scored (covers both presses set
+        # back to neutral and parts that dropped out of db.partPressPref entirely). The
+        # in-memory cascades (delPart / delPress) keep db.partPressPref tidy; this sweep
+        # is the persistence-side backstop.
+        logging.info(f"Saving part-press preferences to {self.filePath}")
+        for part in db.partPressPref:
+            self.dbFile.execute("DELETE FROM part_press_pref WHERE part=?", (part,))
+            for vals in db.partPressPref[part].getTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO part_press_pref VALUES (?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT part, press FROM part_press_pref")
+        orphans = [row for row in res.fetchall() if row[0] not in db.partPressPref]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM part_press_pref WHERE (part, press)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan part-press preferences {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan part-press preferences {orphans}: {repr(e)}")
