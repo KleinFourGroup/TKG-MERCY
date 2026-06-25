@@ -38,6 +38,7 @@ from smoke import (
     scheduling_working_days, scheduling_presser_capacity,
     scheduling_pressing_rate, scheduling_scrap_inflation,
     scheduling_deadlines, scheduling_primitives_fuzz,
+    scheduling_scheduler, scheduling_scheduler_fuzz,
     pyright_baseline,
     crash_fuzz,
 )
@@ -95,6 +96,8 @@ def main() -> int:
                      ("scheduling_scrap_inflation", scheduling_scrap_inflation),
                      ("scheduling_deadlines", scheduling_deadlines),
                      ("scheduling_primitives_fuzz", scheduling_primitives_fuzz),
+                     ("scheduling_scheduler", scheduling_scheduler),
+                     ("scheduling_scheduler_fuzz", scheduling_scheduler_fuzz),
                      ("pyright_baseline", pyright_baseline),
                      ("crash_fuzz", crash_fuzz)]:
         errors = fn()

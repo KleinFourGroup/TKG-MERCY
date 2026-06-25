@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import datetime
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from records.scheduling import SHIFTS
 
 if TYPE_CHECKING:
     from records.database import Database
@@ -29,6 +32,16 @@ if TYPE_CHECKING:
 SLACK_BUSINESS_DAYS = 2   # effective-deadline pull-in, in business days (§8.2)
 RATE_WINDOW_DAYS = 180    # trailing window for the empirical pressing rate (§8.4)
 RATE_MIN_HOURS = 4.0      # "enough history" bar before trusting empirical (§8.4)
+MAX_HORIZON_DAYS = 365    # hard cap on the scheduler's forward walk (§6, §3.2)
+
+# Midpoint of the 1..5 PartPressPref scale: a part with no scored preference for a
+# press ranks as neutral (decision #5), between an explicit avoid (1-2) and prefer
+# (4-5). Used only as a press-assignment tiebreaker — never a throughput effect.
+NEUTRAL_PRESS_SCORE = 3
+
+# Float dust guard for the press-hours math (§3.3): treat residual demand at or
+# below this as fully placed.
+EPS = 1e-9
 
 
 def shiftWorksOn(db: Database, shift: int, d: datetime.date) -> bool:
@@ -102,14 +115,15 @@ def capacityHours(db: Database, shift: int, d: datetime.date) -> float:
     return float(sum(hours[:lanes]))
 
 
-def pressingRate(db: Database, part: str, today: datetime.date,
-                 windowDays: int = RATE_WINDOW_DAYS,
-                 minHours: float = RATE_MIN_HOURS) -> float | None:
-    """Addendum §2.3: per-part pieces/hour. Empirical sum(quantity)/sum(hours)
-    over `Pressing` production records for `part` within the trailing `windowDays`
-    (the same ratio the productivity reports use), falling back to Part.pressing
-    when history is thinner than `minHours`, and None when neither is available
-    (the order is then infeasible per §4 — never silently skipped)."""
+def empiricalPressingRate(db: Database, part: str, today: datetime.date,
+                          windowDays: int = RATE_WINDOW_DAYS,
+                          minHours: float = RATE_MIN_HOURS) -> float | None:
+    """The empirical half of `pressingRate` (addendum §2.3): trailing-window
+    sum(quantity)/sum(hours) over `Pressing` production records for `part`, or
+    None when the history is thinner than `minHours` (or has no pressed pieces).
+    Split out so the scheduler can tell whether a part's rate is empirically
+    grounded or is riding the Part.pressing cold-start fallback (a soft §4
+    warning) without recomputing."""
     totalQ = 0.0
     totalH = 0.0
     for rec in db.production.values():
@@ -123,6 +137,19 @@ def pressingRate(db: Database, part: str, today: datetime.date,
             totalQ += rec.quantity or 0
     if totalH >= minHours and totalQ > 0:
         return totalQ / totalH
+    return None
+
+
+def pressingRate(db: Database, part: str, today: datetime.date,
+                 windowDays: int = RATE_WINDOW_DAYS,
+                 minHours: float = RATE_MIN_HOURS) -> float | None:
+    """Addendum §2.3: per-part pieces/hour. The empirical rate
+    (`empiricalPressingRate`) when history is thick enough, falling back to
+    Part.pressing otherwise, and None when neither is available (the order is
+    then infeasible per §4 — never silently skipped)."""
+    empirical = empiricalPressingRate(db, part, today, windowDays, minHours)
+    if empirical is not None:
+        return empirical
     part_obj = db.parts.get(part)
     if part_obj is not None and part_obj.pressing is not None and part_obj.pressing > 0:
         return part_obj.pressing
@@ -179,3 +206,286 @@ def effectivePressBy(db: Database, order: Order,
     if ship is None:
         return None
     return subBusinessDays(ship, slackBusinessDays)
+
+
+# ---------------------------------------------------------------------------
+# Step 52: scheduler core (addendum §3 sequencing/allocation/assignment + §4
+# infeasibility). The whole scheduler is reached through the single `schedule`
+# seam (§10) returning a plain `ScheduleResult`, so the report (Step 53) and any
+# smoke check consume the result, never the algorithm's internals — swapping the
+# greedy heuristic for a better optimizer touches nothing downstream.
+# ---------------------------------------------------------------------------
+
+# Flag kinds (addendum §4). LATE and the two INFEASIBLE_* are mutually exclusive
+# per order; NO_CAPACITY subsumes lateness (it never fit, so reporting the
+# residual is the actionable number).
+LATE = "LATE"
+INFEASIBLE_NO_CAPACITY = "INFEASIBLE_NO_CAPACITY"
+INFEASIBLE_NO_RATE = "INFEASIBLE_NO_RATE"
+
+# Soft warning kinds (addendum §4): the schedule is still emitted, but the
+# numbers should be trusted appropriately.
+WARN_FALLBACK_RATE = "FALLBACK_RATE"
+WARN_MISSING_FIRESCRAP = "MISSING_FIRESCRAP"
+
+
+@dataclass(frozen=True)
+class ScheduleConfig:
+    """The §6 tunables on one object (addendum §10) so policy stays a parameter
+    change, not surgery. Defaults are the module constants the primitives use."""
+    slackBusinessDays: int = SLACK_BUSINESS_DAYS
+    rateWindowDays: int = RATE_WINDOW_DAYS
+    rateMinHours: float = RATE_MIN_HOURS
+    maxHorizonDays: int = MAX_HORIZON_DAYS
+
+
+@dataclass(frozen=True)
+class ScheduleRow:
+    """One cell of the schedule (addendum §3.5): press `part` on `press` during
+    `shift` on `date`, targeting `quantity` pieces over `hours` press-hours. No
+    named presser — the crew self-assigns (spec §2 non-goal)."""
+    date: datetime.date
+    shift: int
+    press: str
+    part: str
+    quantity: float
+    hours: float
+
+
+@dataclass(frozen=True)
+class OrderFlag:
+    """A flagged order (addendum §4), carrying its magnitude. Which fields are
+    meaningful depends on `kind`:
+      LATE                   -> daysLate (calendar days completion is past the
+                                effective press-by) + piecesShort (pieces still
+                                unplaced as of the deadline).
+      INFEASIBLE_NO_CAPACITY -> shortHours / piecesShort the horizon couldn't
+                                absorb.
+      INFEASIBLE_NO_RATE     -> none (the part name is the data gap to fix)."""
+    orderNum: str
+    part: str
+    kind: str
+    daysLate: int = 0
+    piecesShort: float = 0.0
+    shortHours: float = 0.0
+
+
+@dataclass(frozen=True)
+class ScheduleWarning:
+    """A soft, non-blocking warning about a part (addendum §4): a cold-start
+    fallback rate, or a missing fireScrap. Deduplicated per (kind, part)."""
+    kind: str
+    part: str
+
+
+@dataclass(frozen=True)
+class ScheduleResult:
+    """Everything the report (Step 53) and smoke need: the schedule rows, the
+    flagged orders, the soft warnings, and the generation anchor `today`. The
+    whole subsystem is stateless (spec §5.1) — this is recomputed on demand."""
+    today: datetime.date
+    rows: list[ScheduleRow]
+    flags: list[OrderFlag]
+    warnings: list[ScheduleWarning]
+
+
+def outstandingToPress(db: Database, order: Order) -> int:
+    """Addendum §1: the order's outstanding-to-press = its latest OrderStatus
+    `remainingToPress` snapshot, falling back to the full ordered quantity when
+    no snapshot exists yet (spec §5.2)."""
+    status = db.orderStatus.get(order.orderNum)
+    if status is not None:
+        remaining = status.remainingToPress()
+        if remaining is not None:
+            return remaining
+    return order.quantity
+
+
+def _eligibleOrders(db: Database, config: ScheduleConfig) -> list[Order]:
+    """Addendum §1 order eligibility, then §3.1 sequencing. An order enters the
+    scheduler iff it has press work left (outstanding-to-press > 0) and isn't
+    already fulfilled (remaining-to-ship 0). Eligible orders are sorted by
+    (effectivePressBy, -price, orderNum): EDF first, order total breaks deadline
+    ties to favor revenue (decisions #5/#6), orderNum makes it fully
+    deterministic (§5). Orders with no due date have no deadline, so they sort
+    after all dated orders and can never be flagged late."""
+    eligible: list[Order] = []
+    for order in db.orders.values():
+        status = db.orderStatus.get(order.orderNum)
+        if status is not None and status.isFulfilled():
+            continue
+        if outstandingToPress(db, order) <= 0:
+            continue
+        eligible.append(order)
+
+    def sortKey(order: Order):
+        deadline = effectivePressBy(db, order, config.slackBusinessDays)
+        return (deadline is None, deadline or datetime.date.max, -order.price, order.orderNum)
+
+    return sorted(eligible, key=sortKey)
+
+
+def _prefScore(db: Database, part: str, press: str) -> int:
+    """The part's preference score for a press, with a missing pair treated as
+    the neutral midpoint (addendum §3.4 / decision #5)."""
+    pref = db.partPressPref.get(part)
+    if pref is None:
+        return NEUTRAL_PRESS_SCORE
+    score = pref.getScore(press)
+    return score if score is not None else NEUTRAL_PRESS_SCORE
+
+
+@dataclass
+class _Lane:
+    """One running press lane during press assignment: a press name plus the
+    press-hours still free on it (one presser's hoursPerShift, drawn down as
+    parts are pinned). Mutable, internal to `_assignLanes`."""
+    press: str
+    remaining: float
+
+
+def _assignLanes(db: Database, shift: int, d: datetime.date,
+                 placedByPart: dict[str, float], rates: dict[str, float]) -> list[ScheduleRow]:
+    """Addendum §3.4: pin a shift-day's pooled (part -> press-hours) work onto
+    specific press lanes, producing the (date, shift, press, part) rows.
+
+    The lanes are the `min(present, presses)` running presses (§2.6), each with
+    one presser's hoursPerShift as its budget; the budgets are the top-by-hours
+    presser shifts (matching capacityHours). The presses chosen to run are the
+    ones the pressed parts most prefer (highest aggregate PartPressPref score,
+    press name breaking ties), paired largest-budget-first. Each part's hours are
+    then placed onto lanes preferring that part's score, largest parts first,
+    splitting across lanes when one lane's remaining budget is too small. This
+    only decides *which lane* runs work — whether it fits was settled in §3.3
+    against the pooled hours — so it never drops a piece."""
+    present = pressersPresent(db, shift, d)
+    lanesCount = min(len(present), len(db.presses))
+    if lanesCount == 0:
+        return []
+    budgets = sorted((p.hoursPerShift for p in present), reverse=True)[:lanesCount]
+    pressNames = sorted(db.presses.keys())
+
+    def aggScore(press: str) -> int:
+        return sum(_prefScore(db, part, press) for part in placedByPart)
+
+    chosen = sorted(pressNames, key=lambda press: (-aggScore(press), press))[:lanesCount]
+    lanes = [_Lane(press, budget) for press, budget in zip(chosen, budgets)]
+
+    # part -> {press -> hours}
+    assigned: dict[str, dict[str, float]] = {}
+    for part in sorted(placedByPart, key=lambda p: (-placedByPart[p], p)):
+        hoursLeft = placedByPart[part]
+        while hoursLeft > EPS:
+            open_lanes = [lane for lane in lanes if lane.remaining > EPS]
+            if not open_lanes:
+                break  # §3.3 guarantees total placed <= sum(budgets), so unreachable
+            lane = min(open_lanes,
+                       key=lambda lane: (-_prefScore(db, part, lane.press),
+                                         -lane.remaining, lane.press))
+            take = min(hoursLeft, lane.remaining)
+            assigned.setdefault(part, {})
+            assigned[part][lane.press] = assigned[part].get(lane.press, 0.0) + take
+            lane.remaining -= take
+            hoursLeft -= take
+
+    rows: list[ScheduleRow] = []
+    for part, byPress in assigned.items():
+        rate = rates[part]
+        for press, hours in byPress.items():
+            rows.append(ScheduleRow(d, shift, press, part, hours * rate, hours))
+    return rows
+
+
+def schedule(db: Database, today: datetime.date | None = None,
+             config: ScheduleConfig | None = None) -> ScheduleResult:
+    """Addendum §3-§4: the greedy earliest-deadline-first, front-loaded scheduler.
+
+    Walks eligible orders by urgency (§3.1) and places each one's scrap-inflated
+    press demand into the earliest available shift-day capacity (§3.3), front to
+    back from `today`. An order that can't finish before its effective press-by
+    keeps getting placed into later working shift-days and is flagged LATE; one
+    that can't fit even by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part
+    with no usable rate is flagged INFEASIBLE_NO_RATE. Nothing is ever silently
+    dropped (§4 never-drop). A second pass pins each shift-day's pooled work onto
+    specific press lanes (§3.4). Deterministic given (db, today, config)."""
+    if today is None:
+        today = datetime.date.today()
+    if config is None:
+        config = ScheduleConfig()
+
+    flags: list[OrderFlag] = []
+    warnings: set[ScheduleWarning] = set()
+    rates: dict[str, float] = {}
+    # (date, shift) -> {part -> press-hours placed}
+    placed: dict[tuple[datetime.date, int], dict[str, float]] = {}
+    # (date, shift) -> remaining press-hours, computed lazily from capacityHours.
+    remaining: dict[tuple[datetime.date, int], float] = {}
+
+    def remainingHours(d: datetime.date, shift: int) -> float:
+        key = (d, shift)
+        if key not in remaining:
+            remaining[key] = capacityHours(db, shift, d)
+        return remaining[key]
+
+    for order in _eligibleOrders(db, config):
+        part = order.part
+        rate = pressingRate(db, part, today, config.rateWindowDays, config.rateMinHours)
+        if rate is None:
+            flags.append(OrderFlag(order.orderNum, part, INFEASIBLE_NO_RATE))
+            continue
+        # Soft warnings: a cold-start fallback rate, and a missing fireScrap
+        # (under-pressing a genuinely-scrapping part is the made-visible cost).
+        if empiricalPressingRate(db, part, today, config.rateWindowDays,
+                                 config.rateMinHours) is None:
+            warnings.add(ScheduleWarning(WARN_FALLBACK_RATE, part))
+        part_obj = db.parts.get(part)
+        if part_obj is not None and part_obj.fireScrap is None:
+            warnings.add(ScheduleWarning(WARN_MISSING_FIRESCRAP, part))
+
+        needHours = requiredPressed(db, part, outstandingToPress(db, order)) / rate
+        deadline = effectivePressBy(db, order, config.slackBusinessDays)
+        lateRecorded = False
+        piecesShortAtDeadline = 0.0
+        completion: datetime.date | None = None
+
+        for offset in range(config.maxHorizonDays + 1):
+            if needHours <= EPS:
+                break
+            d = today + datetime.timedelta(days=offset)
+            for shift in SHIFTS:
+                if needHours <= EPS:
+                    break
+                # Crossed the deadline with work still to place -> LATE; capture
+                # the pieces that will land late (everything not yet placed on or
+                # before the deadline) before placing any of it.
+                if deadline is not None and d > deadline and not lateRecorded:
+                    lateRecorded = True
+                    piecesShortAtDeadline = needHours * rate
+                avail = remainingHours(d, shift)
+                if avail <= EPS:
+                    continue
+                take = min(needHours, avail)
+                cell = placed.setdefault((d, shift), {})
+                cell[part] = cell.get(part, 0.0) + take
+                remaining[(d, shift)] = avail - take
+                rates[part] = rate
+                needHours -= take
+                completion = d
+
+        if needHours > EPS:
+            # Hit the horizon with demand unplaced — capacity, not just lateness.
+            flags.append(OrderFlag(order.orderNum, part, INFEASIBLE_NO_CAPACITY,
+                                   piecesShort=needHours * rate, shortHours=needHours))
+        elif lateRecorded and completion is not None and deadline is not None:
+            flags.append(OrderFlag(order.orderNum, part, LATE,
+                                   daysLate=(completion - deadline).days,
+                                   piecesShort=piecesShortAtDeadline))
+
+    rows: list[ScheduleRow] = []
+    for (d, shift), placedByPart in placed.items():
+        rows.extend(_assignLanes(db, shift, d, placedByPart, rates))
+
+    rows.sort(key=lambda r: (r.date, r.shift, r.press, r.part))
+    flags.sort(key=lambda f: (f.kind, f.orderNum))
+    sortedWarnings = sorted(warnings, key=lambda w: (w.kind, w.part))
+    return ScheduleResult(today, rows, flags, sortedWarnings)

@@ -275,6 +275,222 @@ def scheduling_deadlines() -> list[str]:
     return errors
 
 
+def _addEmployee(db, idn: int, shift: int, status: bool = True) -> None:
+    from records.employees import Employee
+    e = Employee()
+    e.idNum = idn
+    e.lastName = "L"
+    e.firstName = "F"
+    e.shift = shift
+    e.status = status
+    db.addEmployee(e)
+
+
+def _addPart(db, name: str, pressing, fire) -> None:
+    from records.products import Part
+    p = Part(name)
+    p.setProduction(1.0, None, pressing, None, fire, 1.0)
+    db.addPart(p)
+
+
+def _rowTuples(result):
+    return [(r.date, r.shift, r.press, r.part, r.quantity, r.hours) for r in result.rows]
+
+
+def scheduling_scheduler() -> list[str]:
+    """schedule(): the greedy EDF core (addendum §3-§4) on hand-built fixtures
+    with exact expected output — front-loaded multi-day placement, the LATE flag
+    + magnitude on a tight deadline, INFEASIBLE_NO_RATE on a rate-less part, the
+    cold-start fallback warning, preference-ranked lane splitting (§3.4), and
+    determinism."""
+    from records.database import emptyDB
+    from records.scheduling import Press, Presser
+    from records.sales import Client, Order
+    import scheduling as S
+
+    errors: list[str] = []
+    monday = _findMonday()
+    day = datetime.timedelta(days=1)
+    tuesday = monday + day
+    wednesday = monday + 2 * day
+    friday = monday + 4 * day
+    # transport 0 + slack 0 => effectivePressBy == dueDate, so the fixtures read
+    # straight off the calendar.
+    cfg = S.ScheduleConfig(slackBusinessDays=0)
+
+    def base(part_pressing, part_fire, dueDate, qty=200, prefs=None, presses=("Press1",),
+             pressers=((10, 8.0),)):
+        db = emptyDB()
+        for weekday in range(5):
+            db.setShiftWorkday(1, weekday, True)
+        for name in presses:
+            db.addPress(Press(name))
+        for idn, hrs in pressers:
+            _addEmployee(db, idn, 1, True)
+            db.addPresser(Presser(idn, hrs))
+        _addPart(db, "P", part_pressing, part_fire)
+        db.globals.greenScrap = 0.0
+        db.addClient(Client("C", 0))
+        db.addOrder(Order("O1", "C", "P", qty, 100.0, dueDate))
+        for press, score in (prefs or {}).items():
+            db.setPartPressScore("P", press, score)
+        return db
+
+    # --- A: ample deadline, one press/presser, 200 pcs @ 10/hr = 20 press-hrs over
+    #        8/8/4 across Mon/Tue/Wed; finishes Wed, well before Friday -> no flags.
+    dbA = base(10.0, 0.0, friday)
+    rA = S.schedule(dbA, monday, cfg)
+    _expect(errors, "A rows", _rowTuples(rA), [
+        (monday, 1, "Press1", "P", 80.0, 8.0),
+        (tuesday, 1, "Press1", "P", 80.0, 8.0),
+        (wednesday, 1, "Press1", "P", 40.0, 4.0),
+    ])
+    _expect(errors, "A no flags", rA.flags, [])
+    # P has a Part.pressing rate but no Pressing history -> cold-start fallback warning.
+    _expect(errors, "A fallback warning",
+            [(w.kind, w.part) for w in rA.warnings], [(S.WARN_FALLBACK_RATE, "P")])
+
+    # --- B: same work, deadline Tuesday -> Wed's 4 press-hours land late.
+    dbB = base(10.0, 0.0, tuesday)
+    rB = S.schedule(dbB, monday, cfg)
+    _expect(errors, "B rows (still fully placed)", _rowTuples(rB), _rowTuples(rA))
+    _expect(errors, "B one flag", len(rB.flags), 1)
+    if rB.flags:
+        f = rB.flags[0]
+        _expect(errors, "B LATE kind", f.kind, S.LATE)
+        _expect(errors, "B LATE order", f.orderNum, "O1")
+        _expect(errors, "B days late", f.daysLate, 1)        # Wed - Tue
+        _expect(errors, "B pieces short at deadline", f.piecesShort, 40.0)
+
+    # --- C: no empirical history AND no Part.pressing -> INFEASIBLE_NO_RATE, no rows.
+    dbC = base(None, 0.0, friday)
+    rC = S.schedule(dbC, monday, cfg)
+    _expect(errors, "C no rows", rC.rows, [])
+    _expect(errors, "C no-rate flag",
+            [(f.kind, f.orderNum, f.part) for f in rC.flags],
+            [(S.INFEASIBLE_NO_RATE, "O1", "P")])
+    _expect(errors, "C no warnings (skipped before warn checks)", rC.warnings, [])
+
+    # --- D: two presses, P prefers PB(5) over neutral PA(3); 100 pcs = 10 press-hrs
+    #        on one Monday, capacity 16 -> PB fills first (8h), PA takes the rest (2h).
+    dbD = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
+               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
+    rD = S.schedule(dbD, monday, cfg)
+    _expect(errors, "D preference-split rows", _rowTuples(rD), [
+        (monday, 1, "PA", "P", 20.0, 2.0),
+        (monday, 1, "PB", "P", 80.0, 8.0),
+    ])
+    _expect(errors, "D no flags", rD.flags, [])
+
+    # --- E: 1000 pcs = 100 press-hrs but the horizon is capped at 3 days (24
+    #        press-hrs) -> 76 press-hrs / 760 pcs can't fit: INFEASIBLE_NO_CAPACITY,
+    #        and no LATE flag (NO_CAPACITY subsumes lateness).
+    dbE = base(10.0, 0.0, friday, qty=1000)
+    rE = S.schedule(dbE, monday, S.ScheduleConfig(slackBusinessDays=0, maxHorizonDays=2))
+    _expect(errors, "E capped rows", len(rE.rows), 3)
+    _expect(errors, "E no-capacity flag",
+            [(f.kind, f.orderNum, f.piecesShort, f.shortHours) for f in rE.flags],
+            [(S.INFEASIBLE_NO_CAPACITY, "O1", 760.0, 76.0)])
+
+    # --- Determinism: identical (db, today, config) -> identical result.
+    _expect(errors, "deterministic", S.schedule(dbA, monday, cfg), rA)
+    return errors
+
+
+def scheduling_scheduler_fuzz() -> list[str]:
+    """schedule() over a tiny seed=1 fuzzed DB, asserting the §4/§5 invariants:
+    no crash, determinism (byte-identical on a re-run), every row on a working
+    shift-day, per-(date,shift) placed press-hours never exceed capacity, every
+    eligible order is accounted for (scheduled and/or flagged, never silently
+    dropped), and flag magnitudes are non-negative."""
+    import random
+    from records.database import emptyDB
+    import scheduling as S
+    import fuzz_db as F
+
+    errors: list[str] = []
+    try:
+        rng = random.Random(1)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date(2026, 6, 25)
+        db = emptyDB()
+
+        materialNames = F.populateMaterials(db, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for name in db.packaging:
+            packagingByKind[db.packaging[name].kind].append(name)
+        partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+        idNums = F.populateEmployees(db, rng, cfg["employees"], today)
+        F.populatePTO(db, rng, idNums, today)
+        F.populateHolidays(db, rng, today)
+        F.populateProduction(db, rng, idNums, partNames, mixtureNames,
+                             cfg["productionDays"], today)
+        F.populatePresses(db, rng, cfg["presses"])
+        F.populatePressers(db, rng, idNums, cfg["pressers"])
+        F.populateShiftWorkweek(db, rng)
+        pressNames = list(db.presses)
+        F.populatePartPressPref(db, rng, partNames, pressNames)
+        clientNames = F.populateClients(db, rng, cfg["clients"])
+        orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+        F.populateOrderStatus(db, rng, orderNums, today)
+
+        result = S.schedule(db, today)
+
+        # Determinism: a re-run is identical.
+        if S.schedule(db, today) != result:
+            errors.append("schedule not deterministic on identical (db, today)")
+
+        # Every row lands on a working shift-day, on a real press, for a real part.
+        for r in result.rows:
+            if not S.shiftWorksOn(db, r.shift, r.date):
+                errors.append(f"row on non-working shift-day: {r.date} shift={r.shift}")
+            if r.press not in db.presses:
+                errors.append(f"row on unknown press: {r.press}")
+            if r.part not in db.parts:
+                errors.append(f"row on unknown part: {r.part}")
+            if r.hours < 0 or r.quantity < 0:
+                errors.append(f"row with negative hours/qty: {r}")
+
+        # Placed press-hours per (date, shift) never exceed that shift-day's capacity.
+        byShiftDay: dict[tuple, float] = {}
+        for r in result.rows:
+            byShiftDay[(r.date, r.shift)] = byShiftDay.get((r.date, r.shift), 0.0) + r.hours
+        for (d, shift), hours in byShiftDay.items():
+            cap = S.capacityHours(db, shift, d)
+            if hours > cap + 1e-6:
+                errors.append(f"over capacity at {d} shift={shift}: {hours} > {cap}")
+
+        # Every eligible order is accounted for: it has scheduled rows or a flag
+        # (never silently dropped, §4). Build the eligible set the way the scheduler does.
+        eligible = set()
+        for num, order in db.orders.items():
+            status = db.orderStatus.get(num)
+            if status is not None and status.isFulfilled():
+                continue
+            if S.outstandingToPress(db, order) <= 0:
+                continue
+            eligible.add(num)
+        scheduledParts = {r.part for r in result.rows}
+        flaggedOrders = {f.orderNum for f in result.flags}
+        for num in eligible:
+            order = db.orders[num]
+            if num not in flaggedOrders and order.part not in scheduledParts:
+                errors.append(f"eligible order {num} neither scheduled nor flagged")
+
+        # Flag magnitudes are non-negative; kinds are known.
+        knownKinds = {S.LATE, S.INFEASIBLE_NO_CAPACITY, S.INFEASIBLE_NO_RATE}
+        for f in result.flags:
+            if f.kind not in knownKinds:
+                errors.append(f"unknown flag kind: {f.kind}")
+            if f.daysLate < 0 or f.piecesShort < 0 or f.shortHours < 0:
+                errors.append(f"negative flag magnitude: {f}")
+    except Exception as e:  # noqa: BLE001 - a crash here is the failure we report
+        errors.append(f"scheduler raised on fuzzed data: {e!r}")
+    return errors
+
+
 def scheduling_primitives_fuzz() -> list[str]:
     """Run every primitive over a tiny seed=1 fuzzed DB and assert invariants
     only — no crash, sane ranges, and the structural relations (non-working

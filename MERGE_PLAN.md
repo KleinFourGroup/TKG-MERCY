@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39; next up is Step 52 (scheduler core).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39, and now Step 52 (scheduler core) lands the greedy earliest-deadline-first `schedule()` seam in the same module — see §13.40; next up is Step 53 (Production Schedule Report UI + PDF export).*
 
 ### 12.1 Step status
 
@@ -98,7 +98,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 49 | ✅ Done | Merge plan Step 49: Order Status nested editor (full vertical slice) — see §13.30 |
 | 50 | ✅ Done | Production Scheduling: scheduling-algorithm design round (addendum doc) — see §13.38 |
 | 51 | ✅ Done | Production Scheduling: scheduling primitives (calendar / capacity / rate / scrap / deadline helpers) — see §13.39 |
-| 52 | ⬜ Planned | Production Scheduling: scheduler core (heuristic + infeasibility detection) — see §13.30 |
+| 52 | ✅ Done | Production Scheduling: scheduler core (greedy EDF `schedule()` seam + infeasibility detection) — see §13.40 |
 | 53 | ⬜ Planned | Production Scheduling: Production Schedule Report UI + PDF export — see §13.30 |
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
@@ -391,6 +391,72 @@ Landed 2026-06-25. The first code of the scheduler series: the six addendum §2 
 **Six new smoke checks (46 → 52 PASS):** five hand-built-fixture checks (one per §2 area, exact expected values — e.g. shift-specific holiday closure, idle-press capacity, empirical-beats-fallback rate, the scrap percent-conversion, weekend-skipping deadlines) plus `scheduling_primitives_fuzz`, which runs every primitive over a tiny seed=1 fuzzed DB asserting invariants only (no crash; sane ranges; non-working shift-days have zero capacity; scrap never shrinks a quantity; ship-by ≤ due date; press-by ≤ ship-by) — the Step 35 "render against fuzzed data" spirit applied to logic. `compile_all` picks up the new root module for free; the pyright baseline stays clean.
 
 **As-built vs the addendum's pseudocode.** The §2 sketches used illustrative names; the real reads are `db.holidays` (not `db.observances`) for the ObservancesDB and `db.production.values()` (production is a `dict[tuple, …]`, not a list). `MAX_HORIZON_DAYS` is deferred to Step 52 — it bounds the scheduler's forward walk, not any primitive, so it lands with the core that uses it (no unused constant left lying around). The three tunables the primitives do use (slack, rate window, rate min-hours) are module constants now; Step 52 lifts them onto the `schedule(db, T, config)` config object per §10.
+
+### 13.40 Step 52 — scheduler core (greedy EDF + infeasibility) ✅ Done
+
+Landed 2026-06-25. The scheduler itself, implementing addendum §3 (sequencing /
+timeline / allocation / assignment) + §4 (infeasibility) as pure logic appended
+to [`scheduling.py`](scheduling.py) — the single `schedule(db, today, config) ->
+ScheduleResult` seam the addendum §10 mandates, so the report (Step 53) and smoke
+consume the *result*, never the algorithm. Stateless (spec §5.1): no schema, no
+`db_version` bump, recomputed on demand. Not a manual-UI-gate step (§13.30 lists
+only 42/45/48/49/53) — pure logic + smoke, like Step 51.
+
+**Shipped.** Greedy earliest-deadline-first, front-loaded:
+
+- **Result types** (frozen dataclasses): `ScheduleRow` (`date, shift, press,
+  part, quantity, hours`, the §3.5 output cell), `OrderFlag` (`kind` +
+  magnitude), `ScheduleWarning` (soft, per-part), `ScheduleResult` (rows / flags
+  / warnings / `today`), and `ScheduleConfig` — the §6 tunables (slack, rate
+  window, rate min-hours, the new `MAX_HORIZON_DAYS = 365`) on one object so
+  "front-load less / more slack" is a parameter change, not surgery (§10).
+- **Eligibility + sequencing** (§1, §3.1): outstanding-to-press > 0 and not
+  fulfilled; sorted by `(effectivePressBy, −price, orderNum)` — EDF, revenue
+  tiebreak, total order for determinism. No-due-date orders sort last and can
+  never be flagged late.
+- **Allocation** (§3.3): each order's scrap-inflated press-hours
+  (`requiredPressed / pressingRate`) placed into the earliest working shift-day
+  capacity, front to back from `today`, decrementing a lazily-computed,
+  memoized `remainingHours[(date, shift)]`.
+- **Press assignment** (§3.4): a second pass pins each shift-day's pooled
+  `(part → hours)` onto specific press lanes — the `min(present, presses)`
+  running lanes with top-by-hours presser budgets, presses chosen by aggregate
+  `PartPressPref` score (neutral = midpoint 3, decision #5; press name breaks
+  ties), each part placed preferring its score and split across lanes when one
+  runs short. Best-effort bin-packing; never changes *whether* work fits (§3.3
+  settled that against the pooled hours), only *which lane*.
+- **Infeasibility** (§4), never-drop: `INFEASIBLE_NO_RATE` (no empirical history
+  *and* no `Part.pressing`), `INFEASIBLE_NO_CAPACITY` (demand unplaced at the
+  horizon, carrying short press-hours + pieces), `LATE` (placed but past the
+  effective press-by, carrying calendar days late + pieces short at the
+  deadline). LATE and NO_CAPACITY are mutually exclusive per order —
+  NO_CAPACITY subsumes lateness (the actionable number is the residual). Soft
+  warnings: cold-start fallback rate, missing `fireScrap`.
+
+**Refactor.** `pressingRate` split out `empiricalPressingRate` (the empirical
+half), so the scheduler can tell whether a part's rate is empirically grounded
+or riding the `Part.pressing` fallback (the §4 fallback warning) without
+recomputing — public `pressingRate` behavior unchanged, Step 51 checks
+untouched.
+
+**Two new smoke checks (52 → 54 PASS):** `scheduling_scheduler` — five
+hand-built fixtures with exact expected output (front-loaded 8/8/4 multi-day
+placement; LATE with `daysLate`/`piecesShort`; `INFEASIBLE_NO_RATE` with no
+rows; `INFEASIBLE_NO_CAPACITY` under a capped horizon; preference-ranked lane
+splitting where a 5-scored press fills before a neutral one) plus a determinism
+assertion — and `scheduling_scheduler_fuzz`, which runs `schedule()` over a tiny
+seed=1 fuzzed DB asserting the §4/§5 invariants (deterministic re-run; every row
+on a working shift-day / real press / real part; placed press-hours ≤ capacity
+per shift-day; every eligible order scheduled or flagged, never silently
+dropped; non-negative flag magnitudes). `compile_all` + the pyright baseline
+stay clean.
+
+**As-built vs the addendum.** The greedy core is **provisional** (§10) — kept
+behind the one `schedule()` seam so a better optimizer or a less-front-loaded
+policy rips out without touching the §2 primitives, the result types, or any
+schema. The §6 tunables moved from the primitives' default args onto
+`ScheduleConfig`; order sequencing now reads the config's slack (not the
+primitive default) so a single `schedule()` call is internally consistent.
 
 ---
 
