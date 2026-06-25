@@ -157,6 +157,98 @@ def production_refresh_on_delete() -> list[str]:
     return errors
 
 
+def inventory_edit_missing_date() -> list[str]:
+    """Step 62: the inventory material/part edit windows' readData must surface a
+    validation error, not crash, when their date has no inventory snapshot — and
+    the part editor's duplicate check must read the .parts collection.
+
+    A 'checked-then-dereferenced-anyway' bug: readData flags a missing date up
+    top, but the duplicate-record check below it indexed
+    db.inventories[self.date] unconditionally (KeyError on a stale/absent date),
+    and the part editor indexed .materials instead of .parts — so it missed real
+    duplicate part records and then crashed in addPartRecord. Drives both editors
+    headlessly on the error / duplicate paths (QMessageBox stubbed)."""
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from inventory_tab import MaterialInventoryEditWindow, PartInventoryEditWindow
+    from records.products import PartInventoryRecord
+
+    errors: list[str] = []
+    QApplication.instance() or QApplication(sys.argv)
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        absentDate = datetime_date(2099, 1, 1)  # guaranteed not in db.inventories
+
+        # 1) Material editor on a date with no inventory: must not KeyError.
+        matEd = MaterialInventoryEditWindow(absentDate, None, w)
+        matEd.selectedName = "AnyMat"
+        matEd.costEntry.setText("5.0")
+        matEd.mainLayout[2][1].setText("10")
+        try:
+            res = matEd.readData(True)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"material editor readData raised on absent date: {e!r}")
+        else:
+            if res is not False:
+                errors.append(f"material editor readData returned {res!r}, expected False on absent date")
+
+        # 2) Part editor on a date with no inventory: must not KeyError.
+        partEd = PartInventoryEditWindow(absentDate, None, w)
+        partEd.selectedName = "AnyPart"
+        partEd.costEntry.setText("1.0")
+        for row in (2, 3, 4, 5):
+            partEd.mainLayout[row][1].setText("1")
+        try:
+            res = partEd.readData(True)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"part editor readData raised on absent date: {e!r}")
+        else:
+            if res is not False:
+                errors.append(f"part editor readData returned {res!r}, expected False on absent date")
+
+        # 3) Part editor duplicate detection must read .parts: seed a part record,
+        #    then a NEW editor for the same (date, name) must flag the duplicate
+        #    (return False, no raise). Pre-fix it checked .materials, missed the
+        #    dup, and crashed in addPartRecord.
+        dupDate = datetime_date(2099, 2, 2)
+        rec = PartInventoryRecord()
+        rec.setName("DupPart")
+        rec.setDate(dupDate)
+        rec.setInventory(1.0, 1, 1, 1, 1)
+        w.db.addPartInventory(rec)
+        dupEd = PartInventoryEditWindow(dupDate, None, w)
+        dupEd.selectedName = "DupPart"
+        dupEd.costEntry.setText("1.0")
+        for row in (2, 3, 4, 5):
+            dupEd.mainLayout[row][1].setText("1")
+        try:
+            res = dupEd.readData(True)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"part editor readData raised on duplicate part record: {e!r}")
+        else:
+            if res is not False:
+                errors.append(f"part editor readData returned {res!r}, expected False on duplicate part record "
+                              f"(the .parts dup check did not fire)")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def production_batch_roundtrip() -> list[str]:
     """Step 16: drive ProductionBatchDialog headlessly and verify atomic save.
 

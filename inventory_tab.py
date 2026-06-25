@@ -383,7 +383,10 @@ class MaterialInventoryEditWindow(QWidget):
         name = self.selectedName
         if name is None:
             errors.append("Must select a material")
-        if name in self.mainApp.db.inventories[self.date].materials:
+        # Guard the date's existence (flagged above) before indexing — a stale
+        # editor whose date no longer has an inventory would otherwise KeyError
+        # here, crashing instead of surfacing the queued error.
+        if self.date in self.mainApp.db.inventories and name in self.mainApp.db.inventories[self.date].materials:
             if isNew or (self.entry is not None and not name == self.entry.name):
                 errors.append(f"Material '{name}' already has an inventory record for {self.date.isoformat()}")
         cost = checkInput(self.costEntry.text(), float, "nonneg", errors, "cost")
@@ -626,7 +629,11 @@ class PartInventoryEditWindow(QWidget):
         name = self.selectedName
         if name is None:
             errors.append("Must select a part")
-        if name in self.mainApp.db.inventories[self.date].materials:
+        # Guard the date's existence (flagged above) before indexing, and check
+        # the parts collection (not materials): this is the part editor, so the
+        # duplicate-record check must read .parts — otherwise it both misses real
+        # collisions (then crashes in addPartRecord) and KeyErrors on a stale date.
+        if self.date in self.mainApp.db.inventories and name in self.mainApp.db.inventories[self.date].parts:
             if isNew or (self.entry is not None and not name == self.entry.name):
                 errors.append(f"Part '{name}' already has an inventory record for {self.date.isoformat()}")
         cost = checkInput(self.costEntry.text(), float, "nonneg", errors, "cost")

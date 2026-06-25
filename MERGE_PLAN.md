@@ -108,6 +108,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 59 | ✅ Done | Fix `updateEmployee` re-id FK orphan: cascade pressers + production to the new id (+ `employee_reid_cascades` check) — see §13.35 |
 | 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 | 61 | ✅ Done | Harden `getComboBox` against a stored value missing from its options (combo-prefill crash) — prereq for Step 58 — see §13.37 |
+| 62 | ✅ Done | Fix inventory edit `readData` crash class (date guarded before indexing; part editor checks `.parts`) — fuzzer-found, audited as a class — see §13.41 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -457,6 +458,49 @@ policy rips out without touching the §2 primitives, the result types, or any
 schema. The §6 tunables moved from the primitives' default args onto
 `ScheduleConfig`; order sequencing now reads the config's slack (not the
 primitive default) so a single `schedule()` call is internally consistent.
+
+### 13.41 Step 62 — inventory edit `readData` crash class (date guard + `.parts`) ✅ Done
+
+Landed 2026-06-25, right after Step 52. Surfaced while running the Step 52 final
+smoke battery: the always-on `crash_fuzz` baseline (`seed=None`) went
+**intermittently red** with a `KeyError` in [`inventory_tab.py`](inventory_tab.py)
+`readData`. Independent of the scheduler work (`crash_fuzz` never touches
+`scheduling.py`) — a pre-existing latent bug the fuzzer hits only on sparse,
+time-based seeds (a 0-39 fixed-seed sweep is clean, which is why Step 58's sweep
+missed it).
+
+**The bug class — "checked-then-dereferenced-anyway."** Both inventory record
+editors' `readData` flag a missing date up top
+(`if not self.date in db.inventories: errors.append(...)`) but then the
+duplicate-record check below it indexed `db.inventories[self.date]`
+*unconditionally*, `KeyError`-ing on a stale/absent date **before** the queued
+error could reach the gate — the validation detects the bad state, then crashes
+on it. The fuzzer reaches it because its fixture never populates inventory, so
+every date is absent and any inventory-editor Create trips it. The part editor
+carried a **second** bug on the same line: it checked `.materials` (not
+`.parts`), so it both missed real duplicate-part collisions *and* then crashed in
+`addPartRecord`'s own dup guard.
+
+**Audited as a class before fixing** (per Matthew's call): swept all 21 app
+`readData` methods (3 parallel review agents) for the same shape — an early
+membership/None check that appends an error, then an unconditional index/deref of
+that same value before the `if len(errors)==0` gate. **Exactly two instances, both
+in `inventory_tab.py`** (the material editor and its part twin); the other 19 are
+clean (safe `key in coll` membership tests, post-gate derefs, or deliberate
+`raise RuntimeError` invariants). One near-miss ruled out: `pto_tab.py`'s
+`used + hours` — `checkInput` returns `1` (not `None`) on a parse failure, so the
+arithmetic never sees `None`.
+
+**Fix.** Both editors now guard `self.date in db.inventories and …` before
+indexing (so a stale date degrades to the already-queued error), and the part
+editor reads `.parts`. New deterministic smoke check `inventory_edit_missing_date`
+(55 PASS) drives both editors headlessly on the absent-date path and the part
+editor on a real duplicate — verified to fail pre-fix (two date `KeyError`s + the
+`.parts` `RuntimeError`) and pass post-fix. Full smoke now runs green 3×
+back-to-back including the previously-flaky `crash_fuzz`. Same dual-mandate as the
+Step 57 HR-editor fixes ([`feedback_failure_mandate`]): a user clicking Create in
+the inventory editor for a date with no snapshot now sees the error dialog instead
+of a hard crash.
 
 ---
 
