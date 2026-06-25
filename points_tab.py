@@ -267,7 +267,10 @@ class PointsEditWindow(QWidget):
                     raise RuntimeError('self.point is None despite not isNew')
                 if self.point.date is None:
                     raise RuntimeError('self.point.date is None')
-                del self.pointDB.points[self.point.date]
+                # pop-with-default, not del: tolerate the original entry being gone
+                # (stale window whose points row was deleted elsewhere) so Update
+                # re-adds rather than KeyErroring. New-date collision guarded above.
+                self.pointDB.points.pop(self.point.date, None)
                 self.point.date = date
                 self.point.reason = reason
                 self.point.value = points

@@ -103,9 +103,10 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
 | 56 | ✅ Done | Fix Pressers (+ Production) stale-view on employee rename; flagged the `updateEmployee` re-id FK-orphan data bug — see §13.32 |
-| 57 | ⬜ Planned | Fix `del`-by-changed-key crashes in HR sub-editor rename paths (holidays / reviews / notes / …) — see §13.33 |
+| 57 | ✅ Done | Fix HR sub-editor Update crashes: pop-with-default on stale keys (reviews/points/notes/training/PTO) + holidays original-key delete — see §13.33 |
 | 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 | 59 | ✅ Done | Fix `updateEmployee` re-id FK orphan: cascade pressers + production to the new id (+ `employee_reid_cascades` check) — see §13.35 |
+| 60 | ⬜ Planned | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -335,19 +336,34 @@ Fix: in the employee-edit success path, refresh **both** employee-derived tabs �
 
 **Discovered while fixing — a separate, deeper `updateEmployee` data bug (not yet fixed).** `records/database.py:updateEmployee(oldID, newID)` (the re-id path, reachable by editing the ID field) rekeys `employees / reviews / training / attendance / PTO / notes` but **not `pressers` and not production `employeeId`** — so changing an employee's ID **silently orphans their presser row** (confirmed: presser stays keyed by the old ID, `(missing #id)`) and strands their production records at the old ID. This is silent FK corruption (the worst quadrant of the dual-mandate, [`feedback_failure_mandate`]), distinct from the view-refresh class, and the Step 55 net can't catch it (both displayed and recompute agree on the orphan, so no divergence). The presser orphan is clearly a bug — a presser is "current config tied 1:1 to a live employee" ([`delEmployee`] cascades it). Whether production *history* should follow a re-id is a product call (delete intentionally leaves production as `(missing #id)`). Not folded into Step 56 because it's a db-layer cascade fix, not a UI refresh. **Resolved as Step 59 (§13.35) — fixed immediately, pressers + production both cascade.**
 
-### 13.33 Step 57 — `del`-by-changed-key crashes in HR sub-editor rename paths ⬜ Planned
+### 13.33 Step 57 — HR sub-editor Update crashes on stale/renamed keys ✅ Done
 
-A cluster of pre-existing crashes the Step 55 row-selection fuzzer surfaced, all the same shape: a hand-rolled HR edit dialog's `readData(isNew=False)` does `del db[<key read from the just-edited field>]` instead of deleting the *original* key, so changing the key field on Update raises `KeyError`. Confirmed in `holidays_tab.py:383` (default holiday name), `reviews_tab.py:232` (review date), and `notes_tab.py:262` (note date/time); **sweep the siblings** (training / points / PTO use the same `del`-by-key dialog shape) rather than fixing only the three observed. These differ from the FK-rename CRUD tables (materials / clients / presses / orders / parts), which route renames through `db.updateX(old, new)` and are correct. Per the dual-mandate ([`feedback_failure_mandate`]) the ideal is a graceful in-dialog error or a correct rename, not a crash. Repro seeds above.
+Landed 2026-06-25. A cluster of pre-existing `KeyError` crashes the Step 55 row-selection fuzzer surfaced on the Update path of the hand-rolled HR edit dialogs, in **two shapes**:
+
+- **`reviews` / `points` / `notes` / `training` / `PTO`** delete by the *original* key (`self.<record>.<datefield>`) — correct for a rename — but crash when that record was deleted out from under a still-open edit window (now reachable: row-selection lets the walk delete a row from the sub-tab while its editor is open; the dialog's calendar isn't a fuzzer-touchable widget, so this is the external-delete path, not a changed-key one). Fix: `dict.pop(key, None)` instead of `del`, so Update degrades to a safe re-add (each already guards the *new*-key collision, so the upsert can't clobber a different record).
+- **`holidays` (default holidays)** is the genuine *changed-key* shape: `readData` deleted `defaults[self.holidayName.text()]` — the **new** name — which both `KeyError`s on a rename and orphans the old entry. Fix: drop the *original* name (`self.holiday`) via pop-with-default, and add a rename-collision guard (renaming onto a different existing holiday now errors instead of silently overwriting it).
+
+These are distinct from the name-keyed CRUD tables (materials / clients / presses / orders / parts), which route renames through `db.updateX(old, new)`. Per the dual-mandate ([`feedback_failure_mandate`]), the pop-with-default keeps the user's save working (no corruption, no crash) rather than erroring on a rare concurrent-edit race.
+
+Verified: the three repro seeds (2, 5/6/7, 15) plus a deterministic holidays-rename test now run clean; full smoke green (46 PASS); a 25-seed `select_rows=True` sweep went **24/25 clean** (was 9/15 before Steps 56–57).
+
+**The one remaining sweep failure is a different class → Step 60.** `seed=18` crashes in `db.updatePress` (`self.presses[name].name = name` after a no-op rekey): the *same* stale-window-after-external-delete theme, but in the name-keyed `updateX` rekey helper rather than a dialog `del` — if the original name was deleted elsewhere, the `{new if k==entry else k …}` comprehension never creates `new`, so the follow-up index `KeyError`s. Almost certainly shared by the sibling helpers (`updateClient` / `updatePart` / `updateMaterial` / `updateMixture` / `updatePackaging` / `updateOrder`). Out of Step 57's scope (not HR, not a dialog `del`); spun out as Step 60 (§13.36) and a **prerequisite for Step 58** (the baseline can't graduate `select_rows=True` until the sweep is fully clean).
 
 ### 13.34 Step 58 — graduate `crash_fuzz` row-selection into the baseline ⬜ Planned
 
-Once Steps 56–57 land and `crash_fuzz(select_rows=True)` runs clean across a seed sweep, flip the `select_rows` default to `True` (the baseline calls `crash_fuzz` bare, so the default *is* the lever) so the always-on net guards the full rename/delete/cascade bug class — the Step 41 move for this capability. Re-confirm the time budget at the higher coverage and lower `DEFAULT_ITERATIONS` if needed.
+Once Steps 56–57 **and 60** land and `crash_fuzz(select_rows=True)` runs clean across a seed sweep, flip the `select_rows` default to `True` (the baseline calls `crash_fuzz` bare, so the default *is* the lever) so the always-on net guards the full rename/delete/cascade bug class — the Step 41 move for this capability. Re-confirm the time budget at the higher coverage and lower `DEFAULT_ITERATIONS` if needed.
 
 ### 13.35 Step 59 — `updateEmployee` re-id FK orphan: cascade pressers + production ✅ Done
 
 Landed 2026-06-25, pulled forward right after Step 56 (the bug was discovered there). `records/database.py:updateEmployee(oldID, newID)` rekeyed the HR sub-DBs (`reviews / training / attendance / PTO / notes`) but **not** `pressers` (keyed by employeeId, stored as `Presser.employeeId`) or production (keyed by `rec.key()`, a tuple beginning with employeeId). So re-id'ing an employee silently orphaned their presser row and stranded their production records at the dead id. A re-id keeps the employee alive — unlike `delEmployee`, which intentionally leaves production as a `(missing #id)` tombstone — so the team's call (session 2026-06-25) was that **both follow the new id**, keeping the employee + presser config + production history together (and productivity/costing reports whole).
 
 Fix: extend `updateEmployee` to rekey `pressers` (and set the moved `Presser.employeeId`) and to update each production record's `employeeId` then rebuild `self.production` off the new keys. No collision risk — the edit dialog guarantees `newID` isn't an existing employee, so it has no pre-existing presser/production rows. Guarded by a new **`employee_reid_cascades`** smoke check (46 PASS) that drives the real `EmployeeEditWindow` re-id and asserts presser + production follow, both in memory and across a save/reload roundtrip. This is the *only* automated guard for this bug — the Step 55 net can't see it (an orphan reads identically in the view and a fresh recompute, so there's no divergence to flag).
+
+### 13.36 Step 60 — harden the `db.updateX` rekey helpers against a missing original key ⬜ Planned
+
+Surfaced by the Step 57 wider sweep (`seed=18`, `select_rows=True`): `db.updatePress(entry, name)` does `presses = {name if k == entry else k: v …}; self.presses[name].name = name`. If `entry` (the original name) is no longer present — a stale `PressEditWindow` whose press was deleted from the Presses tab while the editor stayed open — the comprehension copies the dict unchanged (no key matches `entry`), so the follow-up `self.presses[name]` `KeyError`s. Same stale-window-after-external-delete theme as Step 57, but in the name-keyed rekey helper rather than a dialog `del`.
+
+**Audit + fix the whole family:** `updatePress`, `updateClient`, `updatePart`, `updateMaterial`, `updateMixture`, `updatePackaging`, `updateOrder` (and re-confirm `updateEmployee`) — each should no-op (or early-return) cleanly when `entry` isn't present rather than indexing a key the rekey never created. Consider guarding the stale Update at the dialog layer too (re-validate the record still exists before calling `updateX`). **Prerequisite for Step 58** — the always-on baseline can't run `select_rows=True` until the sweep is fully clean. Repro `crash_fuzz(seed=18, select_rows=True)`.
 
 ---
 

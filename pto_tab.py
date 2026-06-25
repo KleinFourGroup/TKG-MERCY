@@ -497,7 +497,11 @@ class PTOEditWindow(QWidget):
                     raise RuntimeError('self.PTORange is None despite not isNew')
                 if self.PTORange.start is None or self.PTORange.end is None:
                     raise RuntimeError('self.PTORange.start or self.PTORange.end is None')
-                del self.PTODB.PTO[(self.PTORange.start, self.PTORange.end)]
+                # pop-with-default, not del: tolerate the original range being gone
+                # (stale window whose PTO row was deleted elsewhere) so Update re-adds
+                # rather than KeyErroring. The overlap/conflict check above guards
+                # against clobbering a different range.
+                self.PTODB.PTO.pop((self.PTORange.start, self.PTORange.end), None)
                 self.PTORange.start = start
                 self.PTORange.end = end
                 self.PTORange.hours = hours

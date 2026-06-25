@@ -259,7 +259,10 @@ class NotesEditWindow(QWidget):
                     raise RuntimeError('self.note is None despite not isNew')
                 if self.note.date is None or self.note.time is None:
                     raise RuntimeError('self.note.date or self.note.time is None')
-                del self.notesDB.notes[(self.note.date, self.note.time)]
+                # pop-with-default, not del: tolerate the original entry being gone
+                # (stale window whose note was deleted elsewhere) so Update re-adds
+                # rather than KeyErroring. New (date, time) collision guarded above.
+                self.notesDB.notes.pop((self.note.date, self.note.time), None)
                 self.note.date = date
                 self.note.time = timeStr
                 self.note.details = details

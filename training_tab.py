@@ -244,7 +244,10 @@ class TrainingEditWindow(QWidget):
                     raise RuntimeError('self.trainingDate is None despite not isNew')
                 if self.trainingDate.date is None:
                     raise RuntimeError('self.trainingDate.date is None')
-                del self.trainingDateDB.training[self.trainingType][self.trainingDate.date]
+                # pop-with-default, not del: tolerate the original entry being gone
+                # (stale window whose training row was deleted elsewhere) so Update
+                # re-adds rather than KeyErroring. New-date collision guarded above.
+                self.trainingDateDB.training[self.trainingType].pop(self.trainingDate.date, None)
                 self.trainingDate.date = date
                 self.trainingDate.comment = comment
                 trainingDate = self.trainingDate

@@ -229,7 +229,12 @@ class ReviewsEditWindow(QWidget):
                     raise RuntimeError('self.review is None despite not isNew')
                 if self.review.date is None:
                     raise RuntimeError('self.review.date is None')
-                del self.reviewDB.reviews[self.review.date]
+                # Drop the entry under the original date before re-adding under the
+                # (possibly changed) date. pop-with-default, not del: a stale edit
+                # window whose review was deleted elsewhere would KeyError otherwise
+                # (the new-date collision is already guarded above), so Update
+                # degrades to a safe re-add rather than crashing.
+                self.reviewDB.reviews.pop(self.review.date, None)
                 self.review.date = date
                 self.review.nextReview = date + datetime.timedelta(days=days)
                 self.review.details = details

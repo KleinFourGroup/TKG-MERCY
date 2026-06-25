@@ -374,13 +374,21 @@ class HolidayEditWindow(QWidget):
         errors = []
         
         holiday = self.holidayName.text()
-        if isNew and holiday in self.observancesDB.defaults:
+        # A new holiday, or a rename onto a *different* existing holiday, would
+        # clobber that entry — reject both. (self.holiday is the original name; an
+        # edit that keeps the same name is fine.)
+        renaming = (not isNew) and self.holiday is not None and holiday != self.holiday
+        if (isNew or renaming) and holiday in self.observancesDB.defaults:
             errors.append(f"Holiday \"{holiday}\" already exists!")
         month = int(self.holidayMonth.currentText())
 
         if len(errors) == 0:
-            if not isNew:
-                del self.observancesDB.defaults[holiday]
+            if not isNew and self.holiday is not None:
+                # Drop the entry under the ORIGINAL name, not the text field's new
+                # value: deleting by the new name both KeyErrors on a rename and
+                # orphans the old entry. pop-with-default also tolerates the
+                # original being gone (stale window / external delete).
+                self.observancesDB.defaults.pop(self.holiday, None)
             self.observancesDB.defaults[holiday] = month
 
             self.defaultsTab.refresh()
