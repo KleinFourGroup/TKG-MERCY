@@ -21,6 +21,18 @@ the failure list actually reflects what crashed.
 **Wired into the smoke baseline as of Step 41.** Default iterations
 tuned to land in the 10-20s budget on a Windows dev box. Replay a found
 crash with explicit ``iterations=<reported step + 1>``.
+
+**Stale-view invariant (Step 55).** Beyond catching crashes, the walk now
+asserts after every action that each *projection tab* (one whose rows are a
+pure function of a ``db`` collection via ``genTableData()``) still matches a
+fresh recompute from ``db``. A divergence means a mutation path changed a
+tab's underlying collection without re-rendering that tab — the
+downstream-refresh bug class that bit Steps 47 and 49 (FK rename / cascade
+delete). This turns "remember to refresh every downstream tab" from a
+per-step manual obligation into an automatic, seed-reproducible smoke
+failure. See ``_projectionTabs`` for the curated registry (and what it
+deliberately excludes — filter/selection-state tabs whose view legitimately
+differs from a whole-collection recompute).
 """
 import os
 import random
@@ -121,12 +133,12 @@ def _seedFuzzData(w, rng):
 
 # Action kind tags. Tuples are (kind, target, label) so the dispatcher can
 # stay short and the label string is what shows up in a crash report.
-_BUTTON, _COMBO, _TAB, _LINE, _SPIN, _DSPIN, _CHECK = (
-    "button", "combo", "tab", "line", "spin", "dspin", "check",
+_BUTTON, _COMBO, _TAB, _LINE, _SPIN, _DSPIN, _CHECK, _TABLE = (
+    "button", "combo", "tab", "line", "spin", "dspin", "check", "table",
 )
 
 
-def _enumerateActions(window):
+def _enumerateActions(window, select_rows=False):
     """Walk ``window``'s child widget tree and bucket enabled controls
     into legal random-walk actions. Re-enumerated every step because a
     click or tab switch can enable / disable / create widgets.
@@ -134,11 +146,19 @@ def _enumerateActions(window):
     Filters only on ``isEnabled()``, not ``isVisible()`` — offscreen
     widgets on non-current tabs still have working signal handlers, and
     exercising them is the whole point.
+
+    ``select_rows`` gates the ``_TABLE`` row-selection action (Step 55). It
+    defaults off so the always-on baseline stays green: turning it on lets the
+    walk reach Edit/Delete on existing rows, which surfaces a backlog of
+    pre-existing edit-dialog crashes to be cleared in follow-up steps before
+    row-selection graduates into the baseline (mirroring how Step 38 shipped the
+    fuzzer unwired, Steps 39-40 fixed the bugs it found, and Step 41 wired it in).
     """
     from PySide6.QtWidgets import (
         QPushButton, QComboBox, QTabWidget, QLineEdit,
         QSpinBox, QDoubleSpinBox, QCheckBox,
     )
+    from table import DBTable
     actions = []
 
     for btn in window.findChildren(QPushButton):
@@ -169,6 +189,16 @@ def _enumerateActions(window):
         if chk.isEnabled():
             actions.append((_CHECK, chk,
                             f"chk:{chk.text() or chk.objectName() or '?'}"))
+    # Table-row selection (Step 55, gated by select_rows). Without this the walk
+    # can only *create* entities — Edit/Delete read self.selection, which nothing
+    # else populates — so the FK-rename / cascade-delete paths the stale-view net
+    # hunts were unreachable. Selecting a row drives parentTab.setSelection via
+    # onSelect, so a later Edit/Delete click acts on a real row.
+    if select_rows:
+        for tbl in window.findChildren(DBTable):
+            if tbl.isEnabled() and tbl.dbModel.rowCount(None) > 0:
+                owner = tbl.parentTab.__class__.__name__ if tbl.parentTab is not None else "?"
+                actions.append((_TABLE, tbl, f"table:{owner}"))
 
     return actions
 
@@ -219,6 +249,93 @@ def _executeAction(kind, target, rng):
         target.setValue(_dspinValue(target, rng))
     elif kind == _CHECK:
         target.setChecked(not target.isChecked())
+    elif kind == _TABLE:
+        from PySide6.QtCore import QItemSelectionModel
+        rowCount = target.dbModel.rowCount(None)
+        row = rng.randrange(rowCount)
+        idx = target.dbModel.index(row, 0)
+        flag = QItemSelectionModel.SelectionFlag
+        # Mix the modes so single-select, additive multi-select, and deselect
+        # paths all get walked (Delete iterates the whole selection).
+        mode = rng.choice([flag.ClearAndSelect, flag.Select, flag.Toggle])
+        target.selectionModel().select(idx, mode | flag.Rows)
+
+
+def _projectionTabs(window):
+    """Step 55 registry: the *projection tabs* whose displayed rows are a pure
+    function of a ``db`` collection via ``genTableData()``. Each entry is
+    ``(label, tab, dataAttr)`` where ``dataAttr`` is the instance attribute
+    ``genTableData`` rebuilds — the convention isn't uniform: most tabs use
+    ``data``, the products tables predate it (``materials`` / ``mixtures`` /
+    ``parts``), and the employee / holiday-defaults lists use ``tableData``.
+    ``tab.table`` (a ``DBTable``) and ``genTableData`` are uniform, so those
+    aren't parameterized.
+
+    Deliberately EXCLUDED, because their view carries filter/selection state and
+    a naive whole-collection recompute would diverge legitimately (false
+    positives): the production tab (employee/date/action filters), employee
+    overview & detail (per-employee selection), inventory (date selection),
+    settings, and the holiday *observances* sub-tab (year selection). The
+    workweek grid is excluded for a different reason — it has no ``DBTable`` and
+    caches no row projection (``refreshTable`` re-syncs each checkbox live from
+    ``db``), so there is nothing that can go stale.
+    """
+    emp = window.employeesTab
+    return [
+        # Products domain (cost-chain derived columns recompute from db).
+        ("materialsTab", window.materialsTab, "materials"),
+        ("mixturesTab", window.mixturesTab, "mixtures"),
+        ("packagingTab", window.packagingTab, "data"),
+        ("partsTab", window.partsTab, "parts"),
+        # Production Scheduling domain.
+        ("pressesTab", window.pressesTab, "data"),
+        ("pressersTab", window.pressersTab, "data"),
+        ("partPressPrefTab", window.partPressPrefTab, "data"),
+        # Sales domain.
+        ("clientsTab", window.clientsTab, "data"),
+        ("ordersTab", window.ordersTab, "data"),
+        ("orderStatusTab", window.orderStatusTab, "data"),
+        # Employees domain (active/inactive split is a fixed per-tab flag, not a
+        # mutable selection, so each list is still a pure function of db).
+        ("employeesTab.activeEmployeesTab", emp.activeEmployeesTab, "tableData"),
+        ("employeesTab.inactiveEmployeesTab", emp.inactiveEmployeesTab, "tableData"),
+        # Holiday defaults (the observances sub-tab is excluded — year-scoped).
+        ("holidaysTab.defaultsTab", window.holidaysTab.defaultsTab, "tableData"),
+    ]
+
+
+def _truncRepr(rows, limit=1500):
+    """Bounded repr for a stale-view report — tiny fuzz data keeps row lists
+    short, but guard against a pathological case dumping a wall of text."""
+    s = repr(rows)
+    return s if len(s) <= limit else s[:limit] + f"... (+{len(s) - limit} chars)"
+
+
+def _checkStaleViews(window, registry, seed, i, label):
+    """Step 55 invariant: every projection tab's on-screen rows must equal a
+    fresh ``genTableData`` recompute from ``db``. Returns a one-element failure
+    list (seed-reproducible, naming the tab and the action) on the first
+    divergence, else ``[]``.
+
+    Order matters: capture what's on screen FIRST, then recompute, then compare.
+    Refreshing before the comparison would self-heal the staleness and mask the
+    very bug this hunts. The post-comparison ``setData`` resyncs the model to
+    truth so a later step still walks against correct data (proven not to clear
+    ``tab.selection``, so fuzz coverage of selection-driven actions is intact).
+    """
+    for tabLabel, tab, attr in registry:
+        displayed = list(tab.table.dbModel._data)
+        tab.genTableData()
+        fresh = getattr(tab, attr)
+        if displayed != fresh:
+            return [f"seed={seed} step={i}: {tabLabel} view is STALE after "
+                    f"{label} — on-screen rows diverge from a fresh db recompute, "
+                    f"so a mutation path skipped this tab's refresh "
+                    f"(downstream-refresh bug class — see MERGE_PLAN §13.31).\n"
+                    f"  on screen: {_truncRepr(displayed)}\n"
+                    f"  recompute: {_truncRepr(fresh)}"]
+        tab.table.setData(fresh)
+    return []
 
 
 # Default tuned for ~10-20s offscreen on a Windows dev box (20-run sweep at
@@ -227,16 +344,23 @@ def _executeAction(kind, target, rng):
 DEFAULT_ITERATIONS = 1000
 
 
-def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS) -> list[str]:
+def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS, select_rows=False) -> list[str]:
     """Step 38: random-walk the MainWindow widget tree, return any uncaught
     exception as a failure with the seed for replay.
 
     On crash, returns one-element list ``["seed=X step=N: <label> crashed
     with <ExcName>: <msg>\\n<traceback>"]``. Reproduce with
-    ``crash_fuzz(seed=X, iterations=N+1)``.
+    ``crash_fuzz(seed=X, iterations=N+1)`` — pass the same ``select_rows`` the
+    failing run used (a row-selection crash won't reproduce without it).
 
     ``seed=None`` rolls a fresh ``time.time()``-based seed each run and
     reports it on failure for replay.
+
+    ``select_rows`` (Step 55) lets the walk select table rows, so Edit/Delete act
+    on real rows and the stale-view net can reach the FK-rename / cascade-delete
+    bug class. Defaults off because it currently surfaces pre-existing
+    edit-dialog crashes; the baseline calls this bare (no args), so it stays
+    green until those are fixed and Step 58 flips this default on.
     """
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
@@ -268,9 +392,10 @@ def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS) -> list[str]:
             return [f"seed={seed} setup: setFile returned False on tmp DB"]
         _seedFuzzData(w, fixture_rng)
         w._refreshAllTabs()
+        registry = _projectionTabs(w)
 
         for i in range(iterations):
-            actions = _enumerateActions(w)
+            actions = _enumerateActions(w, select_rows)
             if not actions:
                 return [f"seed={seed} step={i}: no enabled actions enumerated"]
             kind, target, label = walk_rng.choice(actions)
@@ -286,6 +411,17 @@ def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS) -> list[str]:
                 tb_str = "".join(traceback.format_exception(t, v, tb))
                 return [f"seed={seed} step={i}: {label} crashed with "
                         f"{t.__name__}: {v}\n{tb_str}"]
+            # Step 55 stale-view invariant. A recompute that itself raises is a
+            # real (latent) crash on the un-refreshed tab — report it cleanly with
+            # the seed rather than letting it abort the smoke run unlabeled.
+            try:
+                stale = _checkStaleViews(w, registry, seed, i, label)
+            except Exception as e:
+                tb = traceback.format_exc()
+                return [f"seed={seed} step={i}: stale-view check crashed after "
+                        f"{label} with {type(e).__name__}: {e}\n{tb}"]
+            if stale:
+                return stale
         return []
     finally:
         # No w.close(): closeEvent calls QMessageBox.warning which our stub

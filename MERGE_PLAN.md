@@ -101,7 +101,10 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 52 | ⬜ Planned | Production Scheduling: scheduler core (heuristic + infeasibility detection) — see §13.30 |
 | 53 | ⬜ Planned | Production Scheduling: Production Schedule Report UI + PDF export — see §13.30 |
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
-| 55 | ⬜ Planned | UI-test hardening: stale-view invariant in the crash fuzzer (provable downstream-refresh net) — see §13.31 |
+| 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
+| 56 | ⬜ Planned | Fix Pressers stale-view on employee rename (downstream-refresh miss the net found) — see §13.32 |
+| 57 | ⬜ Planned | Fix `del`-by-changed-key crashes in HR sub-editor rename paths (holidays / reviews / notes / …) — see §13.33 |
+| 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -284,7 +287,7 @@ New post-release subsystem: order tracking plus a **Production Schedule Report**
 
 **Two design rounds, as the spec requires:** Step 42 realizes the already-approved UI layout from the spec's §7, so it's implementation rather than a fresh design pass. Step 50 is a genuine design gate — the scheduling heuristic doesn't exist yet, so it lands as a reviewable addendum doc before Steps 51–53 build on a blessed approach. If Step 52 turns out large at review time, split it sub-step-style (à la Step 7 / Step 36): primitives are already carved off into Step 51 to keep the core's surface small.
 
-### 13.31 Step 55 — provable stale-view net: tab-refresh invariant in the UI fuzzer ⬜ Planned
+### 13.31 Step 55 — provable stale-view net: tab-refresh invariant in the UI fuzzer ✅ Done
 
 **Motivation.** The downstream-refresh bug has now recurred twice. When one edit changes another table's *contents* — an FK **rename** propagated by `Database.update<X>` (client/part → orders), or a **cascade-delete** by a `del<X>` (order delete → `orderStatus`) — the originating data mutation is correct, but the downstream tab's cached `self.data` isn't re-rendered, so the on-screen table goes stale. Step 47's manual sweep caught the rename half (client/part → Orders); Step 49's caught the delete twin (order delete → Order Status). The "refresh every downstream tab you touch" convention and per-step smoke assertions patch *instances*, but nothing **proves** the class is closed — and a `getTuple()`/dict-level smoke check passes right over a stale view because the *data* is right; only the render is wrong.
 
@@ -313,6 +316,27 @@ tab.table.setData(tab.data)                 # resync to truth so the walk contin
 **Testable milestone.** With the invariant wired in, reverting any one downstream refresh (e.g. the Step 49 `OrdersTab.deleteSelection` → `orderStatusTab.refreshTable()` line) makes `crash_fuzz` fail with a seed-reproducible stale-view report naming the tab; restoring it returns to green. The net runs clean on the current build, and `crash_fuzz` stays within its smoke time budget.
 
 **Sequencing.** Independent of the scheduler series (Steps 50–54) — it only touches the smoke/fuzz harness — so it can be pulled forward (e.g. done before Step 50) or taken after the subsystem lands; numbered 55 to keep the Production Scheduling series (42–54) contiguous. A companion **"Lever 1"** (route every edit/delete success path through `_refreshAllTabs()`, collapsing the N×M refresh-wiring obligation to one registration list) is a possible follow-up but is **out of scope** here — this step is detection-only.
+
+**As-built (landed 2026-06-25, pulled forward ahead of Step 50).** The net (`_checkStaleViews` + a curated `_projectionTabs` registry in [`smoke/ui_fuzz.py`](smoke/ui_fuzz.py)) landed as designed, with two reality checks against the sketch:
+
+- *The "(genTableData, data, table) triple" isn't uniform.* The fresh-data attribute varies by tab — most use `data`, the products tables predate it (`materials` / `mixtures` / `parts`), and the employee / holiday-defaults lists use `tableData` — so the registry parameterizes the attribute name per entry. `genTableData` and `tab.table` *are* uniform. The sketch's `shift workweek` entry was **dropped**: `WorkweekTab` is a checkbox grid with no `DBTable` and caches no row projection (`refreshTable` re-syncs each checkbox live from `db`), so nothing there can go stale. The resync via `setData` was verified not to clear `tab.selection`, so it doesn't weaken the walk.
+- *The fuzzer couldn't reach the bug class.* `crash_fuzz` only ever clicked buttons/combos/line-edits — it **never selected table rows**, and Edit/Delete read `self.selection` (populated only by a row click). So the walk could *create* entities but never *rename* or *delete* them, leaving the FK-rename / cascade-delete paths the net targets unreachable (reverting the Step 49 `orderStatusTab` refresh produced **zero** failures across 5,000 iterations). Fixed by adding a `_TABLE` row-selection action, **gated behind a `select_rows` flag (default off)**.
+
+With `select_rows=True` the net immediately earned its keep — it caught a **real, previously-unspotted** downstream-refresh miss (employee rename doesn't refresh the Pressers tab, whose rows show employee-derived labels) — and a deterministic harness confirmed the §13.31 milestone literally (revert the `OrdersTab` → `orderStatusTab` refresh ⇒ net reports `orderStatusTab` stale; restore ⇒ green). But enabling row-selection also surfaced a backlog of **pre-existing** edit-dialog crashes that were simply never fuzzed before (HR sub-editors that `del db[<changed key>]` on rename). So, exactly as **Step 38 shipped the fuzzer unwired and Steps 39–41 cleaned up and graduated it**, `select_rows` defaults **off** — the always-on baseline (`crash_fuzz` called bare) stays green at **45 PASS** — and the cleanup + graduation are split into Steps 56–58. crash_fuzz stays within budget (`select_rows=False`: 9.3–14.4 s; the net's per-step recompute is cheap on tiny fuzz data).
+
+**Repro seeds (`crash_fuzz(seed=S, select_rows=True)`):** Pressers stale-view → `seed=4`; holiday-default rename crash → `seed=5`/`6`/`7`; review rename crash → `seed=2`; note rename crash → `seed=15`.
+
+### 13.32 Step 56 — Pressers stale-view on employee rename ⬜ Planned
+
+The first bug the Step 55 net found with row-selection on: `EmployeeEditWindow.readData` refreshes the overview + active/inactive employee lists, but **not** `pressersTab`, whose rows are `_presserLabel(db, empId)` strings derived live from `db.employees`. Rename an employee and the Pressers tab keeps showing the old name (e.g. on-screen `WALSH Morgan (4106)` vs recompute `8G52 Morgan (4106)`). Fix: add `self.mainApp.pressersTab.refreshTable()` to the employee-edit success path (the standing "refresh every downstream tab you touch" convention; cf. [`feedback_fk_rename_refresh`]). Low risk; repro `crash_fuzz(seed=4, select_rows=True)`.
+
+### 13.33 Step 57 — `del`-by-changed-key crashes in HR sub-editor rename paths ⬜ Planned
+
+A cluster of pre-existing crashes the Step 55 row-selection fuzzer surfaced, all the same shape: a hand-rolled HR edit dialog's `readData(isNew=False)` does `del db[<key read from the just-edited field>]` instead of deleting the *original* key, so changing the key field on Update raises `KeyError`. Confirmed in `holidays_tab.py:383` (default holiday name), `reviews_tab.py:232` (review date), and `notes_tab.py:262` (note date/time); **sweep the siblings** (training / points / PTO use the same `del`-by-key dialog shape) rather than fixing only the three observed. These differ from the FK-rename CRUD tables (materials / clients / presses / orders / parts), which route renames through `db.updateX(old, new)` and are correct. Per the dual-mandate ([`feedback_failure_mandate`]) the ideal is a graceful in-dialog error or a correct rename, not a crash. Repro seeds above.
+
+### 13.34 Step 58 — graduate `crash_fuzz` row-selection into the baseline ⬜ Planned
+
+Once Steps 56–57 land and `crash_fuzz(select_rows=True)` runs clean across a seed sweep, flip the `select_rows` default to `True` (the baseline calls `crash_fuzz` bare, so the default *is* the lever) so the always-on net guards the full rename/delete/cascade bug class — the Step 41 move for this capability. Re-confirm the time budget at the higher coverage and lower `DEFAULT_ITERATIONS` if needed.
 
 ---
 
