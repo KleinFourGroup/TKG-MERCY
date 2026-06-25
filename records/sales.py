@@ -1,7 +1,6 @@
 # Sales subsystem record classes (spec §3, MERGE_PLAN §13.30). Aggregated into
 # Database behind the records/ re-export shim, alongside the scheduling records
-# (records/scheduling.py). The remaining sales record type (OrderStatus) lands
-# here in Step 49.
+# (records/scheduling.py).
 
 import datetime
 
@@ -78,3 +77,70 @@ class Order:
         due = self.dueDate.isoformat() if self.dueDate is not None else "?"
         return "({}, {}, {}, qty={}, ${}, due {})".format(
             self.orderNum, self.client, self.part, self.quantity, self.price, due)
+
+
+class OrderStatus:
+    # One order's dated status snapshots (spec §3.7). `snapshots` maps a date to
+    # its (remainingToPress, remainingToShip) pair — the quantity still left to
+    # press and still left to ship as of that date. The two are *independent*: one
+    # feeds the scheduler (press), the other tracks fulfillment (ship). The latest
+    # snapshot by date is the current state, so correcting a value just means adding
+    # (or replacing) a newer-dated snapshot; an order with no snapshots simply has
+    # no OrderStatus, and its outstanding-to-press defaults to the full ordered
+    # quantity (spec §5.2). Persisted as one
+    # (orderNum, date, remainingToPress, remainingToShip) row per snapshot in the
+    # `order_status` table — the nested-relational shape, mirroring how PartPressPref
+    # stores one (part, press, score) row per scored press. The tuple is an internal
+    # storage detail; call sites go through the named accessors below. Like the other
+    # sales records, a flat reference record with no `db` back-reference.
+    def __init__(self, orderNum, snapshots=None) -> None:
+        self.orderNum = orderNum
+        # date -> (remainingToPress, remainingToShip)
+        self.snapshots: dict[datetime.date, tuple[int, int]] = (
+            dict(snapshots) if snapshots is not None else {})
+
+    def setSnapshot(self, date, remainingToPress, remainingToShip) -> None:
+        # Add or replace the snapshot for `date`. One snapshot per date
+        # (UNIQUE(orderNum, date)), so re-setting an existing date overwrites it.
+        self.snapshots[date] = (remainingToPress, remainingToShip)
+
+    def removeSnapshot(self, date) -> None:
+        self.snapshots.pop(date, None)
+
+    def latestDate(self):
+        # The most recent snapshot's date, or None if there are no snapshots yet.
+        return max(self.snapshots) if self.snapshots else None
+
+    def latest(self):
+        # The most recent (remainingToPress, remainingToShip) pair (latest-by-date
+        # wins, spec §3.7), or None if there are no snapshots yet.
+        date = self.latestDate()
+        return self.snapshots[date] if date is not None else None
+
+    def remainingToPress(self):
+        # Current quantity still to press (the scheduler's "outstanding to press"),
+        # or None if no snapshot has been recorded yet (caller falls back to the
+        # full ordered quantity per spec §5.2).
+        latest = self.latest()
+        return latest[0] if latest is not None else None
+
+    def remainingToShip(self):
+        # Current quantity still to ship, or None if no snapshot recorded yet.
+        latest = self.latest()
+        return latest[1] if latest is not None else None
+
+    def isFulfilled(self) -> bool:
+        # An order is fulfilled when its latest remaining-to-ship reaches 0
+        # (spec §3.7). No snapshots => not yet fulfilled.
+        ship = self.remainingToShip()
+        return ship is not None and ship <= 0
+
+    def getTuples(self):
+        # One (orderNum, date, remainingToPress, remainingToShip) row per snapshot,
+        # date-sorted — the persistence shape.
+        return [(self.orderNum, date.isoformat(),
+                 self.snapshots[date][0], self.snapshots[date][1])
+                for date in sorted(self.snapshots)]
+
+    def __str__(self) -> str:
+        return "({}, {})".format(self.orderNum, sorted(self.snapshots.items()))

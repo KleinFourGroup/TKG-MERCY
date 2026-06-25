@@ -483,3 +483,27 @@ class SaveMixin:
                 logging.info(f" * Deleting orphan part-press preferences {orphans}")
             except Exception as e:
                 logging.error(f" * Error deleting orphan part-press preferences {orphans}: {repr(e)}")
+
+        # --- Sales: order status ((orderNum, date) dated-snapshot rows) ---
+        # Composite-key nested table like part_press_pref — wipe each order's child
+        # rows and re-insert, then orphan-sweep rows whose orderNum is no longer in
+        # db.orderStatus (covers both removed snapshots and orders whose status
+        # dropped out entirely). The in-memory cascade (delOrder) keeps db.orderStatus
+        # tidy; this sweep is the persistence-side backstop.
+        logging.info(f"Saving order status to {self.filePath}")
+        for orderNum in db.orderStatus:
+            self.dbFile.execute("DELETE FROM order_status WHERE orderNum=?", (orderNum,))
+            for vals in db.orderStatus[orderNum].getTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO order_status VALUES (?, ?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT orderNum, date FROM order_status")
+        orphans = [row for row in res.fetchall() if row[0] not in db.orderStatus]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM order_status WHERE (orderNum, date)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan order status {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan order status {orphans}: {repr(e)}")

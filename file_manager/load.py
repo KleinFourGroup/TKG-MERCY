@@ -9,6 +9,7 @@ from records.employees import (
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
 from records.sales import Client, Order
+import datetime
 
 if TYPE_CHECKING:
     import sqlite3
@@ -339,3 +340,17 @@ class LoadMixin:
                 db.partPressPref[part] = PartPressPref(part)
             db.partPressPref[part].setScore(press, score)
             logging.info(f" * Loaded part-press preference ({part}, {press}, {score})")
+
+        # --- Sales: order status ---
+        # Each (orderNum, date, remainingToPress, remainingToShip) row is one dated
+        # snapshot; setOrderSnapshot rebuilds the per-order OrderStatus on demand so
+        # an order with no rows simply has no entry.
+        logging.info(f"Loading order status from {self.filePath}")
+        res = self.dbFile.execute(
+            "SELECT orderNum, date, remainingToPress, remainingToShip FROM order_status "
+            "ORDER BY orderNum, date"
+        )
+        for (orderNum, date, remainingToPress, remainingToShip) in res.fetchall():
+            db.setOrderSnapshot(orderNum, datetime.date.fromisoformat(date),
+                                remainingToPress, remainingToShip)
+            logging.info(f" * Loaded order status ({orderNum}, {date}, {remainingToPress}, {remainingToShip})")

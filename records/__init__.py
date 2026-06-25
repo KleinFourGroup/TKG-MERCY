@@ -14,7 +14,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
-from records.sales import Client, Order
+from records.sales import Client, Order, OrderStatus
 from records.database import Database, emptyDB
 
 __all__ = [
@@ -27,6 +27,6 @@ __all__ = [
     "EmployeeNotesDB", "EmployeePTODB", "ObservancesDB",
     "ProductionRecord",
     "Press", "Presser", "ShiftWorkweek", "PartPressPref",
-    "Client", "Order",
+    "Client", "Order", "OrderStatus",
     "Database", "emptyDB",
 ]

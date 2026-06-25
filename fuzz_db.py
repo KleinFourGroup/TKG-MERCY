@@ -555,6 +555,39 @@ def populateOrders(db, rng, clientNames, partNames, n, today):
     return made
 
 
+def populateOrderStatus(db, rng, orderNums, today):
+    # Lay down 1-3 dated status snapshots per order that decline toward fulfillment,
+    # so the nested editor / scheduler have demo data. The latest snapshot wins; some
+    # orders reach 0-to-ship (fulfilled), most still have work left. remainingToShip
+    # is kept >= remainingToPress (you can't ship what isn't pressed) and both start
+    # at the ordered quantity — except occasionally below, modelling existing
+    # finished stock that already covers part of the order (spec §3.7). Snapshots are
+    # dated in the recent past. Needs at least one order. Returns the snapshot count.
+    if not orderNums:
+        return 0
+    count = 0
+    for orderNum in orderNums:
+        qty = db.orders[orderNum].quantity
+        nSnaps = rng.randint(1, 3)
+        # Occasionally start press-remaining below the ordered quantity (on-hand stock).
+        press = qty if rng.random() < 0.8 else rng.randint(0, qty)
+        ship = qty
+        # nSnaps distinct days within the last 30, applied oldest-first so the
+        # remaining counts ratchet down over time.
+        days = sorted(rng.sample(range(1, 31), nSnaps), reverse=True)
+        for i, d in enumerate(days):
+            # ~30% of orders are fully pressed + shipped by their final snapshot, so
+            # demo data shows a mix of fulfilled (0-to-ship) and in-flight orders.
+            if i == len(days) - 1 and rng.random() < 0.3:
+                press = ship = 0
+            date = today - datetime.timedelta(days=d)
+            db.setOrderSnapshot(orderNum, date, press, ship)
+            count += 1
+            press = max(0, press - rng.randint(0, press))
+            ship = max(press, ship - rng.randint(0, ship))
+    return count
+
+
 def populateShiftWorkweek(db, rng):
     # Realistic Mon-Fri base for all three shifts (weekdays 0-4, Mon=0..Sun=6),
     # with an occasional Saturday (5) crew on shift 1. No scale knob — there are
@@ -644,6 +677,8 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  clients:   {len(clientNames)}")
     orderNums = populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
     print(f"  orders:    {len(orderNums)}")
+    nStatus = populateOrderStatus(db, rng, orderNums, today)
+    print(f"  orderStatus: {nStatus} snapshots over {len(db.orderStatus)} orders")
 
     if not w.fileManager.setFile(output):
         print(f"ERROR: setFile returned False for {output}", file=sys.stderr)

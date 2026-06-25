@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed; next up is Step 49 (Order Status nested editor).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots); next up is Step 50 (scheduling-algorithm design round — an addendum doc, the second design gate).*
 
 ### 12.1 Step status
 
@@ -95,12 +95,13 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 46 | ✅ Done | Merge plan Step 46: Client table (full vertical slice) — see §13.30 |
 | 47 | ✅ Done | Merge plan Step 47: Order (shop order) table (full vertical slice) — see §13.30 |
 | 48 | ✅ Done | Merge plan Step 48: Part-Press Preference nested editor (full vertical slice) — see §13.30 |
-| 49 | ⬜ Planned | Production Scheduling: Order Status nested editor — see §13.30 |
+| 49 | ✅ Done | Merge plan Step 49: Order Status nested editor (full vertical slice) — see §13.30 |
 | 50 | ⬜ Planned | Production Scheduling: scheduling-algorithm design round (addendum doc) — see §13.30 |
 | 51 | ⬜ Planned | Production Scheduling: scheduling primitives (calendar / capacity / rate / scrap / deadline helpers) — see §13.30 |
 | 52 | ⬜ Planned | Production Scheduling: scheduler core (heuristic + infeasibility detection) — see §13.30 |
 | 53 | ⬜ Planned | Production Scheduling: Production Schedule Report UI + PDF export — see §13.30 |
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
+| 55 | ⬜ Planned | UI-test hardening: stale-view invariant in the crash fuzzer (provable downstream-refresh net) — see §13.31 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -282,6 +283,36 @@ New post-release subsystem: order tracking plus a **Production Schedule Report**
 **Manual UI gate** (per the standing rule that smoke can't cover combo visibility / nested-editor rebuild / selection logic): Steps **42, 45, 48, 49, 53** are the Qt-UI-heavy ones — pause for Matthew's manual sweep before committing each. (Step 45 was added to this list at build time: its fixed shift×weekday checkbox grid is a custom widget, not the flat-CRUD template, so it earned a sweep.)
 
 **Two design rounds, as the spec requires:** Step 42 realizes the already-approved UI layout from the spec's §7, so it's implementation rather than a fresh design pass. Step 50 is a genuine design gate — the scheduling heuristic doesn't exist yet, so it lands as a reviewable addendum doc before Steps 51–53 build on a blessed approach. If Step 52 turns out large at review time, split it sub-step-style (à la Step 7 / Step 36): primitives are already carved off into Step 51 to keep the core's surface small.
+
+### 13.31 Step 55 — provable stale-view net: tab-refresh invariant in the UI fuzzer ⬜ Planned
+
+**Motivation.** The downstream-refresh bug has now recurred twice. When one edit changes another table's *contents* — an FK **rename** propagated by `Database.update<X>` (client/part → orders), or a **cascade-delete** by a `del<X>` (order delete → `orderStatus`) — the originating data mutation is correct, but the downstream tab's cached `self.data` isn't re-rendered, so the on-screen table goes stale. Step 47's manual sweep caught the rename half (client/part → Orders); Step 49's caught the delete twin (order delete → Order Status). The "refresh every downstream tab you touch" convention and per-step smoke assertions patch *instances*, but nothing **proves** the class is closed — and a `getTuple()`/dict-level smoke check passes right over a stale view because the *data* is right; only the render is wrong.
+
+**What this step adds.** "Lever 2" from the 2026-06-25 design discussion: a post-action invariant in [`smoke/ui_fuzz.py`](smoke/ui_fuzz.py)'s `crash_fuzz` random walk. After each executed action, for every registered *projection tab*, compare the on-screen rows against a fresh recompute from `db`; any divergence is a seed-reproducible failure naming the tab, the action, and the seed. This converts the entire downstream-refresh bug class — present and future, every tab, every mutation path nobody has thought of yet — into an automatic smoke failure **before commit**, instead of something a human must remember to assert step by step.
+
+**A "projection tab"** is one whose displayed rows are a pure function of a `db` collection via `genTableData()` — the FK-reference CRUD/list tabs: materials, mixtures, packaging, parts, presses, pressers, clients, orders, order status, part-press preference, shift workweek, holiday defaults, and the active/inactive employee lists. These are exactly where the bug lives.
+
+**Explicitly excluded** (their view legitimately differs from a naïve full-collection recompute because they carry view-local filter/selection state, which would yield false positives): the production tab (employee / date / action filters), employee overview & detail (per-employee selection), inventory (date selection), and anything whose `genTableData` reads a combo/selection rather than the whole collection. The registry is curated, and each entry is confirmed selection-independent before inclusion.
+
+**Design sketch** (per registered tab, after each fuzz action):
+
+```
+displayed = list(tab.table.dbModel._data)   # what's currently on screen
+tab.genTableData()                          # recompute self.data from db (no view push)
+if displayed != tab.data:                   # view diverged from truth -> a tab went stale
+    return [f"seed={seed} step={i}: {tab} stale after {label} ..."]
+tab.table.setData(tab.data)                 # resync to truth so the walk continues honestly
+```
+
+- The check must **not** call `refreshTable()` *before* comparing — that would self-heal and mask the very bug it's hunting. It resyncs *after* the comparison so later steps still run against correct data.
+- Needs a small registry mapping each projection tab to its `(genTableData, data, table)` triple; most tabs already follow that convention, so the registry is a list of `mainApp` attribute names plus the recompute call. The per-order / per-part nested editors are separate windows, not registered tabs, so they're out of scope.
+- It also catches a tab accidentally omitted from `MainWindow._refreshAllTabs()` (its rows would diverge after a load or mutation), so it doubles as a registration guard.
+
+**Risk:** Medium — touches the fuzzer's hot loop and depends on the registry excluding filter-state tabs to avoid false positives.
+
+**Testable milestone.** With the invariant wired in, reverting any one downstream refresh (e.g. the Step 49 `OrdersTab.deleteSelection` → `orderStatusTab.refreshTable()` line) makes `crash_fuzz` fail with a seed-reproducible stale-view report naming the tab; restoring it returns to green. The net runs clean on the current build, and `crash_fuzz` stays within its smoke time budget.
+
+**Sequencing.** Independent of the scheduler series (Steps 50–54) — it only touches the smoke/fuzz harness — so it can be pulled forward (e.g. done before Step 50) or taken after the subsystem lands; numbered 55 to keep the Production Scheduling series (42–54) contiguous. A companion **"Lever 1"** (route every edit/delete success path through `_refreshAllTabs()`, collapsing the N×M refresh-wiring obligation to one registration list) is a possible follow-up but is **out of scope** here — this step is detection-only.
 
 ---
 

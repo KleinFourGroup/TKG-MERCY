@@ -355,8 +355,11 @@ class PartsEditWindow(QWidget):
                 self.part = None
             self.mainApp.partsTab.refreshTable()
             # A part rename propagates to any order referencing it (db.updatePart),
-            # so refresh the Orders table too (like packaging refreshes parts).
+            # so refresh the Orders table too (like packaging refreshes parts). The
+            # Order Status table shows the order's part as well (Step 49), so refresh
+            # it for the same reason.
             self.mainApp.ordersTab.refreshTable()
+            self.mainApp.orderStatusTab.refreshTable()
             # Part-press preferences are keyed by part name (Step 48): a new part
             # shows up as "(neutral)" and a rename rekeys its prefs, so the
             # Part-Press Preference table must refresh too.

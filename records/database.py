@@ -10,7 +10,7 @@ from records.employees import (
 )
 from records.production import ProductionRecord
 from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
-from records.sales import Client, Order
+from records.sales import Client, Order, OrderStatus
 
 
 class Database:
@@ -34,7 +34,8 @@ class Database:
                  shiftWorkweek: dict[int, ShiftWorkweek],
                  partPressPref: dict[str, PartPressPref],
                  clients: dict[str, Client],
-                 orders: dict[str, Order]) -> None:
+                 orders: dict[str, Order],
+                 orderStatus: dict[str, OrderStatus]) -> None:
         self.globals = globals
         self.materials = materials
         self.mixtures = mixtures
@@ -55,6 +56,7 @@ class Database:
         self.partPressPref = partPressPref
         self.clients = clients
         self.orders = orders
+        self.orderStatus = orderStatus
         for entry in self.materials:
             self.materials[entry].db = self
         for entry in self.mixtures:
@@ -475,6 +477,12 @@ class Database:
             orders = {newNum if key == oldNum else key: val for key, val in self.orders.items()}
             self.orders = orders
             self.orders[newNum].orderNum = newNum
+            # Order status snapshots are keyed by order number (Step 49), so rekey
+            # the entry and fix up the stored orderNum on the record.
+            if oldNum in self.orderStatus:
+                status = self.orderStatus.pop(oldNum)
+                status.orderNum = newNum
+                self.orderStatus[newNum] = status
 
     def addOrder(self, order: Order):
         if order.orderNum in self.orders:
@@ -485,6 +493,31 @@ class Database:
         if orderNum not in self.orders:
             raise RuntimeError('orderNum not in self.orders')
         del self.orders[orderNum]
+        # Order status snapshots are config tied to a live order (Step 49), so
+        # cascade-drop them when the order is deleted — the same config-cascades
+        # pattern as delPart dropping a part's partPressPref.
+        self.orderStatus.pop(orderNum, None)
+
+    # ---- Sales: order status (dated snapshots) ---------------------------------------------
+
+    def setOrderSnapshot(self, orderNum, date, remainingToPress, remainingToShip):
+        # Add or replace one dated status snapshot for an order, keeping
+        # self.orderStatus in exact lockstep with the persisted rows: an order entry
+        # exists only while it has >= 1 snapshot (an empty DB has an empty dict —
+        # same shape as partPressPref / shiftWorkweek). Orders are created/deleted
+        # from their own table, so there's no add/del here; the nested editor sets
+        # snapshots through this.
+        if orderNum not in self.orderStatus:
+            self.orderStatus[orderNum] = OrderStatus(orderNum)
+        self.orderStatus[orderNum].setSnapshot(date, remainingToPress, remainingToShip)
+
+    def removeOrderSnapshot(self, orderNum, date):
+        # Drop one dated snapshot; if it was the order's last, drop the now-empty
+        # OrderStatus so the in-memory shape matches the persisted presence rows.
+        if orderNum in self.orderStatus:
+            self.orderStatus[orderNum].removeSnapshot(date)
+            if not self.orderStatus[orderNum].snapshots:
+                del self.orderStatus[orderNum]
 
     # ---- mergeFrom -------------------------------------------------------------------------
 
@@ -629,5 +662,6 @@ def emptyDB():
         {},          # shiftWorkweek
         {},          # partPressPref
         {},          # clients
-        {}           # orders
+        {},          # orders
+        {}           # orderStatus
     )

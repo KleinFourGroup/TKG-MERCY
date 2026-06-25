@@ -16,7 +16,7 @@ from smoke.migrations import (
     legacy_anika_migration, legacy_becky_migration, legacy_merge,
     mercy_v3_to_v4_migration, mercy_v4_to_v5_migration, mercy_v5_to_v6_migration,
     mercy_v6_to_v7_migration, mercy_v7_to_v8_migration, mercy_v8_to_v9_migration,
-    mercy_v9_to_v10_migration,
+    mercy_v9_to_v10_migration, mercy_v10_to_v11_migration,
 )
 from smoke.reports import (
     production_report, production_productivity_report,
@@ -28,6 +28,7 @@ from smoke.ui import (
     qsettings_reopen, close_confirm,
     parts_tab_crud, employees_tab_crud, presses_tab_crud, pressers_tab_crud,
     shift_workweek_roundtrip, part_press_pref_crud, clients_tab_crud, orders_tab_crud,
+    order_status_crud,
     employee_detail_populates, reviews_dialog_roundtrip,
     training_dialog_roundtrip, points_dialog_roundtrip,
     pto_dialog_roundtrip, notes_dialog_roundtrip,
@@ -44,7 +45,7 @@ __all__ = [
     "legacy_anika_migration", "legacy_becky_migration", "legacy_merge",
     "mercy_v3_to_v4_migration", "mercy_v4_to_v5_migration", "mercy_v5_to_v6_migration",
     "mercy_v6_to_v7_migration", "mercy_v7_to_v8_migration", "mercy_v8_to_v9_migration",
-    "mercy_v9_to_v10_migration",
+    "mercy_v9_to_v10_migration", "mercy_v10_to_v11_migration",
     "production_report", "production_productivity_report",
     "production_employee_productivity_report", "production_trend_report",
     "product_employee_reports",
@@ -52,6 +53,7 @@ __all__ = [
     "qsettings_reopen", "close_confirm",
     "parts_tab_crud", "employees_tab_crud", "presses_tab_crud", "pressers_tab_crud",
     "shift_workweek_roundtrip", "part_press_pref_crud", "clients_tab_crud", "orders_tab_crud",
+    "order_status_crud",
     "employee_detail_populates", "reviews_dialog_roundtrip",
     "training_dialog_roundtrip", "points_dialog_roundtrip",
     "pto_dialog_roundtrip", "notes_dialog_roundtrip",

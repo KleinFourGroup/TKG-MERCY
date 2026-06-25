@@ -294,3 +294,16 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_press_pref(part, press, score INTEGER, UNIQUE(part, press))")
         self._setDbVersion(10)
         logging.info(" --> v9->v10 migration complete")
+
+    def _migrateV10ToV11(self):
+        # Sales subsystem (Step 49): add the (initially empty) `order_status` table —
+        # one (orderNum, date, remainingToPress, remainingToShip) row per dated
+        # snapshot. Same additive + idempotent shape as v4->v5 .. v9->v10 — no
+        # existing data is touched, no backup needed, and the chain replays cleanly
+        # on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v10->v11 migration: add order_status table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS order_status(orderNum, date, remainingToPress INTEGER, remainingToShip INTEGER, UNIQUE(orderNum, date))")
+        self._setDbVersion(11)
+        logging.info(" --> v10->v11 migration complete")

@@ -60,7 +60,8 @@ def _seedTinyFuzzDB(w):
     F.populateShiftWorkweek(db, rng)
     F.populatePartPressPref(db, rng, partNames, pressNames)
     clientNames = F.populateClients(db, rng, cfg["clients"])
-    F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+    orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+    F.populateOrderStatus(db, rng, orderNums, today)
     return partNames, idNums, mixtureNames
 
 
@@ -1162,6 +1163,213 @@ def part_press_pref_crud() -> list[str]:
             got = {p: pr.getTuples() for p, pr in w2.db.partPressPref.items()}
             if got != expected:
                 errors.append(f"part-press pref roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def order_status_crud() -> list[str]:
+    """Step 49: OrderStatusTab nested editor CRUD + latest-wins + cascade + roundtrip.
+
+    Seeds tiny fuzz data (now laying down dated snapshots per order), then:
+      - opens the per-order editor; confirms the snapshot sub-table prefills from
+        the order's current snapshots;
+      - adds a fresh dated snapshot via the inline editor, confirms it lands in
+        db.orderStatus and the sub-table;
+      - re-adds the same date with new values, confirms it OVERWRITES (one snapshot
+        per date) rather than duplicating;
+      - adds a latest-dated snapshot with remaining-to-ship 0 and confirms the order
+        reads fulfilled (isFulfilled + the outer table's Fulfilled? column);
+      - selects + deletes a snapshot via the editor;
+      - renames the order: status snapshots rekey AND the Order Status table
+        refreshes (the FK-rename-refresh rule);
+      - deletes an order: its status snapshots cascade away;
+      - saves, reloads into a fresh MainWindow, confirms snapshots roundtrip via
+        getTuples.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from app import MainWindow
+    from order_status_tab import OrderStatusEditWindow
+    from orders_tab import OrderEditWindow
+    from utils import toQDate
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        if len(w.db.orderStatus) == 0:
+            errors.append("expected fuzz seed to populate order status, got 0")
+            return errors
+
+        orderNum = sorted(w.db.orderStatus)[0]
+        status = w.db.orderStatus[orderNum]
+
+        # --- editor prefill: sub-table shows the order's current snapshots ---
+        editor = OrderStatusEditWindow(orderNum, w)
+        if len(editor.snapshotData) != len(status.snapshots):
+            errors.append(f"editor sub-table rows {len(editor.snapshotData)} != "
+                          f"snapshots {len(status.snapshots)}")
+
+        # --- add a fresh dated snapshot via the inline editor ---
+        d1 = datetime.date.today() - datetime.timedelta(days=200)  # outside the seed window
+        editor.dateEdit.setDate(toQDate(d1))
+        editor.pressEdit.setText("42")
+        editor.shipEdit.setText("99")
+        editor.addButton.click()
+        if w.db.orderStatus[orderNum].snapshots.get(d1) != (42, 99):
+            errors.append(f"after add: snapshot[{d1}]={w.db.orderStatus[orderNum].snapshots.get(d1)}, want (42, 99)")
+        if not any(r[0] == d1.isoformat() for r in editor.snapshotData):
+            errors.append(f"after add: sub-table missing row for {d1}")
+
+        # --- re-add the same date: overwrite, not duplicate ---
+        before = len(w.db.orderStatus[orderNum].snapshots)
+        editor.dateEdit.setDate(toQDate(d1))
+        editor.pressEdit.setText("7")
+        editor.shipEdit.setText("8")
+        editor.addButton.click()
+        if w.db.orderStatus[orderNum].snapshots.get(d1) != (7, 8):
+            errors.append(f"after overwrite: snapshot[{d1}]={w.db.orderStatus[orderNum].snapshots.get(d1)}, want (7, 8)")
+        if len(w.db.orderStatus[orderNum].snapshots) != before:
+            errors.append(f"after overwrite: snapshot count changed {before} -> "
+                          f"{len(w.db.orderStatus[orderNum].snapshots)} (should overwrite)")
+
+        # --- latest-by-date wins => fulfilled when remaining-to-ship hits 0 ---
+        dLatest = datetime.date.today()
+        editor.dateEdit.setDate(toQDate(dLatest))
+        editor.pressEdit.setText("0")
+        editor.shipEdit.setText("0")
+        editor.addButton.click()
+        if not w.db.orderStatus[orderNum].isFulfilled():
+            errors.append("after 0-to-ship latest snapshot: order not reported fulfilled")
+        w.orderStatusTab.refreshTable()
+        orow = next((r for r in w.orderStatusTab.data if r[0] == orderNum), None)
+        if orow is None or orow[-1] != "Yes":
+            errors.append(f"outer table Fulfilled? column not 'Yes' (row={orow})")
+
+        # --- confirmation guard on out-of-order / increasing snapshots ---
+        # Latest snapshot is now dLatest (today) = (0, 0). Drive QMessageBox.question
+        # with a recorder so we can assert *when* the are-you-sure fires, and that
+        # answering No cancels the add. (_silenceMessageBoxes stubbed it to Yes; we
+        # restore that stub afterward so the later delete/rename confirms still pass.)
+        answer = {"v": QMessageBox.StandardButton.Yes}
+        calls = {"n": 0}
+
+        def _recordQ(*_a, **_kw):
+            calls["n"] += 1
+            return answer["v"]
+
+        savedQ = QMessageBox.question
+        QMessageBox.question = staticmethod(_recordQ)  # type: ignore[assignment]
+        try:
+            # a normal newer, non-increasing snapshot must NOT prompt
+            calls["n"] = 0
+            editor.dateEdit.setDate(toQDate(dLatest + datetime.timedelta(days=1)))
+            editor.pressEdit.setText("0")
+            editor.shipEdit.setText("0")
+            editor.addButton.click()
+            if calls["n"] != 0:
+                errors.append("normal decreasing snapshot should not prompt for confirmation")
+
+            # a later snapshot with higher remaining than its predecessor must prompt
+            calls["n"] = 0
+            editor.dateEdit.setDate(toQDate(dLatest + datetime.timedelta(days=2)))
+            editor.pressEdit.setText("5")
+            editor.shipEdit.setText("5")
+            editor.addButton.click()
+            if calls["n"] == 0:
+                errors.append("increasing-remaining snapshot did not prompt for confirmation")
+            if w.db.orderStatus[orderNum].snapshots.get(dLatest + datetime.timedelta(days=2)) != (5, 5):
+                errors.append("increasing snapshot not added after confirming Yes")
+
+            # a back-dated snapshot (earlier than the latest) must prompt
+            calls["n"] = 0
+            editor.dateEdit.setDate(toQDate(dLatest - datetime.timedelta(days=400)))
+            editor.pressEdit.setText("1")
+            editor.shipEdit.setText("1")
+            editor.addButton.click()
+            if calls["n"] == 0:
+                errors.append("back-dated snapshot did not prompt for confirmation")
+
+            # answering No must cancel the add
+            answer["v"] = QMessageBox.StandardButton.No
+            cancelDate = dLatest + datetime.timedelta(days=3)
+            editor.dateEdit.setDate(toQDate(cancelDate))
+            editor.pressEdit.setText("999")
+            editor.shipEdit.setText("999")
+            editor.addButton.click()
+            if cancelDate in w.db.orderStatus[orderNum].snapshots:
+                errors.append("answering No to the confirm still added the snapshot")
+        finally:
+            QMessageBox.question = savedQ  # type: ignore[assignment]
+
+        # --- select + delete a snapshot via the editor ---
+        editor.setSelection([d1.isoformat()])
+        editor.deleteButton.click()
+        if d1 in w.db.orderStatus[orderNum].snapshots:
+            errors.append(f"after delete: snapshot[{d1}] still present")
+
+        # --- order rename: status rekeys + Order Status table refreshes ---
+        renamed = "RENAMED-STATUS-ORDER"
+        oe = OrderEditWindow(orderNum, w)
+        oe.orderNumEdit.setText(renamed)
+        oe.updateButton.click()
+        if orderNum in w.db.orderStatus:
+            errors.append(f"order rename: stale key {orderNum!r} still in orderStatus")
+        if renamed not in w.db.orderStatus:
+            errors.append(f"order rename: status did not rekey to {renamed!r}")
+        elif w.db.orderStatus[renamed].orderNum != renamed:
+            errors.append(f"order rename: record orderNum not updated ({w.db.orderStatus[renamed].orderNum!r})")
+        if not any(r[0] == renamed for r in w.orderStatusTab.data):
+            errors.append("order rename: Order Status table not refreshed")
+
+        # --- order delete: its status cascades away AND the table view refreshes ---
+        victim = sorted(w.db.orderStatus)[0]
+        w.ordersTab.setSelection([victim])
+        w.ordersTab.deleteSelection()
+        if victim in w.db.orders:
+            errors.append(f"order delete: {victim!r} survived")
+        if victim in w.db.orderStatus:
+            errors.append(f"order delete: status for {victim!r} not cascaded")
+        # The data cascade isn't enough — the Order Status tab must drop the row too,
+        # or the deleted order lingers on screen (the bug this guards).
+        if any(r[0] == victim for r in w.orderStatusTab.data):
+            errors.append(f"order delete: Order Status table still shows {victim!r} (stale view)")
+
+        # --- save / reload roundtrip ---
+        expected = {num: st.getTuples() for num, st in w.db.orderStatus.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading order status DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {num: st.getTuples() for num, st in w2.db.orderStatus.items()}
+            if got != expected:
+                errors.append(f"order status roundtrip mismatch: expected {expected}, got {got}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

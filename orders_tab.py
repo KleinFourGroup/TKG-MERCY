@@ -29,8 +29,8 @@ def _genOrderNum(db, clientName, partName):
 class OrdersTab(QWidget):
     # Flat CRUD list of shop orders (Sales, Step 47). Each order is one part for
     # one client, keyed by a unique orderNum, with quantity / price (order total) /
-    # dueDate. Nothing references an order yet, so delete is unconditional (Step
-    # 49's order status will cascade). Lives under "Production and Scheduling" ->
+    # dueDate. Delete is unconditional; an order's dated status snapshots cascade
+    # away with it (Step 49, db.delOrder). Lives under "Production and Scheduling" ->
     # "Sales" -> "Orders".
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
@@ -96,6 +96,9 @@ class OrdersTab(QWidget):
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.delOrder(order)
                 self.refreshTable()
+                # delOrder cascades the order's status snapshots away, so refresh the
+                # Order Status table too or it keeps showing the deleted order (Step 49).
+                self.mainApp.orderStatusTab.refreshTable()
                 QMessageBox.information(self.mainApp, "Success!", f"Deleted order {order}")
 
     def refreshTable(self):
@@ -230,6 +233,10 @@ class OrderEditWindow(QWidget):
             if isNone:
                 self.item = None
             self.mainApp.ordersTab.refreshTable()
+            # An order rename rekeys its status snapshots (db.updateOrder) and every
+            # order's row (number / client / part / quantity) shows in the Order
+            # Status table, so refresh it too (Step 49 downstream-refresh rule).
+            self.mainApp.orderStatusTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)
