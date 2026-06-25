@@ -106,7 +106,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 57 | ✅ Done | Fix HR sub-editor Update crashes: pop-with-default on stale keys (reviews/points/notes/training/PTO) + holidays original-key delete — see §13.33 |
 | 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 | 59 | ✅ Done | Fix `updateEmployee` re-id FK orphan: cascade pressers + production to the new id (+ `employee_reid_cascades` check) — see §13.35 |
-| 60 | ⬜ Planned | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
+| 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -359,11 +359,11 @@ Landed 2026-06-25, pulled forward right after Step 56 (the bug was discovered th
 
 Fix: extend `updateEmployee` to rekey `pressers` (and set the moved `Presser.employeeId`) and to update each production record's `employeeId` then rebuild `self.production` off the new keys. No collision risk — the edit dialog guarantees `newID` isn't an existing employee, so it has no pre-existing presser/production rows. Guarded by a new **`employee_reid_cascades`** smoke check (46 PASS) that drives the real `EmployeeEditWindow` re-id and asserts presser + production follow, both in memory and across a save/reload roundtrip. This is the *only* automated guard for this bug — the Step 55 net can't see it (an orphan reads identically in the view and a fresh recompute, so there's no divergence to flag).
 
-### 13.36 Step 60 — harden the `db.updateX` rekey helpers against a missing original key ⬜ Planned
+### 13.36 Step 60 — harden the `db.updateX` rekey helpers against a missing original key ✅ Done
 
-Surfaced by the Step 57 wider sweep (`seed=18`, `select_rows=True`): `db.updatePress(entry, name)` does `presses = {name if k == entry else k: v …}; self.presses[name].name = name`. If `entry` (the original name) is no longer present — a stale `PressEditWindow` whose press was deleted from the Presses tab while the editor stayed open — the comprehension copies the dict unchanged (no key matches `entry`), so the follow-up `self.presses[name]` `KeyError`s. Same stale-window-after-external-delete theme as Step 57, but in the name-keyed rekey helper rather than a dialog `del`.
+Landed 2026-06-25. Surfaced by the Step 57 wider sweep (`seed=18`, `select_rows=True`): `db.updatePress(entry, name)` does `presses = {name if k == entry else k: v …}; self.presses[name].name = name`. If `entry` (the original name) is no longer present — a stale `PressEditWindow` whose press was deleted from the Presses tab while the editor stayed open — the comprehension copies the dict unchanged (no key matches `entry`), so the follow-up `self.presses[name]` `KeyError`s. Same stale-window-after-external-delete theme as Step 57, but in the name-keyed rekey helper rather than a dialog `del`.
 
-**Audit + fix the whole family:** `updatePress`, `updateClient`, `updatePart`, `updateMaterial`, `updateMixture`, `updatePackaging`, `updateOrder` (and re-confirm `updateEmployee`) — each should no-op (or early-return) cleanly when `entry` isn't present rather than indexing a key the rekey never created. Consider guarding the stale Update at the dialog layer too (re-validate the record still exists before calling `updateX`). **Prerequisite for Step 58** — the always-on baseline can't run `select_rows=True` until the sweep is fully clean. Repro `crash_fuzz(seed=18, select_rows=True)`.
+Fixed the whole family uniformly — `updatePart`, `updatePackaging`, `updateMixture`, `updateMaterial`, `updatePress`, `updateClient`, `updateOrder` each gained an `and <key> in self.<coll>` clause on its rename guard, so a rename whose original key is gone no-ops cleanly instead of rekeying to a key the comprehension never created. (`updateEmployee` already guarded every rekey with `if oldID in coll`, including the Step 59 pressers/production additions, so it needed no change.) The dialog layer was left as-is: the no-op means a stale Update silently does nothing and still reports success — acceptable per the dual-mandate (no crash, no corruption); a dialog-layer "this record no longer exists" re-validation is possible future polish, not done here. The happy-path renames stay covered by the existing CRUD roundtrip smoke checks; once Step 58 graduates `select_rows=True`, the net guards regressions of the stale-window crash directly. Verified: `crash_fuzz(seed=18, select_rows=True)` now clean; full smoke green (46 PASS).
 
 ---
 

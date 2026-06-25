@@ -67,7 +67,10 @@ class Database:
             self.parts[entry].db = self
 
     def updatePart(self, entry, name):
-        if not name == entry:
+        # Step 60: also require the original to still exist — a stale edit window
+        # whose part was deleted from the tab would otherwise rekey to no `name`
+        # key and KeyError on the line below; no-op the rename instead.
+        if name != entry and entry in self.parts:
             parts = {name if key == entry else key:val for key, val in self.parts.items()}
             self.parts = parts
             self.parts[name].name = name
@@ -106,7 +109,8 @@ class Database:
         return usedIn
 
     def updatePackaging(self, entry, name):
-        if not name == entry:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if name != entry and entry in self.packaging:
             packaging = {name if key == entry else key:val for key, val in self.packaging.items()}
             self.packaging = packaging
             self.packaging[name].name = name
@@ -153,7 +157,8 @@ class Database:
         return usedIn
 
     def updateMixture(self, entry, name):
-        if not name == entry:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if name != entry and entry in self.mixtures:
             mixtures = {name if key == entry else key:val for key, val in self.mixtures.items()}
             self.mixtures = mixtures
             self.mixtures[name].name = name
@@ -183,7 +188,8 @@ class Database:
         return usedIn
 
     def updateMaterial(self, entry, name):
-        if not name == entry:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if name != entry and entry in self.materials:
             materials = {name if key == entry else key:val for key, val in self.materials.items()}
             self.materials = materials
             self.materials[name].name = name
@@ -365,7 +371,8 @@ class Database:
     def updatePress(self, entry, name):
         # Rekey the presses dict on rename, mirroring updatePackaging/updateMaterial.
         # Name-collision is rejected at the tab (PressEditWindow.readData).
-        if not name == entry:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if name != entry and entry in self.presses:
             presses = {name if key == entry else key: val for key, val in self.presses.items()}
             self.presses = presses
             self.presses[name].name = name
@@ -458,7 +465,8 @@ class Database:
         # Rekey the clients dict on rename, mirroring updatePackaging/updateMaterial.
         # The transportDays field is set directly on the record by the edit window.
         # Name-collision is rejected at the tab (ClientEditWindow.readData).
-        if not name == entry:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if name != entry and entry in self.clients:
             clients = {name if key == entry else key: val for key, val in self.clients.items()}
             self.clients = clients
             self.clients[name].name = name
@@ -490,7 +498,8 @@ class Database:
         # mirroring updateEmployee's rekey. The client / part / quantity / price /
         # dueDate fields are set directly on the record by the edit window. A
         # new-number collision is rejected at the tab (OrderEditWindow.readData).
-        if not newNum == oldNum:
+        # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
+        if newNum != oldNum and oldNum in self.orders:
             orders = {newNum if key == oldNum else key: val for key, val in self.orders.items()}
             self.orders = orders
             self.orders[newNum].orderNum = newNum
