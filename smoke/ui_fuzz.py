@@ -147,12 +147,12 @@ def _enumerateActions(window, select_rows=False):
     widgets on non-current tabs still have working signal handlers, and
     exercising them is the whole point.
 
-    ``select_rows`` gates the ``_TABLE`` row-selection action (Step 55). It
-    defaults off so the always-on baseline stays green: turning it on lets the
-    walk reach Edit/Delete on existing rows, which surfaces a backlog of
-    pre-existing edit-dialog crashes to be cleared in follow-up steps before
-    row-selection graduates into the baseline (mirroring how Step 38 shipped the
-    fuzzer unwired, Steps 39-40 fixed the bugs it found, and Step 41 wired it in).
+    ``select_rows`` gates the ``_TABLE`` row-selection action (Step 55), letting
+    the walk reach Edit/Delete on existing rows. It shipped off while it surfaced
+    a backlog of pre-existing edit-dialog crashes, then graduated to **on by
+    default** (Step 58) once those were cleared (Steps 56-57, 59-61) — mirroring
+    how Step 38 shipped the fuzzer unwired, Steps 39-40 fixed the bugs it found,
+    and Step 41 wired it in.
     """
     from PySide6.QtWidgets import (
         QPushButton, QComboBox, QTabWidget, QLineEdit,
@@ -344,7 +344,7 @@ def _checkStaleViews(window, registry, seed, i, label):
 DEFAULT_ITERATIONS = 1000
 
 
-def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS, select_rows=False) -> list[str]:
+def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS, select_rows=True) -> list[str]:
     """Step 38: random-walk the MainWindow widget tree, return any uncaught
     exception as a failure with the seed for replay.
 
@@ -357,10 +357,11 @@ def crash_fuzz(seed=None, iterations=DEFAULT_ITERATIONS, select_rows=False) -> l
     reports it on failure for replay.
 
     ``select_rows`` (Step 55) lets the walk select table rows, so Edit/Delete act
-    on real rows and the stale-view net can reach the FK-rename / cascade-delete
-    bug class. Defaults off because it currently surfaces pre-existing
-    edit-dialog crashes; the baseline calls this bare (no args), so it stays
-    green until those are fixed and Step 58 flips this default on.
+    on real rows and the stale-view net reaches the FK-rename / cascade-delete
+    bug class. **Defaults on as of Step 58** — it shipped off while it surfaced a
+    backlog of pre-existing edit-dialog crashes (fixed across Steps 56–57, 59–61),
+    then graduated into the always-on baseline once a 40-seed sweep ran clean
+    within budget (~14s/run), mirroring how Step 41 graduated the fuzzer itself.
     """
     from PySide6.QtWidgets import QApplication
     from app import MainWindow

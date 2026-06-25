@@ -104,7 +104,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
 | 56 | ✅ Done | Fix Pressers (+ Production) stale-view on employee rename; flagged the `updateEmployee` re-id FK-orphan data bug — see §13.32 |
 | 57 | ✅ Done | Fix HR sub-editor Update crashes: pop-with-default on stale keys (reviews/points/notes/training/PTO) + holidays original-key delete — see §13.33 |
-| 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
+| 58 | ✅ Done | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 | 59 | ✅ Done | Fix `updateEmployee` re-id FK orphan: cascade pressers + production to the new id (+ `employee_reid_cascades` check) — see §13.35 |
 | 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 | 61 | ✅ Done | Harden `getComboBox` against a stored value missing from its options (combo-prefill crash) — prereq for Step 58 — see §13.37 |
@@ -350,9 +350,11 @@ Verified: the three repro seeds (2, 5/6/7, 15) plus a deterministic holidays-ren
 
 **The one remaining sweep failure is a different class → Step 60.** `seed=18` crashes in `db.updatePress` (`self.presses[name].name = name` after a no-op rekey): the *same* stale-window-after-external-delete theme, but in the name-keyed `updateX` rekey helper rather than a dialog `del` — if the original name was deleted elsewhere, the `{new if k==entry else k …}` comprehension never creates `new`, so the follow-up index `KeyError`s. Almost certainly shared by the sibling helpers (`updateClient` / `updatePart` / `updateMaterial` / `updateMixture` / `updatePackaging` / `updateOrder`). Out of Step 57's scope (not HR, not a dialog `del`); spun out as Step 60 (§13.36) and a **prerequisite for Step 58** (the baseline can't graduate `select_rows=True` until the sweep is fully clean).
 
-### 13.34 Step 58 — graduate `crash_fuzz` row-selection into the baseline ⬜ Planned
+### 13.34 Step 58 — graduate `crash_fuzz` row-selection into the baseline ✅ Done
 
-Once Steps 56–57 **and 60** land and `crash_fuzz(select_rows=True)` runs clean across a seed sweep, flip the `select_rows` default to `True` (the baseline calls `crash_fuzz` bare, so the default *is* the lever) so the always-on net guards the full rename/delete/cascade bug class — the Step 41 move for this capability. Re-confirm the time budget at the higher coverage and lower `DEFAULT_ITERATIONS` if needed.
+Landed 2026-06-25, closing the Step 55 series. With every bug the row-selection fuzzer surfaced now fixed (Steps 56–57, 59–61), flipped the `select_rows` default `False → True` (the baseline calls `crash_fuzz` bare, so the default *is* the lever), so the always-on smoke net now guards the full rename / delete / cascade / stale-window bug class — the Step 41 move for this capability. Gate met before flipping: a 40-seed `select_rows=True` sweep ran **40/40 clean**, full-run time held at **~14s** (12.4–15.5s, within the 10–20s budget, so `DEFAULT_ITERATIONS` stayed at 1000), and after the flip full smoke passed plus five bare `crash_fuzz()` (= baseline) runs were clean at 11–14s.
+
+**Series retrospective.** The Step 55 net paid for itself many times over: row-selection turned `crash_fuzz` from a create-only walk into one that renames/deletes/edits existing rows, and that surfaced four distinct, pre-existing latent bug *classes* nobody was looking for — a stale projection view (56), `del`-by-stale/changed-key in six HR sub-editors (57), a silent FK-orphan on employee re-id the net structurally can't see (59, hence its own dedicated check), `KeyError` in seven `updateX` rekey helpers (60), and a `ValueError` in the shared `getComboBox` prefill (61). The sweep convergence (9/15 → 24/25 → 39/40 → 40/40) tracked each class fix. Net is now self-sustaining: any future downstream-refresh miss or stale-window edit crash becomes a seed-reproducible smoke failure before commit.
 
 ### 13.35 Step 59 — `updateEmployee` re-id FK orphan: cascade pressers + production ✅ Done
 
