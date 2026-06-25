@@ -107,6 +107,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 | 59 | ✅ Done | Fix `updateEmployee` re-id FK orphan: cascade pressers + production to the new id (+ `employee_reid_cascades` check) — see §13.35 |
 | 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
+| 61 | ✅ Done | Harden `getComboBox` against a stored value missing from its options (combo-prefill crash) — prereq for Step 58 — see §13.37 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -364,6 +365,10 @@ Fix: extend `updateEmployee` to rekey `pressers` (and set the moved `Presser.emp
 Landed 2026-06-25. Surfaced by the Step 57 wider sweep (`seed=18`, `select_rows=True`): `db.updatePress(entry, name)` does `presses = {name if k == entry else k: v …}; self.presses[name].name = name`. If `entry` (the original name) is no longer present — a stale `PressEditWindow` whose press was deleted from the Presses tab while the editor stayed open — the comprehension copies the dict unchanged (no key matches `entry`), so the follow-up `self.presses[name]` `KeyError`s. Same stale-window-after-external-delete theme as Step 57, but in the name-keyed rekey helper rather than a dialog `del`.
 
 Fixed the whole family uniformly — `updatePart`, `updatePackaging`, `updateMixture`, `updateMaterial`, `updatePress`, `updateClient`, `updateOrder` each gained an `and <key> in self.<coll>` clause on its rename guard, so a rename whose original key is gone no-ops cleanly instead of rekeying to a key the comprehension never created. (`updateEmployee` already guarded every rekey with `if oldID in coll`, including the Step 59 pressers/production additions, so it needed no change.) The dialog layer was left as-is: the no-op means a stale Update silently does nothing and still reports success — acceptable per the dual-mandate (no crash, no corruption); a dialog-layer "this record no longer exists" re-validation is possible future polish, not done here. The happy-path renames stay covered by the existing CRUD roundtrip smoke checks; once Step 58 graduates `select_rows=True`, the net guards regressions of the stale-window crash directly. Verified: `crash_fuzz(seed=18, select_rows=True)` now clean; full smoke green (46 PASS).
+
+### 13.37 Step 61 — `getComboBox` tolerant of a stale/unknown stored value ✅ Done
+
+Landed 2026-06-25. The Step 60 sweep's last straggler (`seed=30`, `select_rows=True`): opening `PartsEditWindow` crashed at `getComboBox(pads, part.pad[i])` → `items.index(item)` `ValueError`, because the part referenced a pad-kind packaging no longer in the current pad list (a kind/availability change leaves the stored value stale). `getComboBox` ([`utils.py`](utils.py)) is a prefill helper used across the edit dialogs, and it assumed every stored value is still a valid option — a pre-existing ANIKA fragility, independent of the scheduling work. Fix: if the stored value isn't among the options, append it (so it stays visible and selected) rather than `ValueError`-ing on `items.index()` or silently dropping it — the user sees the now-invalid value and can correct it (dual-mandate: no crash, no silent corruption). Hardens the whole combo-prefill class in one place. Verified: `seed=30` clean; full smoke green (46 PASS); existing CRUD checks (which prefill valid values) unaffected.
 
 ---
 

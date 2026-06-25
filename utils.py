@@ -6,7 +6,16 @@ def getComboBox(items: list[str], item):
     box = QComboBox()
     box.addItems(items)
     if item is not None:
-        box.setCurrentIndex(items.index(item))
+        idx = box.findText(item)
+        if idx < 0:
+            # The stored value isn't among the current options — e.g. a part
+            # referencing packaging whose kind changed, or a record edited while
+            # its referent was removed. Append it so it stays visible and selected
+            # (the user can see and correct it) instead of ValueError-ing on
+            # items.index() or silently dropping the value.
+            box.addItem(item)
+            idx = box.count() - 1
+        box.setCurrentIndex(idx)
     return box
 
 def widgetFromList(widget: QWidget, layoutList: list[list[QWidget]]):
