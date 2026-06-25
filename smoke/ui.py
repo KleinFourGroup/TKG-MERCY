@@ -2546,3 +2546,118 @@ def holidays_tab_defaults_crud() -> list[str]:
                 except OSError:
                     pass
     return errors
+
+
+def schedule_tab_generates() -> list[str]:
+    """Step 53: ScheduleTab generates, exports, and clears on refresh.
+
+    Seeds tiny fuzz data, then drives the on-screen Schedule report:
+      - Generate populates the schedule + flags tables to exactly match a direct
+        ``schedule()`` call (the tab is a thin view over the stateless seam),
+        enables Export, and updates the status line;
+      - a shorter horizon re-runs cleanly and re-uses the same config path;
+      - Export writes a real %PDF- file (``startfile`` stubbed so nothing opens);
+      - ``refresh()`` (the DB-open hook) clears the result, empties both tables,
+        and re-disables Export so a schedule from a prior file never lingers.
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import schedule_tab as ST
+    import scheduling as S
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    exported: list[str] = []
+    origStartfile = ST.startfile
+    ST.startfile = lambda path: exported.append(path)  # type: ignore[assignment]
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        tab = w.scheduleTab
+        if tab.result is not None:
+            errors.append("expected result=None before first Generate")
+        if tab.exportB.isEnabled():
+            errors.append("Export should be disabled before first Generate")
+
+        # --- Generate: tab view must equal a direct schedule() at full horizon ---
+        tab.horizonSpin.setValue(S.MAX_HORIZON_DAYS)
+        tab.generate()
+        if tab.result is None:
+            errors.append("result is None after Generate")
+            return errors
+        expected = S.schedule(w.db, None, S.ScheduleConfig(maxHorizonDays=S.MAX_HORIZON_DAYS))
+        if len(tab.scheduleTable.dbModel._data) != len(expected.rows):
+            errors.append(f"schedule table rows={len(tab.scheduleTable.dbModel._data)} "
+                          f"!= schedule() rows={len(expected.rows)}")
+        if len(tab.flagsTable.dbModel._data) != len(expected.flags):
+            errors.append(f"flags table rows={len(tab.flagsTable.dbModel._data)} "
+                          f"!= schedule() flags={len(expected.flags)}")
+        if not tab.exportB.isEnabled():
+            errors.append("Export should be enabled after Generate")
+        if not tab.statusLabel.text().startswith("Generated "):
+            errors.append(f"status not updated after Generate: {tab.statusLabel.text()!r}")
+        # Each schedule row lands on a real press / real part (view integrity).
+        for row in tab.scheduleTable.dbModel._data:
+            if row[2] not in w.db.presses:
+                errors.append(f"schedule row on unknown press: {row[2]!r}")
+            if row[3] not in w.db.parts:
+                errors.append(f"schedule row on unknown part: {row[3]!r}")
+
+        # --- A shorter horizon re-runs without error ---
+        tab.horizonSpin.setValue(1)
+        tab.generate()
+        if tab.result is None:
+            errors.append("result is None after short-horizon Generate")
+
+        # --- Export writes a real PDF (startfile stubbed) ---
+        before = len(exported)
+        tab.exportPdf()
+        if len(exported) != before + 1:
+            errors.append(f"Export did not call startfile (exported={exported})")
+        else:
+            path = exported[-1]
+            if not os.path.exists(path) or os.path.getsize(path) == 0:
+                errors.append("Export produced empty/missing PDF")
+            else:
+                with open(path, "rb") as f:
+                    if f.read(5) != b"%PDF-":
+                        errors.append("Export PDF lacks %PDF- magic")
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+        # --- refresh() (DB-open hook) clears everything ---
+        tab.refresh()
+        if tab.result is not None:
+            errors.append("refresh did not clear result")
+        if tab.scheduleTable.dbModel._data or tab.flagsTable.dbModel._data:
+            errors.append("refresh did not clear the schedule/flags tables")
+        if tab.exportB.isEnabled():
+            errors.append("refresh did not re-disable Export")
+    finally:
+        ST.startfile = origStartfile  # type: ignore[assignment]
+        restore()
+        for p in exported:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors

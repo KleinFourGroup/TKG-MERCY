@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39, and now Step 52 (scheduler core) lands the greedy earliest-deadline-first `schedule()` seam in the same module — see §13.40; next up is Step 53 (Production Schedule Report UI + PDF export).*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39, and now Step 52 (scheduler core) lands the greedy earliest-deadline-first `schedule()` seam in the same module — see §13.40, and now Step 53 (Production Schedule Report UI + PDF export) completes the report front end — see §13.42; next up is Step 54 (end-to-end verification + migration-chain replay), the last step of the series.*
 
 ### 12.1 Step status
 
@@ -99,7 +99,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 50 | ✅ Done | Production Scheduling: scheduling-algorithm design round (addendum doc) — see §13.38 |
 | 51 | ✅ Done | Production Scheduling: scheduling primitives (calendar / capacity / rate / scrap / deadline helpers) — see §13.39 |
 | 52 | ✅ Done | Production Scheduling: scheduler core (greedy EDF `schedule()` seam + infeasibility detection) — see §13.40 |
-| 53 | ⬜ Planned | Production Scheduling: Production Schedule Report UI + PDF export — see §13.30 |
+| 53 | ✅ Done | Production Scheduling: Production Schedule Report UI + PDF export (Schedule tab + report/scheduling.py mixin) — see §13.42 |
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
 | 56 | ✅ Done | Fix Pressers (+ Production) stale-view on employee rename; flagged the `updateEmployee` re-id FK-orphan data bug — see §13.32 |
@@ -501,6 +501,61 @@ back-to-back including the previously-flaky `crash_fuzz`. Same dual-mandate as t
 Step 57 HR-editor fixes ([`feedback_failure_mandate`]): a user clicking Create in
 the inventory editor for a date with no snapshot now sees the error dialog instead
 of a hard crash.
+
+### 13.42 Step 53 — Production Schedule Report (Schedule tab + PDF export) ✅ Done
+
+Landed 2026-06-25. The report front end for the scheduler series: the **Schedule**
+sub-tab (Step 42's placeholder) now renders the stateless `schedule()` result on
+screen and exports it to PDF — the Step 33 mixin pattern applied to a new
+[`report/scheduling.py`](report/scheduling.py) (`ScheduleReportsMixin` composed
+into `PDFReport`). Consumes a `ScheduleResult` from the single
+`schedule(db, today, config)` seam (addendum §10) — never the algorithm internals
+— so a future optimizer swap touches nothing here. Manual UI gate cleared
+(Matthew's sweep, 2026-06-25).
+
+**Shipped.**
+
+- [`schedule_tab.py`](schedule_tab.py) `ScheduleTab`: a **horizon** spinbox
+  (1..`MAX_HORIZON_DAYS`, default 365 = "project until all outstanding orders are
+  placed", spec §5.1) mapped onto `ScheduleConfig.maxHorizonDays`, **Generate
+  Schedule** + **Export PDF** buttons, two on-screen `DBTable`s (the
+  `(date, shift, press, part) → quantity / press-hours` grid + an explicit
+  flagged-orders section: Late / No capacity / No rate with §4 magnitudes), a
+  soft-warnings line, and a status line. Read-only views (no `parentTab`, so row
+  selection is a no-op). Stateless: holds the last `ScheduleResult` only to feed
+  Export; `exportPdf` writes a `tempReportPath` PDF and `startfile`s it (the Step
+  14 open-via-temp convention).
+- [`report/scheduling.py`](report/scheduling.py) `scheduleReport(result,
+  horizonDays)`: a title/subtitle banner + three paginated sections (Schedule /
+  Flagged Orders / Warnings-when-present) via a private `_scheduleSection` helper
+  that re-draws the banner and a "-- Continued" heading per overflow page,
+  mirroring the production reports.
+- [`app.py`](app.py): the placeholder swapped for the real tab, and
+  `scheduleTab.refresh()` added to `_refreshAllTabs` so a freshly-loaded DB clears
+  any schedule from the prior file rather than showing a stale one (the scheduler
+  is recomputed on demand, never persisted — spec §5.1).
+
+**Design calls.** Horizon is the one exposed control; **slack stays at the config
+default** (the addendum §6 lists slack as optional — "possibly" — so v1 keeps the
+surface lean). Generate is explicit (no auto-regenerate on every edit) — matches
+the on-demand report convention and avoids re-walking 365 days on each refresh.
+Deliberately *not* in the Step-55 projection registry: a generated schedule is
+intentionally stale-until-regenerated (like the production tab), so the stale-view
+net excludes it.
+
+**Two new smoke checks (55 → 57 PASS):** `schedule_report` renders the PDF across
+three scenarios (empty DB → "No production scheduled."; tiny fuzz DB through the
+real `schedule()`; a hand-built `ScheduleResult` carrying all three flag kinds +
+both warning kinds), asserting non-empty + `%PDF-` magic; `schedule_tab_generates`
+drives the tab headlessly — Generate matches a direct `schedule()` call
+row-for-row, Export writes a real `%PDF-` (with `startfile` stubbed), and
+`refresh()` clears the result + tables + re-disables Export. `crash_fuzz` already
+exercises the tab's buttons / horizon spinbox (it walks enabled widgets regardless
+of the visible tab), so the always-on baseline guards it too. `compile_all` + the
+pyright baseline stay clean.
+
+Only Step 54 (end-to-end verification + migration-chain replay) remains in the
+Production Scheduling series.
 
 ---
 

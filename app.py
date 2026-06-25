@@ -115,13 +115,8 @@ class MainWindow(QWidget):
         self.prodSchedTab.addTab(self.schedulingConfigTab, "Scheduling config")
 
         # Schedule group — the Production Schedule Report (Step 53).
-        self.scheduleTab = QWidget()
-        scheduleLayout = QVBoxLayout(self.scheduleTab)
-        scheduleLayout.addStretch()
-        scheduleLayout.addWidget(
-            QLabel("The Production Schedule Report will be generated here (Step 53).")
-        )
-        scheduleLayout.addStretch()
+        from schedule_tab import ScheduleTab
+        self.scheduleTab = ScheduleTab(self)
         self.prodSchedTab.addTab(self.scheduleTab, "Schedule")
 
         self.tab_widget.addTab(self.prodSchedTab, "Production and Scheduling")
@@ -200,6 +195,8 @@ class MainWindow(QWidget):
         self.clientsTab.refreshTable()
         self.ordersTab.refreshTable()
         self.orderStatusTab.refreshTable()
+        # Schedule (stateless report view — clears any schedule from the old DB)
+        self.scheduleTab.refresh()
 
     def _loadPath(self, path: str) -> bool:
         # Shared entry point for loading a DB from a known path — used by the

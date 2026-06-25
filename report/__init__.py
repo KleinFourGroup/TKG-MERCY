@@ -10,12 +10,14 @@ from .core import PDFReportCore
 from .products import ProductReportsMixin
 from .employees import EmployeeReportsMixin
 from .production import ProductionReportsMixin
+from .scheduling import ScheduleReportsMixin
 
 
 class PDFReport(
     ProductReportsMixin,
     EmployeeReportsMixin,
     ProductionReportsMixin,
+    ScheduleReportsMixin,
     PDFReportCore,
 ):
     pass

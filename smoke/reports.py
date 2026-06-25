@@ -501,6 +501,130 @@ def production_trend_report() -> list[str]:
     return errors
 
 
+def schedule_report() -> list[str]:
+    """Step 53: render the Production Schedule Report PDF.
+
+    Three scenarios cover every layout branch without parsing PDF content:
+      - empty DB: schedule() over a fresh MainWindow yields no rows / no flags
+        (the "No production scheduled." + "No late or infeasible orders" paths);
+      - tiny fuzz DB: schedule(db, today) end-to-end against fuzzed
+        orders/parts/presses, the realistic integration path;
+      - a hand-built ScheduleResult carrying all three flag kinds and both
+        warning kinds, so the flagged-orders + warnings sections (and the
+        per-kind detail formatting) render.
+    Success is generation without exception, a non-empty file, and the %PDF-
+    header magic on each output.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from report import PDFReport
+    import scheduling as S
+    import fuzz_db as F
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        # Scenario 1: empty DB — no orders, so an empty schedule and no flags.
+        emptyResult = S.schedule(w.db, datetime.date(2026, 6, 25))
+
+        # Scenario 2: tiny fuzz DB through the real schedule() seam.
+        rng = random.Random(1)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date(2026, 6, 25)
+        db = w.db
+        materialNames = F.populateMaterials(db, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for name in db.packaging:
+            packagingByKind[db.packaging[name].kind].append(name)
+        partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+        idNums = F.populateEmployees(db, rng, cfg["employees"], today)
+        F.populatePTO(db, rng, idNums, today)
+        F.populateHolidays(db, rng, today)
+        F.populateProduction(db, rng, idNums, partNames, mixtureNames,
+                             cfg["productionDays"], today)
+        F.populatePresses(db, rng, cfg["presses"])
+        F.populatePressers(db, rng, idNums, cfg["pressers"])
+        F.populateShiftWorkweek(db, rng)
+        pressNames = list(db.presses)
+        F.populatePartPressPref(db, rng, partNames, pressNames)
+        clientNames = F.populateClients(db, rng, cfg["clients"])
+        orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+        F.populateOrderStatus(db, rng, orderNums, today)
+        fuzzResult = S.schedule(db, today)
+
+        # Scenario 3: a synthetic result exercising every flag + warning branch.
+        d = datetime.date(2026, 6, 25)
+        syntheticResult = S.ScheduleResult(
+            d,
+            rows=[
+                S.ScheduleRow(d, 1, "Press1", "PartA", 80.0, 8.0),
+                S.ScheduleRow(d, 2, "Press2", "PartB", 40.0, 4.0),
+            ],
+            flags=[
+                S.OrderFlag("O1", "PartA", S.LATE, daysLate=2, piecesShort=40.0),
+                S.OrderFlag("O2", "PartC", S.INFEASIBLE_NO_CAPACITY,
+                            piecesShort=100.0, shortHours=10.0),
+                S.OrderFlag("O3", "PartD", S.INFEASIBLE_NO_RATE),
+            ],
+            warnings=[
+                S.ScheduleWarning(S.WARN_FALLBACK_RATE, "PartA"),
+                S.ScheduleWarning(S.WARN_MISSING_FIRESCRAP, "PartB"),
+            ],
+        )
+
+        reports = [
+            ("schedule-empty", lambda p: p.scheduleReport(emptyResult, 365)),
+            ("schedule-fuzz", lambda p: p.scheduleReport(fuzzResult, 365)),
+            ("schedule-flags", lambda p: p.scheduleReport(syntheticResult, 30)),
+            # horizonDays=None drops the horizon clause from the subtitle.
+            ("schedule-no-horizon", lambda p: p.scheduleReport(syntheticResult)),
+        ]
+        for name, fn in reports:
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = PDFReport(w.db, tmpPdf.name)
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                continue
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+                continue
+            with open(tmpPdf.name, "rb") as f:
+                head = f.read(5)
+            if head != b"%PDF-":
+                errors.append(f"report {name} doesn't start with %PDF- magic; got {head!r}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def product_employee_reports() -> list[str]:
     """Step 35: render every product + employee report against a tiny fuzz DB.
 
