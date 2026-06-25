@@ -35,6 +35,9 @@ from smoke import (
     pto_dialog_roundtrip, notes_dialog_roundtrip,
     employee_delete_cascades_detail_tabs, employee_reid_cascades,
     holidays_tab_observances, holidays_tab_defaults_crud,
+    scheduling_working_days, scheduling_presser_capacity,
+    scheduling_pressing_rate, scheduling_scrap_inflation,
+    scheduling_deadlines, scheduling_primitives_fuzz,
     pyright_baseline,
     crash_fuzz,
 )
@@ -86,6 +89,12 @@ def main() -> int:
                      ("employee_reid_cascades", employee_reid_cascades),
                      ("holidays_tab_observances", holidays_tab_observances),
                      ("holidays_tab_defaults_crud", holidays_tab_defaults_crud),
+                     ("scheduling_working_days", scheduling_working_days),
+                     ("scheduling_presser_capacity", scheduling_presser_capacity),
+                     ("scheduling_pressing_rate", scheduling_pressing_rate),
+                     ("scheduling_scrap_inflation", scheduling_scrap_inflation),
+                     ("scheduling_deadlines", scheduling_deadlines),
+                     ("scheduling_primitives_fuzz", scheduling_primitives_fuzz),
                      ("pyright_baseline", pyright_baseline),
                      ("crash_fuzz", crash_fuzz)]:
         errors = fn()
