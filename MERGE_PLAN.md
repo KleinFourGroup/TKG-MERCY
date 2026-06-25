@@ -102,7 +102,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 53 | ⬜ Planned | Production Scheduling: Production Schedule Report UI + PDF export — see §13.30 |
 | 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
-| 56 | ⬜ Planned | Fix Pressers stale-view on employee rename (downstream-refresh miss the net found) — see §13.32 |
+| 56 | ✅ Done | Fix Pressers (+ Production) stale-view on employee rename; flagged the `updateEmployee` re-id FK-orphan data bug — see §13.32 |
 | 57 | ⬜ Planned | Fix `del`-by-changed-key crashes in HR sub-editor rename paths (holidays / reviews / notes / …) — see §13.33 |
 | 58 | ⬜ Planned | Graduate `crash_fuzz` row-selection into the baseline (`select_rows` default on, runs green) — see §13.34 |
 
@@ -326,9 +326,13 @@ With `select_rows=True` the net immediately earned its keep — it caught a **re
 
 **Repro seeds (`crash_fuzz(seed=S, select_rows=True)`):** Pressers stale-view → `seed=4`; holiday-default rename crash → `seed=5`/`6`/`7`; review rename crash → `seed=2`; note rename crash → `seed=15`.
 
-### 13.32 Step 56 — Pressers stale-view on employee rename ⬜ Planned
+### 13.32 Step 56 — Pressers (+ Production) stale-view on employee rename ✅ Done
 
-The first bug the Step 55 net found with row-selection on: `EmployeeEditWindow.readData` refreshes the overview + active/inactive employee lists, but **not** `pressersTab`, whose rows are `_presserLabel(db, empId)` strings derived live from `db.employees`. Rename an employee and the Pressers tab keeps showing the old name (e.g. on-screen `WALSH Morgan (4106)` vs recompute `8G52 Morgan (4106)`). Fix: add `self.mainApp.pressersTab.refreshTable()` to the employee-edit success path (the standing "refresh every downstream tab you touch" convention; cf. [`feedback_fk_rename_refresh`]). Low risk; repro `crash_fuzz(seed=4, select_rows=True)`.
+Landed 2026-06-25. The first bug the Step 55 net found with row-selection on: `EmployeeEditWindow.readData` refreshed the overview + active/inactive employee lists, but **not** `pressersTab`, whose rows are `_presserLabel(db, empId)` strings derived live from `db.employees`. Rename an employee and the Pressers tab kept showing the old name (e.g. on-screen `WALSH Morgan (4106)` vs recompute `8G52 Morgan (4106)`).
+
+Fix: in the employee-edit success path, refresh **both** employee-derived tabs — `self.mainApp.pressersTab.refreshTable()` and `self.mainApp.productionTab.refresh()`. Production was included as the Pressers twin: its table + filter render the same `_employeeLabel`, so a rename stales it identically; the Step 55 net didn't flag it only because Production is excluded from the registry (filter-stateful), and the fuzzer's `_seedFuzzData` doesn't populate production rows so the staleness can't surface there at all. The standing "refresh every downstream tab you touch" convention (cf. [`feedback_fk_rename_refresh`]) covers both. Verified: deterministic name-edit through the real dialog leaves the net clean, and `crash_fuzz(seed=4, select_rows=True)` now runs clean to completion. Smoke green (45 PASS).
+
+**Discovered while fixing — a separate, deeper `updateEmployee` data bug (not yet fixed).** `records/database.py:updateEmployee(oldID, newID)` (the re-id path, reachable by editing the ID field) rekeys `employees / reviews / training / attendance / PTO / notes` but **not `pressers` and not production `employeeId`** — so changing an employee's ID **silently orphans their presser row** (confirmed: presser stays keyed by the old ID, `(missing #id)`) and strands their production records at the old ID. This is silent FK corruption (the worst quadrant of the dual-mandate, [`feedback_failure_mandate`]), distinct from the view-refresh class, and the Step 55 net can't catch it (both displayed and recompute agree on the orphan, so no divergence). The presser orphan is clearly a bug — a presser is "current config tied 1:1 to a live employee" ([`delEmployee`] cascades it). Whether production *history* should follow a re-id is a product call (delete intentionally leaves production as `(missing #id)`). **Flagged for a decision before fixing — see the session discussion; not folded into Step 56 because it's a db-layer cascade fix, not a UI refresh.**
 
 ### 13.33 Step 57 — `del`-by-changed-key crashes in HR sub-editor rename paths ⬜ Planned
 

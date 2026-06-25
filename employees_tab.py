@@ -317,6 +317,13 @@ class EmployeeEditWindow(QWidget):
             self.mainApp.overviewTab.refresh()
             self.mainApp.employeesTab.activeEmployeesTab.refreshTable()
             self.mainApp.employeesTab.inactiveEmployeesTab.refreshTable()
+            # A name / idNum edit changes any employee-derived label downstream:
+            # the Pressers list (_presserLabel) and the Production table + filter
+            # (_employeeLabel). Step 49-style downstream refresh — the Step 55 net
+            # flagged Pressers; Production is its twin (out of the net only because
+            # it's filter-stateful, but it renders the same labels).
+            self.mainApp.pressersTab.refreshTable()
+            self.mainApp.productionTab.refresh()
             res = True
         else:
             errorMessage(self, errors)
