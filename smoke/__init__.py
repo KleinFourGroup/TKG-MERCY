@@ -32,7 +32,7 @@ from smoke.ui import (
     employee_detail_populates, reviews_dialog_roundtrip,
     training_dialog_roundtrip, points_dialog_roundtrip,
     pto_dialog_roundtrip, notes_dialog_roundtrip,
-    employee_delete_cascades_detail_tabs,
+    employee_delete_cascades_detail_tabs, employee_reid_cascades,
     holidays_tab_observances, holidays_tab_defaults_crud,
 )
 from smoke.pyright import pyright_baseline
@@ -57,7 +57,7 @@ __all__ = [
     "employee_detail_populates", "reviews_dialog_roundtrip",
     "training_dialog_roundtrip", "points_dialog_roundtrip",
     "pto_dialog_roundtrip", "notes_dialog_roundtrip",
-    "employee_delete_cascades_detail_tabs",
+    "employee_delete_cascades_detail_tabs", "employee_reid_cascades",
     "holidays_tab_observances", "holidays_tab_defaults_crud",
     "pyright_baseline",
     "crash_fuzz",

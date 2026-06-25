@@ -1518,6 +1518,107 @@ def _presserLabelFor(db, employeeId):
     return _presserLabel(db, employeeId)
 
 
+def employee_reid_cascades() -> list[str]:
+    """Step 59: changing an employee's idNum cascades to their presser row and
+    production records (the FKs follow the re-id instead of orphaning).
+
+    ``db.updateEmployee`` rekeys the HR sub-DBs but historically missed pressers
+    (keyed by employeeId, stored as ``Presser.employeeId``) and production (keyed
+    by a tuple beginning with employeeId). A re-id keeps the employee alive, so —
+    unlike ``delEmployee``, which intentionally leaves production as a
+    ``(missing #id)`` tombstone — both must follow or they silently orphan. The
+    crash-fuzz stale-view net can't catch this (an orphan reads identically in
+    the view and a fresh recompute), so this is its only automated guard.
+
+    Drives the real ``EmployeeEditWindow`` re-id (which also re-exercises the
+    Step 56 downstream refresh), then asserts the presser + production moved and
+    that the move survives a save/reload roundtrip.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from employees_tab import EmployeeEditWindow
+    from records.production import ProductionRecord
+
+    errors = []
+    QApplication.instance() or QApplication(sys.argv)
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        if not w.db.pressers:
+            errors.append("expected fuzz seed to populate pressers, got 0")
+            return errors
+
+        oldId = sorted(w.db.pressers)[0]
+        emp = w.db.employees[oldId]
+        # The tiny seed doesn't populate production, so add a couple rows for the
+        # victim to exercise the production half of the cascade.
+        for d, tgt in ((datetime.date(2026, 1, 5), "pA"), (datetime.date(2026, 1, 6), "pB")):
+            rec = ProductionRecord()
+            rec.setRecord(oldId, d, emp.shift or 1, "Pressing", tgt, 100, 5, 8.0)
+            w.db.production[rec.key()] = rec
+        newId = max(w.db.employees) + 1  # strictly greater than all -> guaranteed free
+
+        # Re-id through the real edit dialog (Update on the existing employee).
+        editor = EmployeeEditWindow(oldId, w, emp.status)
+        editor.idEdit.setText(str(newId))
+        editor.updateButton.click()
+
+        # --- in-memory cascade ---
+        if oldId in w.db.employees:
+            errors.append(f"re-id: old employee {oldId} still present")
+        if newId not in w.db.employees:
+            errors.append(f"re-id: new employee {newId} missing (re-id didn't happen)")
+            return errors
+        if oldId in w.db.pressers or newId not in w.db.pressers:
+            errors.append(f"presser FK didn't follow re-id: oldIn={oldId in w.db.pressers}, "
+                          f"newIn={newId in w.db.pressers}")
+        elif w.db.pressers[newId].employeeId != newId:
+            errors.append(f"presser.employeeId={w.db.pressers[newId].employeeId}, want {newId}")
+        oldProd = sum(1 for r in w.db.production.values() if r.employeeId == oldId)
+        newProd = sum(1 for r in w.db.production.values() if r.employeeId == newId)
+        if oldProd != 0 or newProd != 2:
+            errors.append(f"production didn't follow re-id: old={oldProd}, new={newProd} (want 0, 2)")
+        if any(k[0] != r.employeeId for k, r in w.db.production.items()):
+            errors.append("production dict key out of sync with rec.employeeId after re-id")
+
+        # --- save / reload roundtrip (the rekey must persist) ---
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading re-id DB")
+        else:
+            w2.fileManager.loadFile()
+            if newId not in w2.db.pressers or oldId in w2.db.pressers:
+                errors.append(f"roundtrip presser: newIn={newId in w2.db.pressers}, "
+                              f"oldIn={oldId in w2.db.pressers}")
+            rNew = sum(1 for r in w2.db.production.values() if r.employeeId == newId)
+            rOld = sum(1 for r in w2.db.production.values() if r.employeeId == oldId)
+            if rNew != 2 or rOld != 0:
+                errors.append(f"roundtrip production: new={rNew}, old={rOld} (want 2, 0)")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def shift_workweek_roundtrip() -> list[str]:
     """Step 45: WorkweekTab grid toggles + save/reload roundtrip.
 

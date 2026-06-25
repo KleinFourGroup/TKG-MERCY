@@ -291,6 +291,23 @@ class Database:
         if newID in self.notes:
             for rec in self.notes[newID].notes.values():
                 rec.idNum = newID
+        # 4. Scheduling + production also reference the employee by id, but neither
+        #    is an HR sub-DB so the loops above miss them: a Presser stores
+        #    .employeeId (not .idNum), and production is keyed by rec.key() — a
+        #    tuple that begins with employeeId, so a re-id changes the key, not just
+        #    the field. A re-id keeps the employee alive (unlike delEmployee, where
+        #    production is intentionally left as a (missing #id) tombstone), so both
+        #    must follow the new id or they silently orphan.
+        if oldID in self.pressers:
+            self.pressers = {newID if key == oldID else key: val
+                             for key, val in self.pressers.items()}
+            self.pressers[newID].employeeId = newID
+        if any(rec.employeeId == oldID for rec in self.production.values()):
+            for rec in self.production.values():
+                if rec.employeeId == oldID:
+                    rec.employeeId = newID
+            # employeeId is part of the key, so rebuild the dict off the new keys.
+            self.production = {rec.key(): rec for rec in self.production.values()}
 
     def delEmployee(self, employeeID: int):
         if employeeID not in self.employees:
