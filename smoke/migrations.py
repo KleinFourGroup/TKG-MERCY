@@ -1483,3 +1483,303 @@ def mercy_v10_to_v11_migration() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+# The seven additive Production Scheduling / Sales tables (db_version 5..11).
+_SCHED_SALES_TABLES = ["presses", "pressers", "shift_workweek", "part_press_pref",
+                       "clients", "orders", "order_status"]
+
+
+def mercy_v4_to_v11_end_to_end() -> list[str]:
+    """Step 54: full migration-chain replay on a *realistically populated* v4 DB,
+    then the Production Scheduling subsystem end-to-end on the migrated data.
+
+    Where the per-version checks (v3->v4 .. v10->v11) migrate a 1-row fixture and
+    only assert the tables appear, this is the "subsystem ready to ship" drill —
+    the automated twin of the real-data drill run on Matthew's `Mercy DB 6-1-26.db`:
+
+      - build a realistic v11 DB (fuzz_db: materials/mixtures/parts/employees/
+        production), then *downgrade it on disk* — drop the 7 scheduling/sales
+        tables and stamp db_version=4 — so it's byte-for-byte a pre-Step-43 file
+        carrying real costing/HR/production data;
+      - reopen with MERCY: the v4->v11 additive chain runs. Assert it reaches v11,
+        creates all 7 tables empty, leaves the pre-existing data untouched, and —
+        the additive-chain invariant the migrate.py comments claim but nothing
+        asserts — writes NO `.bak` sibling;
+      - populate scheduling/sales on the migrated DB, save -> reload, and confirm
+        every collection roundtrips (and production survives);
+      - run schedule() + scheduleReport against the migrated+reloaded DB: rows land
+        on real working shift-days / presses / parts, every eligible order is
+        scheduled or flagged (never dropped), and the PDF renders.
+    """
+    import datetime
+    import glob
+    import random
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from report import PDFReport
+    import scheduling as S
+    import fuzz_db as F
+    import sqlite3
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    backup_glob = f"{tmp.name}.bak-*"
+    pdfPath = None
+    w0 = w = w2 = None
+    try:
+        rng = random.Random(54)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date(2026, 6, 25)
+
+        # --- 1. Build a realistic v11 DB, then downgrade it to v4 shape on disk. ---
+        w0 = MainWindow()
+        if not w0.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False creating base DB")
+            return errors
+        db0 = w0.db
+        materialNames = F.populateMaterials(db0, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db0, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db0, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for name in db0.packaging:
+            packagingByKind[db0.packaging[name].kind].append(name)
+        partNames = F.populateParts(db0, rng, cfg["parts"], mixtureNames, packagingByKind)
+        idNums = F.populateEmployees(db0, rng, cfg["employees"], today)
+        F.populateProduction(db0, rng, idNums, partNames, mixtureNames,
+                             cfg["productionDays"], today)
+        w0.fileManager.saveFile()
+        if w0.fileManager.dbFile is not None:
+            w0.fileManager.dbFile.close()
+
+        conn = sqlite3.connect(tmp.name)
+        for t in _SCHED_SALES_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {t}")
+        conn.execute("INSERT OR REPLACE INTO globals VALUES ('db_version', 4)")
+        conn.commit()
+        preserved = ["materials", "mixtures", "parts", "employees", "production"]
+        preCounts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in preserved}
+        conn.close()
+        if any(v == 0 for v in preCounts.values()):
+            errors.append(f"fuzz fixture under-populated the base DB: {preCounts}")
+
+        backupsBefore = set(glob.glob(backup_glob))
+
+        # --- 2. Reopen with MERCY -> the v4..v11 additive chain runs. ---
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on downgraded v4 DB")
+            return errors
+        w.fileManager.loadFile()
+
+        conn = sqlite3.connect(tmp.name)
+        ver = conn.execute("SELECT value FROM globals WHERE name='db_version'").fetchone()
+        if ver is None or int(ver[0]) != 11:
+            errors.append(f"post-migration db_version expected 11, got {ver}")
+        tables = set(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
+        for t in _SCHED_SALES_TABLES:
+            if t not in tables:
+                errors.append(f"{t} missing after v4->v11 migration")
+            else:
+                n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                if n != 0:
+                    errors.append(f"{t} should be empty after additive migration, got {n}")
+        postCounts = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in preserved}
+        conn.close()
+        if postCounts != preCounts:
+            errors.append(f"pre-existing data changed by migration: {preCounts} -> {postCounts}")
+        if set(glob.glob(backup_glob)) != backupsBefore:
+            errors.append("additive v4->v11 migration wrote a backup (should not — additive chain)")
+
+        # --- 3. Populate scheduling/sales on the migrated DB, then roundtrip. ---
+        db = w.db
+        rng2 = random.Random(99)
+        pressNames = F.populatePresses(db, rng2, cfg["presses"])
+        F.populatePressers(db, rng2, list(db.employees.keys()), cfg["pressers"])
+        F.populateShiftWorkweek(db, rng2)
+        F.populatePartPressPref(db, rng2, list(db.parts.keys()), pressNames)
+        clientNames = F.populateClients(db, rng2, cfg["clients"])
+        orderNums = F.populateOrders(db, rng2, clientNames, list(db.parts.keys()),
+                                     cfg["orders"], today)
+        F.populateOrderStatus(db, rng2, orderNums, today)
+
+        before = (len(db.presses), len(db.pressers), len(db.shiftWorkweek),
+                  len(db.partPressPref), len(db.clients), len(db.orders),
+                  len(db.orderStatus), len(db.production))
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False reloading migrated+populated DB")
+            return errors
+        w2.fileManager.loadFile()
+        db2 = w2.db
+        after = (len(db2.presses), len(db2.pressers), len(db2.shiftWorkweek),
+                 len(db2.partPressPref), len(db2.clients), len(db2.orders),
+                 len(db2.orderStatus), len(db2.production))
+        if before != after:
+            errors.append(f"scheduling/sales roundtrip mismatch: {before} -> {after}")
+
+        # --- 4. Scheduler + report end-to-end on the migrated+reloaded DB. ---
+        result = S.schedule(db2, today)
+        for r in result.rows:
+            if not S.shiftWorksOn(db2, r.shift, r.date):
+                errors.append(f"schedule row on non-working shift-day: {r.date} shift={r.shift}")
+            if r.press not in db2.presses:
+                errors.append(f"schedule row on unknown press: {r.press}")
+            if r.part not in db2.parts:
+                errors.append(f"schedule row on unknown part: {r.part}")
+        eligible = set()
+        for num, order in db2.orders.items():
+            st = db2.orderStatus.get(num)
+            if st is not None and st.isFulfilled():
+                continue
+            if S.outstandingToPress(db2, order) <= 0:
+                continue
+            eligible.add(num)
+        scheduledParts = {r.part for r in result.rows}
+        flaggedOrders = {f.orderNum for f in result.flags}
+        for num in eligible:
+            if num not in flaggedOrders and db2.orders[num].part not in scheduledParts:
+                errors.append(f"eligible order {num} neither scheduled nor flagged")
+
+        pdfPath = tmp.name + ".sched.pdf"
+        PDFReport(db2, pdfPath).scheduleReport(result, 365)
+        if not os.path.exists(pdfPath) or os.path.getsize(pdfPath) == 0:
+            errors.append("schedule report produced empty/missing file on migrated DB")
+        else:
+            with open(pdfPath, "rb") as f:
+                if f.read(5) != b"%PDF-":
+                    errors.append("schedule report on migrated DB lacks %PDF- magic")
+        if w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+    finally:
+        for handle in (w0, w, w2):
+            if handle is not None and handle.fileManager.dbFile is not None:
+                handle.fileManager.dbFile.close()
+        if pdfPath is not None:
+            try:
+                os.unlink(pdfPath)
+            except OSError:
+                pass
+        for p in glob.glob(backup_glob):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
+def scheduling_save_rollback() -> list[str]:
+    """Step 54: a save that fails mid-body rolls back, leaving the on-disk
+    scheduling/sales tables byte-identical — Step 13's atomic-save drill (check
+    2b), re-run now that `_saveFileBody` writes the 7 new tables.
+
+    Populates a full fuzz DB (incl. scheduling/sales), saves it cleanly, then
+    injects a `RuntimeError` after `_saveFileBody` runs but before saveFile's
+    outer commit (the exact failure shape Step 13 used). A sentinel press added
+    in memory must NOT survive on disk, and every scheduling/sales table's row
+    count must be unchanged — proving the try/rollback/commit wrapper reverts a
+    failed save across the new tables, not just the original ones.
+    """
+    import datetime
+    import random
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records.scheduling import Press
+    import fuzz_db as F
+    import sqlite3
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        rng = random.Random(7)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date(2026, 6, 25)
+
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh DB")
+            return errors
+        db = w.db
+        materialNames = F.populateMaterials(db, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for name in db.packaging:
+            packagingByKind[db.packaging[name].kind].append(name)
+        partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+        idNums = F.populateEmployees(db, rng, cfg["employees"], today)
+        F.populateProduction(db, rng, idNums, partNames, mixtureNames,
+                             cfg["productionDays"], today)
+        pressNames = F.populatePresses(db, rng, cfg["presses"])
+        F.populatePressers(db, rng, idNums, cfg["pressers"])
+        F.populateShiftWorkweek(db, rng)
+        F.populatePartPressPref(db, rng, partNames, pressNames)
+        clientNames = F.populateClients(db, rng, cfg["clients"])
+        orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+        F.populateOrderStatus(db, rng, orderNums, today)
+
+        w.fileManager.saveFile()  # clean baseline save
+
+        def snapshot():
+            conn = sqlite3.connect(tmp.name)
+            snap = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                    for t in _SCHED_SALES_TABLES}
+            snap["_presses"] = sorted(r[0] for r in conn.execute("SELECT name FROM presses"))
+            conn.close()
+            return snap
+
+        before = snapshot()
+
+        # Mutate in memory: a sentinel press that must be rolled back, never persisted.
+        sentinel = "ROLLBACK_SENTINEL_PRESS"
+        db.addPress(Press(sentinel))
+
+        fm = w.fileManager
+        origBody = fm._saveFileBody
+
+        def failing_body():
+            origBody()  # writes everything (incl. the sentinel) into the transaction
+            raise RuntimeError("injected failure after _saveFileBody, before commit")
+
+        fm._saveFileBody = failing_body  # type: ignore[method-assign]
+        raised = False
+        try:
+            fm.saveFile()
+        except RuntimeError:
+            raised = True
+        finally:
+            del fm._saveFileBody  # restore the class method
+        if not raised:
+            errors.append("injected save failure did not propagate out of saveFile")
+
+        after = snapshot()
+        if after != before:
+            errors.append(f"rollback failed: on-disk scheduling/sales state changed "
+                          f"{before} -> {after}")
+        if sentinel in after["_presses"]:
+            errors.append("rolled-back sentinel press leaked onto disk (no rollback)")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors

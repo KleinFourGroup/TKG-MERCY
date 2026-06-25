@@ -17,6 +17,7 @@ from smoke.migrations import (
     mercy_v3_to_v4_migration, mercy_v4_to_v5_migration, mercy_v5_to_v6_migration,
     mercy_v6_to_v7_migration, mercy_v7_to_v8_migration, mercy_v8_to_v9_migration,
     mercy_v9_to_v10_migration, mercy_v10_to_v11_migration,
+    mercy_v4_to_v11_end_to_end, scheduling_save_rollback,
 )
 from smoke.reports import (
     production_report, production_productivity_report,
@@ -52,6 +53,7 @@ __all__ = [
     "mercy_v3_to_v4_migration", "mercy_v4_to_v5_migration", "mercy_v5_to_v6_migration",
     "mercy_v6_to_v7_migration", "mercy_v7_to_v8_migration", "mercy_v8_to_v9_migration",
     "mercy_v9_to_v10_migration", "mercy_v10_to_v11_migration",
+    "mercy_v4_to_v11_end_to_end", "scheduling_save_rollback",
     "production_report", "production_productivity_report",
     "production_employee_productivity_report", "production_trend_report",
     "product_employee_reports", "schedule_report",

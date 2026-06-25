@@ -23,7 +23,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 *Step 7 was split into sub-steps 7a–7e to keep each review surface small — see §12.1 for row-by-row status and [`plan_archive/implementation_notes.md`](plan_archive/implementation_notes.md) for the per-substep narrative.*
 
-*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39, and now Step 52 (scheduler core) lands the greedy earliest-deadline-first `schedule()` seam in the same module — see §13.40, and now Step 53 (Production Schedule Report UI + PDF export) completes the report front end — see §13.42; next up is Step 54 (end-to-end verification + migration-chain replay), the last step of the series.*
+*2026-06-24: with the Production Scheduling subsystem spec approved by the team, Steps 42–54 were planned as its implementation series — see §13.30 for the roadmap and [`prod-sched-spec.md`](plan_archive/prod-sched-spec.md) for the approved spec. Steps 42 (tab shell), 43 (Press table + first schema/migration to db_version 5), 44 (Pressers table → db_version 6), 45 (Shift Workweek → db_version 7), 46 (Client table → db_version 8, first Sales-group table), 47 (Order table → db_version 9, with the first block-on-delete FK guards) and 48 (Part-Press Preference nested editor → db_version 10, the first nested relational editor) have landed, as has 49 (Order Status nested editor → db_version 11, dated per-order remaining-to-press / remaining-to-ship snapshots), and now Step 50 (scheduling-algorithm design round) has landed as a team-approved addendum ([`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md)) — see §13.38, and Step 51 (scheduling primitives) followed in [`scheduling.py`](scheduling.py) — see §13.39, and now Step 52 (scheduler core) lands the greedy earliest-deadline-first `schedule()` seam in the same module — see §13.40, and now Step 53 (Production Schedule Report UI + PDF export) completes the report front end — see §13.42, and Step 54 (end-to-end verification + v4→v11 migration-chain replay on a real DB + atomic-save rollback) closes the series — see §13.43. **The Production Scheduling subsystem (Steps 42–54) is complete and verified ready to ship.***
 
 ### 12.1 Step status
 
@@ -100,7 +100,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 51 | ✅ Done | Production Scheduling: scheduling primitives (calendar / capacity / rate / scrap / deadline helpers) — see §13.39 |
 | 52 | ✅ Done | Production Scheduling: scheduler core (greedy EDF `schedule()` seam + infeasibility detection) — see §13.40 |
 | 53 | ✅ Done | Production Scheduling: Production Schedule Report UI + PDF export (Schedule tab + report/scheduling.py mixin) — see §13.42 |
-| 54 | ⬜ Planned | Production Scheduling: end-to-end verification + migration-chain replay — see §13.30 |
+| 54 | ✅ Done | Production Scheduling: end-to-end verification + v4→v11 migration-chain replay (real DB) + atomic-save rollback — see §13.43 |
 | 55 | ✅ Done | UI-test hardening: stale-view invariant in `crash_fuzz` + gated `_TABLE` row-selection capability — see §13.31 |
 | 56 | ✅ Done | Fix Pressers (+ Production) stale-view on employee rename; flagged the `updateEmployee` re-id FK-orphan data bug — see §13.32 |
 | 57 | ✅ Done | Fix HR sub-editor Update crashes: pop-with-default on stale keys (reviews/points/notes/training/PTO) + holidays original-key delete — see §13.33 |
@@ -556,6 +556,50 @@ pyright baseline stay clean.
 
 Only Step 54 (end-to-end verification + migration-chain replay) remains in the
 Production Scheduling series.
+
+### 13.43 Step 54 — end-to-end verification + migration-chain replay ✅ Done
+
+Landed 2026-06-25, closing the Production Scheduling series (Steps 42–54). The
+"subsystem ready to ship" gate, modeled on Step 13: a real-data drill plus two
+durable synthetic smoke checks. No production-code changes — verification only.
+
+**Real-data drill (the way Step 13 did it).** A throwaway driver
+(`step54_real_data.py`, **not committed** — machine-specific, like Step 13's) ran
+offscreen against a **copy** of Matthew's real `Mercy DB 6-1-26.db` — the latest
+db file before the feature block, a genuine `db_version=4` MERCY DB with 165 parts,
+48 employees, 296 production records. Full findings in
+[`plan_archive/scheduling_real_data_findings.md`](plan_archive/scheduling_real_data_findings.md);
+in brief: the **v4→v11 additive chain** created all 7 scheduling/sales tables empty,
+left every pre-existing count identical, and wrote **no `.bak`** (the additive-chain
+invariant, previously asserted nowhere); fuzzed orders on the real parts/employees
+roundtripped through save/reload; and `schedule()` + `scheduleReport` ran end-to-end
+(32 rows, 0 late flags, 6 genuine cold-start warnings on real parts with unset
+`fireScrap` / no pressing history). The original file was SHA-256 **byte-identical**
+afterward (only the copy was opened). No real order data exists yet (per the
+addendum), so orders were fuzzed — a re-run against real orders is future work, no
+code needed.
+
+**Two new smoke checks (57 → 59 PASS), the durable net:**
+- `mercy_v4_to_v11_end_to_end` — the automated twin of the real-data drill. Builds a
+  realistic v11 DB (fuzz_db), **downgrades it on disk** to a v4 shape (drops the 7
+  tables, stamps `db_version=4`) so it's byte-for-byte a pre-Step-43 file with real
+  costing/HR/production data, then replays v4→v11 and asserts: terminal version 11,
+  all 7 tables created empty, pre-existing data untouched, **no backup written**;
+  then populates scheduling/sales, roundtrips save→reload, and runs
+  `schedule()` + `scheduleReport` (rows on real working shift-days/presses/parts,
+  every eligible order scheduled or flagged, PDF renders). Where the per-version
+  checks (v3→v4 … v10→v11) migrate a 1-row fixture and only assert the tables
+  appear, this proves the *whole pipeline* on a migrated DB.
+- `scheduling_save_rollback` — Step 13's atomic-save drill (check 2b), re-run now
+  that `_saveFileBody` writes the 7 new tables: an injected `RuntimeError` after the
+  body but before saveFile's outer commit must roll back, leaving the on-disk
+  scheduling/sales tables byte-identical and a sentinel press off disk. Confirms the
+  try/rollback/commit wrapper reverts a failed save across the new tables, not just
+  the original ones.
+
+`compile_all` + the pyright baseline stay clean. **The Production Scheduling
+subsystem (Steps 42–54) is complete: order tracking, the scheduler, the report, and
+now end-to-end verification on real data.**
 
 ---
 
