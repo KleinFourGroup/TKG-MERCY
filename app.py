@@ -62,13 +62,12 @@ class MainWindow(QWidget):
         self.tab_widget.addTab(self.employeesTopTab, "Employees")
 
         # ---- Production and Scheduling top-level tab ----
-        # Step 11 shipped this as a flat "Production" tab. Step 42 renames it
-        # "Production and Scheduling" and nests it: the existing production
-        # tracker becomes the "Daily Entry / Reports" sub-tab, and three empty
-        # groups are stubbed for the Production Scheduling subsystem (spec §7).
-        # Sales / Scheduling config are genuine tab groups (nested QTabWidgets
-        # that later steps addTab into); Schedule is a single report view, so a
-        # labeled placeholder stands in until Step 53 builds it.
+        # Step 11 shipped this as a flat "Production" tab; Step 42 renamed it
+        # "Production and Scheduling" and nested it (spec §7): the existing
+        # production tracker is the "Daily Entry / Reports" sub-tab, with three
+        # more groups built out by the Production Scheduling subsystem — Sales and
+        # Scheduling config are tab groups (nested QTabWidgets), and Schedule is
+        # the single Production Schedule Report view (Step 53).
         self.prodSchedTab = QTabWidget()
 
         from production_tab import ProductionTab
