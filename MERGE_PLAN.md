@@ -109,6 +109,11 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 | 61 | ✅ Done | Harden `getComboBox` against a stored value missing from its options (combo-prefill crash) — prereq for Step 58 — see §13.37 |
 | 62 | ✅ Done | Fix inventory edit `readData` crash class (date guarded before indexing; part editor checks `.parts`) — fuzzer-found, audited as a class — see §13.41 |
+| 63 | 📋 Planned | Selected tab / sub-tab high-contrast styling (first global QSS) — see §13.44 |
+| 64 | 📋 Planned | Interactive press-preference grid (parts × presses, in-cell drop-downs) + "Not set" rename + 5↔1 heat-map cue — see §13.44 |
+| 65 | 📋 Planned | Presser → Press preference table + tab (reuses the Step 64 grid; db_version 11→12) — see §13.44 |
+| 66 | 📋 Planned | Scheduler assigns pressers (secondary to presses; preference-only, balanced reserved behind the seam) — see §13.44 |
+| 67 | 📋 Planned | Schedule report: per-shift + date-range report variants — see §13.44 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -600,6 +605,39 @@ code needed.
 `compile_all` + the pyright baseline stay clean. **The Production Scheduling
 subsystem (Steps 42–54) is complete: order tracking, the scheduler, the report, and
 now end-to-end verification on real data.**
+
+### 13.44 Press-preference redesign + presser scheduling + report/UX polish (planned 2026-07-02) — Steps 63–67
+
+Second post-release feature block from the team (relayed by Matthew, 2026-07-02) after living with the Production Scheduling subsystem (Steps 42–54). Five requests, sequenced smallest / lowest-risk first in the §13 tradition; each is one step / one commit. Design calls settled in this planning session are recorded inline.
+
+**The five asks.**
+1. Replace the Part-Press Preference list+modal editor with an **interactive grid** — rows = parts, columns = the registered presses, each cell a drop-down the team sets directly (no edit window). Rename the unscored option "Neutral" → **"Not set"** (still treated as 3 for scheduling). Add a visual cue that **5 = most preferred, 1 = least**.
+2. An **analogous Presser → Press preference** table + tab: any presser can work any press, but they specialize; same "pure preference, no measured throughput effect yet" treatment as parts.
+3. Have the schedule **assign pressers** too — strictly **secondary** to assigning work to presses: reuse the presser-press preference to staff people onto the already-decided press work.
+4. Schedule report **per-shift** and **date-range-limited** variants (e.g. "third shift's schedule for the next three days").
+5. A **stronger, higher-contrast selected** appearance for the tab / sub-tab ribbon.
+
+**Shape of the work.** Only Step 65 touches the schema (a new `presser_press_pref` table, `db_version` 11→12, additive migration — the §13.30 vertical-slice template). Step 64 is a UI-only refactor: the `PartPressPref` record, its table, save/load, and migration are all unchanged — "Not set" is still `None` / no row, which `scheduling._prefScore` already reads as `NEUTRAL_PRESS_SCORE = 3`. Step 66 extends the stateless scheduler (no schema — a new `ScheduleRow.presser` field + an assignment pass behind the existing `schedule(db, today, config)` seam). Steps 63 and 67 are pure UI. The reusable **grid widget** built in Step 64 is the same one Step 65's tab reuses, so 64 lands first.
+
+**Ordering / dependencies.** 63 (standalone, any time) → **64** (builds the grid) → **65** (reuses the grid; produces the presser-press data) → **66** (consumes it) → **67**. Steps 64 and 65 may split sub-step-style (grid widget / adopt-for-part-press; e.g. 64a/64b) if the review surface is large, à la Steps 7 / 36 / 52.
+
+| Step | Description | Risk | Testable milestone |
+|------|-------------|------|--------------------|
+| 63 | **Selected-tab contrast.** First global QSS in the app (there is none today — pure native Qt): a stylesheet on `QApplication` targeting `QTabBar::tab:selected` (and the nested `QTabWidget`s) for a high-contrast selected (sub)tab. Optionally a small `colors.py` so the accent has one home. `main.py` / new stylesheet only. | Low | Selected (sub)tab is visibly higher-contrast at every tab level; no other visual regressions. Manual UI gate. |
+| 64 | **Press-preference grid.** New reusable delegate-based grid widget (rows = parts, columns = presses, each cell a `Not set / 1–5` drop-down via a `QStyledItemDelegate` — the app's first in-cell-editing pattern); green→amber→red heat-map fill + legend, "Not set" a distinct gray. Rewrite `part_press_pref_tab.py` onto it; rename "Neutral" → "Not set". **No schema / record / migration change** — `PartPressPref` semantics unchanged. | Med | Set scores directly in-cell; roundtrips through save/reload; scheduler output identical to pre-refactor. Manual UI gate. May split 64a (widget) / 64b (adopt). |
+| 65 | **Presser → Press preference.** Full vertical slice (§13.30 template): `records/scheduling.py:PresserPressPref` (keyed by `employeeId`, `scores: dict[press → 1–5]`, missing = neutral), `CREATE TABLE presser_press_pref`, additive `_migrateV11ToV12` (**db_version 11→12**), save/load, `database.py` dict + `setPresserPressScore` + cascades (press rename/delete, presser delete), `fuzz_db` populator, a **Presser-Press Preference** tab under Scheduling config reusing the Step 64 grid, smoke CRUD + crash_fuzz dispatcher + projection-tab registry. | Med | Score presses per presser in the grid; roundtrips; full migration chain replays on a real DB. Manual UI gate. |
+| 66 | **Scheduler assigns pressers** (secondary). `ScheduleRow` gains `presser: int \| None`. After `_assignLanes` fixes which presses run and what they press (unchanged, part-preference-driven), a matching pass assigns the present pressers (`pressersPresent`) to those presses maximizing total presser→press score (Not set = `presserNeutralScore`, deterministic tiebreak). `ScheduleConfig` gains `presserNeutralScore = 3` and a `presserAssignment = "preference"` policy seam (`"balanced"` / `rotationWeight` reserved but unimplemented — the §10 provisional-heuristic pattern). Thread a Presser column through `schedule_tab` + the `report/scheduling` PDF. Short presser-heuristic note appended to `prod-sched-algorithm.md`. **No schema change** (stateless). | Med-High | Each running press on a working shift-day gets one present presser by preference; surplus pressers unassigned; deterministic re-run; smoke invariants on fuzz data. |
+| 67 | **Schedule report variants.** Two new **named report actions** on the Schedule tab — a per-shift schedule and a date-range-limited schedule (a single focused action may take **both** a shift and a start/end range, per the team's "third shift, next three days" example). Both **filter the full computed `ScheduleResult` for display / PDF** — a view slice, **not** a shortened scheduler horizon (shortening the horizon would corrupt downstream placement and misflag capacity). `schedule_tab.py` + `report/scheduling.py`. Open sub-decision: whether the order-level, dateless flagged-orders / warnings sections show in full or are annotated on a filtered variant. | Med | Generate/export a single-shift schedule and a date-range schedule (including combined) on screen and as PDF. Manual UI gate. |
+
+**Design calls settled 2026-07-02 (this planning session).**
+- **Grid cells:** colored cell + click-to-open drop-down (a Qt item delegate), *not* a persistent combo box in every cell — the real DB has ~165 parts, so hundreds of always-live widgets would be heavy; the delegate scales and reads like a spreadsheet.
+- **Visual cue:** green→amber→red heat map with a legend; "Not set" rendered plain / gray so unset is visibly distinct from an explicit 3 (even though the scheduler treats both as 3).
+- **Presser assignment:** *preference-only* now (pure max-score matching + `presserNeutralScore`), with `"balanced"` / rotation reserved behind the config seam and left unimplemented until real production weeks show whether reshuffling annoys anyone. Invariant: presser preference never changes *what* is produced or *which* presses run — only *who stands where*. Normal case is pressers < presses (nobody starved); the rare inverse (pressers > presses) leaves surplus pressers unassigned that shift.
+- **Report variants:** separate named report actions, not inline filters on the main Generate / Export controls.
+
+**Manual UI gates** (standing rule — smoke can't cover in-cell editing / heat-map render / tab styling / selection logic): Steps **63, 64, 65, 67**. Step 66 is logic-first (like Steps 51 / 52); its Presser column is a mechanical add covered by smoke, but worth a glance.
+
+**Migration-version-churn upkeep (Step 65 only):** bumping `db_version` 11→12 forces updating the hardcoded terminal-version literals + docstrings in `smoke/migrations.py`, registering the new CRUD check in both `smoke/__init__.py` and `smoke/__main__.py`, and adding the new table via migration + fresh-schema path **only** — never into `UNIFIED_TABLES` (the format fingerprint stays frozen at the v4 shape), per CONVENTIONS.md.
 
 ---
 
