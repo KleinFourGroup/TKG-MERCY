@@ -1,131 +1,70 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QMessageBox
-from PySide6.QtCore import Qt
-from table import DBTable
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from app import MainWindow
-from records.scheduling import MIN_PRESS_SCORE, MAX_PRESS_SCORE
-from error import errorMessage
-from utils import getComboBox, centerOnScreen
-import logging
-
-# Score selector options for the nested editor: "Neutral" (no preference, stored
-# as no row) plus the 1..5 scores. Order matches the combo index so prefill /
-# read-back are symmetric.
-SCORE_OPTIONS = ["Neutral"] + [str(s) for s in range(MIN_PRESS_SCORE, MAX_PRESS_SCORE + 1)]
+from pref_grid import PrefGrid, makeHeatLegend
 
 
 class PartPressPrefTab(QWidget):
-    # Nested editor for part-press preferences (Production Scheduling, Step 48).
-    # Unlike the flat scheduling tables, prefs hang off existing parts: the table
-    # lists every part with a summary of its scored presses, and Edit opens a
-    # per-part window with one Neutral/1-5 selector per press. There is no
-    # New/Delete — parts come from Products and presses from the Presses tab; a
-    # part is scored all-neutral simply by clearing its selectors. Lives under
-    # "Production and Scheduling" -> "Scheduling config" -> "Part-Press Preference".
+    # Interactive part-press preference grid (Step 64, a rewrite of the Step 48
+    # list + per-part modal editor). Rows are parts, columns are the registered
+    # presses, and each cell is a click-to-open "Not set / 1-5" drop-down set
+    # directly in-grid (no edit window). Scores are written straight through
+    # Database.setPartPressScore, so "Not set" clears the (part, press) pair back
+    # to no row — the record / schema / migration are all unchanged from Step 48.
+    # The grid widget itself lives in pref_grid.py and is reused by Step 65's
+    # Presser-Press tab. Lives under "Production and Scheduling" -> "Scheduling
+    # config" -> "Part-Press Preference".
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
+        self.selection = []
         self.genTableData()
-        self.table = DBTable(self.data, self.headers)
+        self.table = PrefGrid(
+            self.rowKeys, self.headers, self.data, self.pressNames,
+            self._getScore, self._setScore,
+        )
         self.table.parentTab = self  # type: ignore
 
-        self.selection = []
-        self.selectLabel = QLabel("Selection: N/A")
-
-        edit = QPushButton("Edit")
-        edit.clicked.connect(self.openEdits)
-
-        barLayout = QHBoxLayout()
-        barLayout.addWidget(self.selectLabel)
-        barLayout.addWidget(edit)
+        caption = QLabel(
+            "Score how much each part prefers each press: 5 = most preferred, "
+            "1 = least. Leave a cell 'Not set' for no preference (scheduled as "
+            "neutral). Click a cell to choose."
+        )
+        caption.setWordWrap(True)
 
         layout = QVBoxLayout()
+        layout.addWidget(caption)
         layout.addWidget(self.table)
-        layout.addLayout(barLayout)
+        layout.addWidget(makeHeatLegend())
         self.setLayout(layout)
 
+    def _getScore(self, part, press):
+        pref = self.mainApp.db.partPressPref.get(part)
+        return pref.getScore(press) if pref is not None else None
+
+    def _setScore(self, part, press, score):
+        self.mainApp.db.setPartPressScore(part, press, score)
+
     def genTableData(self):
+        # Recompute the score matrix from db: one row per part, the part name in
+        # column 0, then a score (or None) per press. Kept in sync with headers /
+        # rowKeys so the Step 55 stale-view net can diff self.data directly.
         db = self.mainApp.db
-        self.headers = ["Part", "Scored Presses"]
+        presses = sorted(db.presses)
+        self.pressNames = presses
+        self.headers = ["Part"] + presses
+        self.rowKeys = sorted(db.parts)
         self.data = []
-        for part in db.parts:
+        for part in self.rowKeys:
             pref = db.partPressPref.get(part)
-            if pref is None or not pref.scores:
-                summary = "(neutral)"
-            else:
-                summary = ", ".join(f"{press}: {pref.scores[press]}" for press in sorted(pref.scores))
-            self.data.append([part, summary])
-        self.data.sort(key=lambda row: row[0])
+            row = [part] + [pref.getScore(p) if pref is not None else None for p in presses]
+            self.data.append(row)
 
     def setSelection(self, selection):
         self.selection = selection
-        self.selectLabel.setText(f"Selection: {", ".join(selection)}")
-
-    def openEdits(self):
-        if len(self.selection) == 0:
-            errorMessage(self.mainApp, ["No part selected."])
-            return
-        if len(self.mainApp.db.presses) == 0:
-            errorMessage(self.mainApp, ["Cannot score presses: no presses in the database."])
-            return
-        for part in self.selection:
-            logging.debug(part)
-            PartPressPrefEditWindow(part, self.mainApp)
 
     def refreshTable(self):
+        # Full structural rebuild — parts and presses (the columns) can both change
+        # under us via renames / deletes elsewhere, so headers are recomputed too.
         self.genTableData()
-        self.table.setData(self.data)
-        selection = [part for part in self.selection if part in self.mainApp.db.parts]
-        self.setSelection(selection)
-
-
-class PartPressPrefEditWindow(QWidget):
-    # Per-part nested editor: one Neutral/1-5 selector per press, prefilled from
-    # the part's current scores. A single Update button writes every selector back
-    # through Database.setPartPressScore (Neutral clears the pair to no row).
-    def __init__(self, part, mainApp: MainWindow):
-        super().__init__(mainApp, Qt.WindowType.Window)
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.mainApp = mainApp
-        self.part = part
-        self.setWindowTitle(f"Press Preferences: {part}")
-
-        pref = self.mainApp.db.partPressPref.get(part)
-
-        # One selector per press, keyed by press name so readData / smoke can drive
-        # them directly. Presses are listed in sorted order to match the table view.
-        self.scoreCombos = {}
-        rowsLayout = QVBoxLayout()
-        for press in sorted(self.mainApp.db.presses):
-            current = pref.getScore(press) if pref is not None else None
-            combo = getComboBox(SCORE_OPTIONS, str(current) if current is not None else "Neutral")
-            self.scoreCombos[press] = combo
-            line = QHBoxLayout()
-            line.addWidget(QLabel(f"{press}:"))
-            line.addWidget(combo)
-            rowsLayout.addLayout(line)
-
-        self.updateButton = QPushButton("Update")
-        self.updateButton.clicked.connect(self.updatePref)
-
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel(f"Press preferences for part: {part}"))
-        layout.addLayout(rowsLayout)
-        layout.addWidget(self.updateButton)
-        self.setLayout(layout)
-        centerOnScreen(self)
-        self.show()
-
-    def readData(self):
-        # Write every selector back. "Neutral" -> None clears the pair; a numeric
-        # choice sets the score. No validation needed — the combo constrains input.
-        for press, combo in self.scoreCombos.items():
-            choice = combo.currentText()
-            score = None if choice == "Neutral" else int(choice)
-            self.mainApp.db.setPartPressScore(self.part, press, score)
-        self.mainApp.partPressPrefTab.refreshTable()
-        return True
-
-    def updatePref(self):
-        if self.readData():
-            QMessageBox.information(self, "Success", "Preferences updated!")
-            self.close()
+        self.table.rebuild(self.rowKeys, self.headers, self.data)
+        self.selection = [part for part in self.selection if part in self.mainApp.db.parts]

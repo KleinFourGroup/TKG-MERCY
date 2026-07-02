@@ -1126,20 +1126,21 @@ def orders_tab_crud() -> list[str]:
 
 
 def part_press_pref_crud() -> list[str]:
-    """Step 48: PartPressPrefTab nested editor CRUD + cascades + save/reload roundtrip.
+    """Step 64: PartPressPrefTab interactive grid CRUD + cascades + save/reload roundtrip.
 
-    Seeds tiny fuzz data (now scoring some part-press pairs), then:
-      - opens the per-part editor; confirms one selector per press and score prefill;
-      - Update sets one press to 5 and clears the rest to Neutral (neutral => no row);
-      - renames the part: prefs rekey AND the pref table refreshes (FK-rename rule);
-      - renames a press: the score map rekeys AND the table refreshes;
+    Seeds tiny fuzz data (scoring some part-press pairs), then drives the in-cell
+    grid (Step 64 rewrite of the Step 48 modal) through its ScoreDelegate:
+      - the delegate prefills a cell's combo from the stored score / "Not set";
+      - an in-cell edit sets one press to 5 and clears another to "Not set" (=> no row);
+      - renames the part: prefs rekey AND the grid refreshes (FK-rename rule);
+      - renames a press: the score map rekeys AND the grid column refreshes;
       - deletes that press: it cascades out of every part's prefs;
       - deletes a part (after clearing its orders): its prefs cascade away;
       - saves, reloads into a fresh MainWindow, confirms prefs roundtrip via getTuples.
     """
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
     from app import MainWindow
-    from part_press_pref_tab import PartPressPrefEditWindow
+    from pref_grid import ScoreDelegate, NOT_SET_TEXT
     from presses_tab import PressEditWindow
     from parts_tab import PartsEditWindow
 
@@ -1165,26 +1166,49 @@ def part_press_pref_crud() -> list[str]:
             return errors
         part = parts[0]
 
-        # --- editor prefill: one selector per press, prefilled from current scores ---
-        w.db.setPartPressScore(part, presses[0], 4)  # known starting state for prefill
-        w.partPressPrefTab.refreshTable()
-        editor = PartPressPrefEditWindow(part, w)
-        if set(editor.scoreCombos) != set(presses):
-            errors.append(f"editor selectors {sorted(editor.scoreCombos)} != presses {presses}")
-        if editor.scoreCombos[presses[0]].currentText() != "4":
-            errors.append(f"prefill: {presses[0]} combo={editor.scoreCombos[presses[0]].currentText()!r}, want '4'")
+        tab = w.partPressPrefTab
+        model = tab.table.dbModel
+        delegate = ScoreDelegate()
+        opt = QStyleOptionViewItem()
 
-        # --- Update: clear everything to Neutral, score presses[1] = 5 ---
+        def idx(part_, press_):
+            return model.index(tab.rowKeys.index(part_), 1 + tab.pressNames.index(press_))
+
+        def cell(part_, press_):
+            # Current on-screen score for (part, press), read from the live grid matrix.
+            t = w.partPressPrefTab
+            if part_ not in t.rowKeys or press_ not in t.pressNames:
+                return "MISSING"
+            return t.data[t.rowKeys.index(part_)][1 + t.pressNames.index(press_)]
+
+        # Clear any seed scores for `part` to a deterministic slate, then a known
+        # starting state for the prefill check.
         for pr in presses:
-            editor.scoreCombos[pr].setCurrentText("Neutral")
-        editor.scoreCombos[presses[1]].setCurrentText("5")
-        editor.updateButton.click()
+            w.db.setPartPressScore(part, pr, None)
+        w.db.setPartPressScore(part, presses[0], 4)
+        w.partPressPrefTab.refreshTable()
+
+        # --- in-cell prefill: the delegate opens a combo showing the stored score ---
+        scoredCombo = delegate.createEditor(tab.table, opt, idx(part, presses[0]))
+        delegate.setEditorData(scoredCombo, idx(part, presses[0]))
+        if scoredCombo.currentText() != "4":
+            errors.append(f"prefill: {presses[0]} combo={scoredCombo.currentText()!r}, want '4'")
+        unsetCombo = delegate.createEditor(tab.table, opt, idx(part, presses[1]))
+        delegate.setEditorData(unsetCombo, idx(part, presses[1]))
+        if unsetCombo.currentText() != NOT_SET_TEXT:
+            errors.append(f"prefill: unscored {presses[1]} combo={unsetCombo.currentText()!r}, want {NOT_SET_TEXT!r}")
+
+        # --- in-cell edit: set presses[1] = 5, clear presses[0] to "Not set" ---
+        scoredCombo.setCurrentText("5")
+        delegate.setModelData(scoredCombo, model, idx(part, presses[1]))
+        scoredCombo.setCurrentText(NOT_SET_TEXT)
+        delegate.setModelData(scoredCombo, model, idx(part, presses[0]))
         pref = w.db.partPressPref.get(part)
         if pref is None or pref.scores != {presses[1]: 5}:
-            errors.append(f"after Update: scores={pref and pref.scores}, want {{{presses[1]!r}: 5}}")
-        prow = next((r for r in w.partPressPrefTab.data if r[0] == part), None)
-        if prow is None or f"{presses[1]}: 5" not in prow[1]:
-            errors.append(f"pref table did not reflect the score (row={prow})")
+            errors.append(f"after in-cell edit: scores={pref and pref.scores}, want {{{presses[1]!r}: 5}}")
+        if cell(part, presses[1]) != 5 or cell(part, presses[0]) is not None:
+            errors.append(f"grid did not reflect the edit: {presses[1]}={cell(part, presses[1])!r}, "
+                          f"{presses[0]}={cell(part, presses[0])!r}")
 
         # --- part rename: prefs rekey + table refreshes ---
         renamedPart = "Renamed Pref Part"
@@ -1208,9 +1232,8 @@ def part_press_pref_crud() -> list[str]:
         pref = w.db.partPressPref.get(part)
         if pref is None or oldPress in pref.scores or pref.getScore(renamedPress) != 5:
             errors.append(f"press rename: score map not rekeyed (scores={pref and pref.scores})")
-        prow = next((r for r in w.partPressPrefTab.data if r[0] == part), None)
-        if prow is None or renamedPress not in prow[1]:
-            errors.append(f"press rename: pref table not refreshed (row={prow})")
+        if cell(part, renamedPress) != 5:
+            errors.append(f"press rename: pref grid not refreshed (cell={cell(part, renamedPress)!r})")
 
         # --- press delete: cascades out of every part's prefs ---
         w.pressesTab.setSelection([renamedPress])

@@ -361,8 +361,8 @@ class PartsEditWindow(QWidget):
             self.mainApp.ordersTab.refreshTable()
             self.mainApp.orderStatusTab.refreshTable()
             # Part-press preferences are keyed by part name (Step 48): a new part
-            # shows up as "(neutral)" and a rename rekeys its prefs, so the
-            # Part-Press Preference table must refresh too.
+            # shows up as an all-"Not set" row and a rename rekeys its prefs, so the
+            # Part-Press Preference grid must refresh too (Step 64).
             self.mainApp.partPressPrefTab.refreshTable()
             res = True
         else:
