@@ -484,6 +484,31 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error deleting orphan part-press preferences {orphans}: {repr(e)}")
 
+        # --- Production Scheduling: presser-press preference ((employeeId, press) score rows) ---
+        # The presser twin of part_press_pref (Step 65) — same composite-key strategy:
+        # wipe each presser's child rows and re-insert, then orphan-sweep rows whose
+        # employeeId is no longer scored (covers both presses set back to neutral and
+        # pressers that dropped out of db.presserPressPref). The in-memory cascades
+        # (delPresser / delPress / delEmployee) keep db.presserPressPref tidy; this
+        # sweep is the persistence-side backstop.
+        logging.info(f"Saving presser-press preferences to {self.filePath}")
+        for empId in db.presserPressPref:
+            self.dbFile.execute("DELETE FROM presser_press_pref WHERE employeeId=?", (empId,))
+            for vals in db.presserPressPref[empId].getTuples():
+                try:
+                    self.dbFile.execute("INSERT OR REPLACE INTO presser_press_pref VALUES (?, ?, ?)", vals)
+                    logging.info(f" * Saving {vals}")
+                except Exception as e:
+                    logging.error(f" * Error saving {vals}: {repr(e)}")
+        res = self.dbFile.execute("SELECT employeeId, press FROM presser_press_pref")
+        orphans = [row for row in res.fetchall() if row[0] not in db.presserPressPref]
+        if len(orphans) > 0:
+            try:
+                self.dbFile.executemany("DELETE FROM presser_press_pref WHERE (employeeId, press)=(?, ?)", orphans)
+                logging.info(f" * Deleting orphan presser-press preferences {orphans}")
+            except Exception as e:
+                logging.error(f" * Error deleting orphan presser-press preferences {orphans}: {repr(e)}")
+
         # --- Sales: order status ((orderNum, date) dated-snapshot rows) ---
         # Composite-key nested table like part_press_pref — wipe each order's child
         # rows and re-insert, then orphan-sweep rows whose orderNum is no longer in

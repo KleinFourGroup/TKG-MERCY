@@ -135,9 +135,11 @@ class EmployeeTab(QWidget):
                 self.mainTab.activeEmployeesTab.refreshTable()
                 self.mainTab.inactiveEmployeesTab.refreshTable()
                 self.mainApp.productionTab.refresh()
-                # delEmployee cascades the presser row (records.Database.delEmployee),
-                # so the Pressers tab needs re-rendering too or it shows a stale row.
+                # delEmployee cascades the presser row AND its presser-press prefs
+                # (records.Database.delEmployee), so both presser-derived tabs need
+                # re-rendering too or they show a stale row.
                 self.mainApp.pressersTab.refreshTable()
+                self.mainApp.presserPressPrefTab.refreshTable()
                 QMessageBox.information(self, "Success", "Update successful!")
 
     def reportAll(self):
@@ -318,11 +320,14 @@ class EmployeeEditWindow(QWidget):
             self.mainApp.employeesTab.activeEmployeesTab.refreshTable()
             self.mainApp.employeesTab.inactiveEmployeesTab.refreshTable()
             # A name / idNum edit changes any employee-derived label downstream:
-            # the Pressers list (_presserLabel) and the Production table + filter
-            # (_employeeLabel). Step 49-style downstream refresh — the Step 55 net
-            # flagged Pressers; Production is its twin (out of the net only because
+            # the Pressers list (_presserLabel), the Presser-Press Preference grid's
+            # row labels (also _presserLabel), and the Production table + filter
+            # (_employeeLabel). A re-id also rekeys the presser / presser-press-pref
+            # rows (db.updateEmployee). Step 49-style downstream refresh — the Step 55
+            # net flagged Pressers; Production is its twin (out of the net only because
             # it's filter-stateful, but it renders the same labels).
             self.mainApp.pressersTab.refreshTable()
+            self.mainApp.presserPressPrefTab.refreshTable()
             self.mainApp.productionTab.refresh()
             res = True
         else:

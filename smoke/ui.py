@@ -1292,6 +1292,180 @@ def part_press_pref_crud() -> list[str]:
     return errors
 
 
+def presser_press_pref_crud() -> list[str]:
+    """Step 65: PresserPressPrefTab interactive grid CRUD + cascades + save/reload roundtrip.
+
+    The presser twin of ``part_press_pref_crud`` — reuses the same ``PrefGrid`` widget,
+    but rows are pressers (keyed by employeeId, labeled by the employee name) instead
+    of parts. Seeds tiny fuzz data (which now scores some presser-press pairs), then
+    drives the in-cell grid through its ScoreDelegate:
+      - the delegate prefills a cell's combo from the stored score / "Not set";
+      - an in-cell edit sets one press to 5 and clears another to "Not set" (=> no row);
+      - renames the presser's employee: the grid's row LABEL refreshes (the key, an
+        employeeId, is unchanged — the label is employee-derived);
+      - renames a press: the score map rekeys AND the grid column refreshes;
+      - deletes that press: it cascades out of every presser's prefs;
+      - deletes the presser: its prefs cascade away;
+      - saves, reloads into a fresh MainWindow, confirms prefs roundtrip via getTuples.
+    """
+    from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
+    from app import MainWindow
+    from pref_grid import ScoreDelegate, NOT_SET_TEXT
+    from presses_tab import PressEditWindow
+    from pressers_tab import _presserLabel
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        pressers = sorted(w.db.pressers)
+        presses = sorted(w.db.presses)
+        if len(pressers) < 1 or len(presses) < 2:
+            errors.append(f"expected >=1 presser and >=2 presses from tiny seed, got {len(pressers)}/{len(presses)}")
+            return errors
+        empId = pressers[0]
+
+        tab = w.presserPressPrefTab
+        model = tab.table.dbModel
+        delegate = ScoreDelegate()
+        opt = QStyleOptionViewItem()
+
+        def idx(emp_, press_):
+            return model.index(tab.rowKeys.index(emp_), 1 + tab.pressNames.index(press_))
+
+        def cell(emp_, press_):
+            # Current on-screen score for (presser, press), read from the live grid matrix.
+            t = w.presserPressPrefTab
+            if emp_ not in t.rowKeys or press_ not in t.pressNames:
+                return "MISSING"
+            return t.data[t.rowKeys.index(emp_)][1 + t.pressNames.index(press_)]
+
+        def label(emp_):
+            # Current on-screen column-0 label for the presser row.
+            t = w.presserPressPrefTab
+            return t.data[t.rowKeys.index(emp_)][0]
+
+        # Clear any seed scores for `empId` to a deterministic slate, then a known
+        # starting state for the prefill check.
+        for pr in presses:
+            w.db.setPresserPressScore(empId, pr, None)
+        w.db.setPresserPressScore(empId, presses[0], 4)
+        w.presserPressPrefTab.refreshTable()
+
+        # --- in-cell prefill: the delegate opens a combo showing the stored score ---
+        scoredCombo = delegate.createEditor(tab.table, opt, idx(empId, presses[0]))
+        delegate.setEditorData(scoredCombo, idx(empId, presses[0]))
+        if scoredCombo.currentText() != "4":
+            errors.append(f"prefill: {presses[0]} combo={scoredCombo.currentText()!r}, want '4'")
+        unsetCombo = delegate.createEditor(tab.table, opt, idx(empId, presses[1]))
+        delegate.setEditorData(unsetCombo, idx(empId, presses[1]))
+        if unsetCombo.currentText() != NOT_SET_TEXT:
+            errors.append(f"prefill: unscored {presses[1]} combo={unsetCombo.currentText()!r}, want {NOT_SET_TEXT!r}")
+
+        # --- in-cell edit: set presses[1] = 5, clear presses[0] to "Not set" ---
+        scoredCombo.setCurrentText("5")
+        delegate.setModelData(scoredCombo, model, idx(empId, presses[1]))
+        scoredCombo.setCurrentText(NOT_SET_TEXT)
+        delegate.setModelData(scoredCombo, model, idx(empId, presses[0]))
+        pref = w.db.presserPressPref.get(empId)
+        if pref is None or pref.scores != {presses[1]: 5}:
+            errors.append(f"after in-cell edit: scores={pref and pref.scores}, want {{{presses[1]!r}: 5}}")
+        if cell(empId, presses[1]) != 5 or cell(empId, presses[0]) is not None:
+            errors.append(f"grid did not reflect the edit: {presses[1]}={cell(empId, presses[1])!r}, "
+                          f"{presses[0]}={cell(empId, presses[0])!r}")
+
+        # --- employee rename: the row label refreshes, the employeeId key is unchanged ---
+        emp = w.db.employees[empId]
+        emp.lastName = "Zzrenamed"
+        emp.firstName = "Presser"
+        # Refresh both presser-derived tabs the way the real employee-edit path does,
+        # so the Pressers tab's label->id map is current for the delete-by-label below.
+        w.presserPressPrefTab.refreshTable()
+        w.pressersTab.refreshTable()
+        wantLabel = _presserLabel(w.db, empId)
+        if empId not in w.db.presserPressPref:
+            errors.append(f"employee rename: presser key {empId} unexpectedly changed")
+        if label(empId) != wantLabel:
+            errors.append(f"employee rename: grid label={label(empId)!r}, want {wantLabel!r}")
+
+        # --- press rename: score map rekeys + grid column refreshes ---
+        oldPress = presses[1]
+        renamedPress = "Renamed Press Y"
+        pre = PressEditWindow(oldPress, w)
+        pre.nameEdit.setText(renamedPress)
+        pre.updateButton.click()
+        pref = w.db.presserPressPref.get(empId)
+        if pref is None or oldPress in pref.scores or pref.getScore(renamedPress) != 5:
+            errors.append(f"press rename: score map not rekeyed (scores={pref and pref.scores})")
+        if cell(empId, renamedPress) != 5:
+            errors.append(f"press rename: presser grid not refreshed (cell={cell(empId, renamedPress)!r})")
+
+        # --- press delete: cascades out of every presser's prefs ---
+        w.pressesTab.setSelection([renamedPress])
+        w.pressesTab.deleteSelection()
+        if renamedPress in w.db.presses:
+            errors.append(f"press delete: {renamedPress!r} survived")
+        for e, pr in w.db.presserPressPref.items():
+            if renamedPress in pr.scores:
+                errors.append(f"press delete: {renamedPress!r} still scored on presser {e!r}")
+        # `empId` scored only renamedPress (all else neutral), so it should drop out entirely.
+        if empId in w.db.presserPressPref:
+            errors.append(f"press delete: presser {empId!r} should have no scores left, still present")
+
+        # --- presser delete: its prefs cascade away ---
+        livePress = sorted(w.db.presses)[0]
+        w.db.setPresserPressScore(empId, livePress, 3)
+        w.presserPressPrefTab.refreshTable()
+        w.pressersTab.setSelection([_presserLabel(w.db, empId)])
+        w.pressersTab.deleteSelection()
+        if empId in w.db.pressers:
+            errors.append(f"presser delete: {empId!r} survived")
+        elif empId in w.db.presserPressPref:
+            errors.append(f"presser delete: prefs for {empId!r} not cascaded")
+
+        # --- save / reload roundtrip ---
+        survivor = sorted(w.db.pressers)[0] if w.db.pressers else None
+        if survivor is not None:
+            anyPress = sorted(w.db.presses)[0]
+            w.db.setPresserPressScore(survivor, anyPress, 2)
+        expected = {e: pr.getTuples() for e, pr in w.db.presserPressPref.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading presser pref DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {e: pr.getTuples() for e, pr in w2.db.presserPressPref.items()}
+            if got != expected:
+                errors.append(f"presser-press pref roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def order_status_crud() -> list[str]:
     """Step 49: OrderStatusTab nested editor CRUD + latest-wins + cascade + roundtrip.
 
@@ -1679,6 +1853,13 @@ def employee_reid_cascades() -> list[str]:
             rec = ProductionRecord()
             rec.setRecord(oldId, d, emp.shift or 1, "Pressing", tgt, 100, 5, 8.0)
             w.db.production[rec.key()] = rec
+        # Give the victim a presser-press preference too (Step 65) — it's keyed by
+        # employeeId just like the presser row, so a re-id must move it or it orphans.
+        if not w.db.presses:
+            errors.append("expected fuzz seed to populate presses, got 0")
+            return errors
+        prefPress = sorted(w.db.presses)[0]
+        w.db.setPresserPressScore(oldId, prefPress, 5)
         newId = max(w.db.employees) + 1  # strictly greater than all -> guaranteed free
 
         # Re-id through the real edit dialog (Update on the existing employee).
@@ -1703,6 +1884,14 @@ def employee_reid_cascades() -> list[str]:
             errors.append(f"production didn't follow re-id: old={oldProd}, new={newProd} (want 0, 2)")
         if any(k[0] != r.employeeId for k, r in w.db.production.items()):
             errors.append("production dict key out of sync with rec.employeeId after re-id")
+        # presser-press preference must follow the re-id too (Step 65).
+        if oldId in w.db.presserPressPref or newId not in w.db.presserPressPref:
+            errors.append(f"presser-press pref didn't follow re-id: oldIn={oldId in w.db.presserPressPref}, "
+                          f"newIn={newId in w.db.presserPressPref}")
+        elif (w.db.presserPressPref[newId].employeeId != newId
+              or w.db.presserPressPref[newId].getScore(prefPress) != 5):
+            errors.append(f"presser-press pref not intact after re-id: "
+                          f"{w.db.presserPressPref[newId].scores}")
 
         # --- save / reload roundtrip (the rekey must persist) ---
         w.fileManager.saveFile()
@@ -1720,6 +1909,10 @@ def employee_reid_cascades() -> list[str]:
             rOld = sum(1 for r in w2.db.production.values() if r.employeeId == oldId)
             if rNew != 2 or rOld != 0:
                 errors.append(f"roundtrip production: new={rNew}, old={rOld} (want 2, 0)")
+            got = w2.db.presserPressPref.get(newId)
+            if oldId in w2.db.presserPressPref or got is None or got.getScore(prefPress) != 5:
+                errors.append(f"roundtrip presser-press pref: newIn={newId in w2.db.presserPressPref}, "
+                              f"oldIn={oldId in w2.db.presserPressPref}, scores={got and got.scores}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

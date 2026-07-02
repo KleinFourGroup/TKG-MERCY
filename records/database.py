@@ -9,7 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref
 from records.sales import Client, Order, OrderStatus
 
 
@@ -33,6 +33,7 @@ class Database:
                  pressers: dict[int, Presser],
                  shiftWorkweek: dict[int, ShiftWorkweek],
                  partPressPref: dict[str, PartPressPref],
+                 presserPressPref: dict[int, PresserPressPref],
                  clients: dict[str, Client],
                  orders: dict[str, Order],
                  orderStatus: dict[str, OrderStatus]) -> None:
@@ -54,6 +55,7 @@ class Database:
         self.pressers = pressers
         self.shiftWorkweek = shiftWorkweek
         self.partPressPref = partPressPref
+        self.presserPressPref = presserPressPref
         self.clients = clients
         self.orders = orders
         self.orderStatus = orderStatus
@@ -308,6 +310,13 @@ class Database:
             self.pressers = {newID if key == oldID else key: val
                              for key, val in self.pressers.items()}
             self.pressers[newID].employeeId = newID
+        # Presser-press preferences are keyed by employeeId too (Step 65), so a re-id
+        # must move them with the presser or they silently orphan — same follow-the-id
+        # rule as the pressers rekey just above.
+        if oldID in self.presserPressPref:
+            pref = self.presserPressPref.pop(oldID)
+            pref.employeeId = newID
+            self.presserPressPref[newID] = pref
         if any(rec.employeeId == oldID for rec in self.production.values()):
             for rec in self.production.values():
                 if rec.employeeId == oldID:
@@ -340,6 +349,9 @@ class Database:
         # employee is a presser — so this is a guarded delete, not a raise.
         if employeeID in self.pressers:
             del self.pressers[employeeID]
+        # Presser-press preferences are keyed by employeeId (Step 65) and are presser
+        # config, so drop them with the presser row — same cascade as the presser above.
+        self.presserPressPref.pop(employeeID, None)
 
     def addEmployeeReviews(self, employeeReviews: EmployeeReviewsDB):
         if employeeReviews.idNum in self.reviews:
@@ -381,6 +393,11 @@ class Database:
             for pref in self.partPressPref.values():
                 if entry in pref.scores:
                     pref.scores[name] = pref.scores.pop(entry)
+            # Presser-press preferences score presses the same way (Step 65), so
+            # propagate the rename into every presser's score map too.
+            for presserPref in self.presserPressPref.values():
+                if entry in presserPref.scores:
+                    presserPref.scores[name] = presserPref.scores.pop(entry)
 
     def addPress(self, press: Press):
         if press.name in self.presses:
@@ -400,6 +417,15 @@ class Database:
             pref.setScore(name, None)
             if not pref.scores:
                 del self.partPressPref[part]
+        # Same cascade for presser-press preferences (Step 65): a deleted press
+        # drops out of every presser's map, and a presser left with no scored
+        # presses drops its now-empty PresserPressPref so the in-memory shape
+        # matches the persisted presence rows.
+        for empId in list(self.presserPressPref):
+            presserPref = self.presserPressPref[empId]
+            presserPref.setScore(name, None)
+            if not presserPref.scores:
+                del self.presserPressPref[empId]
 
     # ---- Production Scheduling: part-press preference ------------------------------------
 
@@ -419,6 +445,24 @@ class Database:
             if not self.partPressPref[part].scores:
                 del self.partPressPref[part]
 
+    # ---- Production Scheduling: presser-press preference ---------------------------------
+
+    def setPresserPressScore(self, employeeId, press, score):
+        # Set or clear one (presser, press) preference score — the exact twin of
+        # setPartPressScore but keyed by employeeId. Keeps self.presserPressPref in
+        # lockstep with the persisted presence rows: a presser entry exists only while
+        # it has >= 1 scored press, so a presser scored all-neutral drops out (and an
+        # empty DB has an empty dict). Pressers are created/deleted from their own
+        # table, so there's no add/del here; the grid tab just sets scores through this.
+        if score is not None and score != 0:
+            if employeeId not in self.presserPressPref:
+                self.presserPressPref[employeeId] = PresserPressPref(employeeId)
+            self.presserPressPref[employeeId].setScore(press, score)
+        elif employeeId in self.presserPressPref:
+            self.presserPressPref[employeeId].setScore(press, None)
+            if not self.presserPressPref[employeeId].scores:
+                del self.presserPressPref[employeeId]
+
     # ---- Production Scheduling: pressers ---------------------------------------------------
 
     def updatePresser(self, oldId, newId):
@@ -430,6 +474,15 @@ class Database:
             pressers = {newId if key == oldId else key: val for key, val in self.pressers.items()}
             self.pressers = pressers
             self.pressers[newId].employeeId = newId
+            # Presser-press preferences are keyed by employeeId (Step 65), exactly
+            # like pressers, so rekey the entry and fix up the stored id — the same
+            # follow-the-presser rule used everywhere pressers is rekeyed. No
+            # collision: the tab rejects reassigning to an existing presser, so newId
+            # has no pre-existing preference row.
+            if oldId in self.presserPressPref:
+                pref = self.presserPressPref.pop(oldId)
+                pref.employeeId = newId
+                self.presserPressPref[newId] = pref
 
     def addPresser(self, presser: Presser):
         if presser.employeeId in self.pressers:
@@ -440,6 +493,10 @@ class Database:
         if employeeId not in self.pressers:
             raise RuntimeError('employeeId not in self.pressers')
         del self.pressers[employeeId]
+        # Presser-press preferences are config tied 1:1 to a live presser (Step 65),
+        # so cascade-drop them when the presser is deleted — the same
+        # config-cascades pattern as delPart dropping a part's partPressPref.
+        self.presserPressPref.pop(employeeId, None)
 
     # ---- Production Scheduling: shift workweek ---------------------------------------------
 
@@ -687,6 +744,7 @@ def emptyDB():
         {},          # pressers
         {},          # shiftWorkweek
         {},          # partPressPref
+        {},          # presserPressPref
         {},          # clients
         {},          # orders
         {}           # orderStatus

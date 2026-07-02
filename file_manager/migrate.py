@@ -307,3 +307,16 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS order_status(orderNum, date, remainingToPress INTEGER, remainingToShip INTEGER, UNIQUE(orderNum, date))")
         self._setDbVersion(11)
         logging.info(" --> v10->v11 migration complete")
+
+    def _migrateV11ToV12(self):
+        # Production Scheduling (Step 65): add the (initially empty) `presser_press_pref`
+        # table — one (employeeId, press, score) row per scored press, the presser
+        # twin of part_press_pref. Same additive + idempotent shape as v4->v5 ..
+        # v10->v11 — no existing data is touched, no backup needed, and the chain
+        # replays cleanly on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v11->v12 migration: add presser_press_pref table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS presser_press_pref(employeeId, press, score INTEGER, UNIQUE(employeeId, press))")
+        self._setDbVersion(12)
+        logging.info(" --> v11->v12 migration complete")

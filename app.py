@@ -112,6 +112,10 @@ class MainWindow(QWidget):
         self.partPressPrefTab = PartPressPrefTab(self)
         self.schedulingConfigTab.addTab(self.partPressPrefTab, "Part-Press Preference")
 
+        from presser_press_pref_tab import PresserPressPrefTab
+        self.presserPressPrefTab = PresserPressPrefTab(self)
+        self.schedulingConfigTab.addTab(self.presserPressPrefTab, "Presser-Press Preference")
+
         self.prodSchedTab.addTab(self.schedulingConfigTab, "Scheduling config")
 
         # Schedule group — the Production Schedule Report (Step 53).
@@ -191,6 +195,7 @@ class MainWindow(QWidget):
         self.pressersTab.refreshTable()
         self.workweekTab.refreshTable()
         self.partPressPrefTab.refreshTable()
+        self.presserPressPrefTab.refreshTable()
         # Sales domain
         self.clientsTab.refreshTable()
         self.ordersTab.refreshTable()

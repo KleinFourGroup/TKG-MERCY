@@ -96,6 +96,9 @@ class PressersTab(QWidget):
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.delPresser(empId)
                 self.refreshTable()
+                # delPresser cascades the presser's press preferences (Step 65), and
+                # the deleted presser is also a dropped row in the grid, so refresh it.
+                self.mainApp.presserPressPrefTab.refreshTable()
                 QMessageBox.information(self.mainApp, "Success!", f"Deleted presser {label}")
 
     def refreshTable(self):
@@ -196,6 +199,10 @@ class PresserEditWindow(QWidget):
             if isNone:
                 self.item = None
             self.mainApp.pressersTab.refreshTable()
+            # A new / reassigned presser becomes a row in the Presser-Press Preference
+            # grid (and a reassign rekeys its prefs via db.updatePresser), so refresh
+            # it too (Step 65).
+            self.mainApp.presserPressPrefTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)

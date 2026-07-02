@@ -123,9 +123,10 @@ def _seedFuzzData(w, rng):
     F.populateNotes(db, rng, idNums, today)
     F.populateHolidays(db, rng, today)
     pressNames = F.populatePresses(db, rng, cfg["presses"])
-    F.populatePressers(db, rng, idNums, cfg["pressers"])
+    presserIds = F.populatePressers(db, rng, idNums, cfg["pressers"])
     F.populateShiftWorkweek(db, rng)
     F.populatePartPressPref(db, rng, partNames, pressNames)
+    F.populatePresserPressPref(db, rng, presserIds, pressNames)
     clientNames = F.populateClients(db, rng, cfg["clients"])
     orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
     F.populateOrderStatus(db, rng, orderNums, today)
@@ -291,6 +292,7 @@ def _projectionTabs(window):
         ("pressesTab", window.pressesTab, "data"),
         ("pressersTab", window.pressersTab, "data"),
         ("partPressPrefTab", window.partPressPrefTab, "data"),
+        ("presserPressPrefTab", window.presserPressPrefTab, "data"),
         # Sales domain.
         ("clientsTab", window.clientsTab, "data"),
         ("ordersTab", window.ordersTab, "data"),

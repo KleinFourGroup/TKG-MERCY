@@ -36,7 +36,10 @@ from .import_db import ImportMixin
 #   v11 — Step 49: `order_status` table added (one (orderNum, date, remainingToPress
 #        INTEGER, remainingToShip INTEGER) row per dated snapshot, UNIQUE(orderNum,
 #        date); latest-by-date wins; additive).
-MERCY_DB_VERSION = 11
+#   v12 — Step 65: `presser_press_pref` table added (one (employeeId, press, score
+#        INTEGER) row per scored press, UNIQUE(employeeId, press); missing pair =
+#        neutral; the presser twin of part_press_pref; additive).
+MERCY_DB_VERSION = 12
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -118,6 +121,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV9ToV10()
                 if dbVersion is not None and dbVersion < 11:
                     self._migrateV10ToV11()
+                if dbVersion is not None and dbVersion < 12:
+                    self._migrateV11ToV12()
                 self.dbFile.commit()
                 return True
 

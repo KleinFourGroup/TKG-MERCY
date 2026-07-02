@@ -7,7 +7,7 @@ from records.employees import (
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref
 from records.sales import Client, Order
 import datetime
 
@@ -340,6 +340,18 @@ class LoadMixin:
                 db.partPressPref[part] = PartPressPref(part)
             db.partPressPref[part].setScore(press, score)
             logging.info(f" * Loaded part-press preference ({part}, {press}, {score})")
+
+        # --- Production Scheduling: presser-press preference ---
+        # Each (employeeId, press, score) row is one scored press (Step 65); rebuild
+        # the per-presser PresserPressPref on demand so a presser with no rows simply
+        # has no entry — the presser twin of part_press_pref above.
+        logging.info(f"Loading presser-press preferences from {self.filePath}")
+        res = self.dbFile.execute("SELECT employeeId, press, score FROM presser_press_pref ORDER BY employeeId, press")
+        for (employeeId, press, score) in res.fetchall():
+            if employeeId not in db.presserPressPref:
+                db.presserPressPref[employeeId] = PresserPressPref(employeeId)
+            db.presserPressPref[employeeId].setScore(press, score)
+            logging.info(f" * Loaded presser-press preference ({employeeId}, {press}, {score})")
 
         # --- Sales: order status ---
         # Each (orderNum, date, remainingToPress, remainingToShip) row is one dated

@@ -112,3 +112,41 @@ class PartPressPref:
 
     def __str__(self) -> str:
         return "({}, {})".format(self.part, sorted(self.scores.items()))
+
+
+class PresserPressPref:
+    # One presser's scored press preferences (Step 65, MERGE_PLAN §13.44). The exact
+    # twin of PartPressPref, but keyed by employeeId (FK -> employees.idNum / the
+    # presser's PK) instead of part name: any presser can work any press but they
+    # specialize, so `scores` maps a press name to a preference score
+    # (MIN_PRESS_SCORE..MAX_PRESS_SCORE); a press absent from the dict is *neutral*
+    # (the missing-pair-is-neutral rule), so a presser with no scored presses simply
+    # has no PresserPressPref. Like part-press preference the score is a pure
+    # assignment tiebreaker — it does not affect throughput in v1 (Step 66 consumes
+    # it to staff pressers onto the already-decided press work). A flat reference
+    # record with no `db` back-reference. Persisted as one (employeeId, press, score)
+    # row per scored press in the `presser_press_pref` table — the nested-relational
+    # shape, mirroring part_press_pref.
+    def __init__(self, employeeId, scores=None) -> None:
+        self.employeeId = employeeId
+        self.scores: dict[str, int] = dict(scores) if scores is not None else {}
+
+    def getScore(self, press):
+        # The press's score, or None if neutral (no entry).
+        return self.scores.get(press)
+
+    def setScore(self, press, score) -> None:
+        # Set or clear one press's score. A None / 0 score clears it back to
+        # neutral (drops the entry), keeping `scores` free of neutral pairs so
+        # the presence-row persistence stays in lockstep.
+        if score is None or score == 0:
+            self.scores.pop(press, None)
+        else:
+            self.scores[press] = score
+
+    def getTuples(self):
+        # One (employeeId, press, score) row per scored press, press-name-sorted.
+        return [(self.employeeId, press, self.scores[press]) for press in sorted(self.scores)]
+
+    def __str__(self) -> str:
+        return "({}, {})".format(self.employeeId, sorted(self.scores.items()))

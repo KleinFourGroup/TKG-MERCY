@@ -619,6 +619,27 @@ def populatePartPressPref(db, rng, partNames, pressNames):
     return count
 
 
+def populatePresserPressPref(db, rng, presserIds, pressNames):
+    # The presser twin of populatePartPressPref (Step 65): score some (presser, press)
+    # pairs so the grid editor / Step 66 scheduler have demo preferences. Each presser
+    # scores a random subset of the presses 1-5; the rest stay neutral (no row),
+    # exercising the missing-pair-is-neutral path. Needs at least one presser and one
+    # press. Returns the number of scored pairs.
+    if not presserIds or not pressNames:
+        return 0
+    count = 0
+    for empId in presserIds:
+        # Roughly two-thirds of pressers express a preference; those score 1-3 presses
+        # (pressers specialize more than parts, so a slightly higher hit rate).
+        if rng.random() < 0.33:
+            continue
+        k = rng.randint(1, min(3, len(pressNames)))
+        for press in rng.sample(pressNames, k):
+            db.setPresserPressScore(empId, press, rng.randint(MIN_PRESS_SCORE, MAX_PRESS_SCORE))
+            count += 1
+    return count
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -671,6 +692,8 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  workweek:  {len(db.shiftWorkweek)} shifts configured")
     nPref = populatePartPressPref(db, rng, partNames, pressNames)
     print(f"  partPressPref: {nPref} scored pairs over {len(db.partPressPref)} parts")
+    nPresserPref = populatePresserPressPref(db, rng, presserIds, pressNames)
+    print(f"  presserPressPref: {nPresserPref} scored pairs over {len(db.presserPressPref)} pressers")
 
     # Sales subsystem (Steps 46+).
     clientNames = populateClients(db, rng, cfg["clients"])
