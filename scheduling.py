@@ -567,3 +567,69 @@ def schedule(db: Database, today: datetime.date | None = None,
     flags.sort(key=lambda f: (f.kind, f.orderNum))
     sortedWarnings = sorted(warnings, key=lambda w: (w.kind, w.part))
     return ScheduleResult(today, rows, flags, sortedWarnings)
+
+
+# ---------------------------------------------------------------------------
+# Step 67: report-view helpers (§13.44). Pure, deterministic operations over a
+# computed ScheduleResult — the per-shift / date-range variants and the
+# date/shift-grouped layout are *view slices* of an already-computed schedule,
+# never a re-run of the scheduler (shortening the horizon would corrupt
+# placement and misflag capacity). Shared by schedule_tab.py and
+# report/scheduling.py so the on-screen table and the PDF read identically.
+# ---------------------------------------------------------------------------
+
+# Abbreviated weekday names indexed by date.weekday() (Mon=0). A fixed table,
+# not strftime("%a"), so the group headings are locale-independent / deterministic.
+_GROUP_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def filterSchedule(result: ScheduleResult, shift: int | None = None,
+                   start: datetime.date | None = None,
+                   end: datetime.date | None = None) -> ScheduleResult:
+    """A view slice of a computed schedule for the Step 67 per-shift / date-range
+    report variants: keep only rows matching `shift` (when given) and falling in
+    [`start`, `end`] inclusive (each bound open when None). Flags and warnings are
+    order-level / dateless, so they pass through **unfiltered** — a filtered view
+    must never hide a late or infeasible order (design call 2026-07-02). Slices
+    the result, never re-runs the scheduler, so `today` is preserved."""
+    rows = [r for r in result.rows
+            if (shift is None or r.shift == shift)
+            and (start is None or r.date >= start)
+            and (end is None or r.date <= end)]
+    return ScheduleResult(result.today, rows, result.flags, result.warnings)
+
+
+def groupScheduleRows(
+        rows: list[ScheduleRow]) -> list[tuple[tuple[datetime.date, int], list[ScheduleRow]]]:
+    """Group schedule rows into ordered (date, shift) buckets for the grouped
+    report/tab layout (Step 67), where Date and Shift move from repeated columns
+    into a group heading. Assumes `rows` is sorted by (date, shift, ...) the way
+    `schedule()` emits them (and `filterSchedule` preserves), so equal keys are
+    contiguous and the buckets come out chronologically."""
+    groups: list[tuple[tuple[datetime.date, int], list[ScheduleRow]]] = []
+    for r in rows:
+        key = (r.date, r.shift)
+        if not groups or groups[-1][0] != key:
+            groups.append((key, []))
+        groups[-1][1].append(r)
+    return groups
+
+
+def scheduleGroupHeading(d: datetime.date, shift: int) -> str:
+    """The subheading for one (date, shift) group (Step 67): weekday + ISO date +
+    shift, e.g. 'Mon 2026-07-06 — Shift 1'. Used verbatim by both the on-screen
+    group labels and the PDF subheadings so they stay identical."""
+    return f"{_GROUP_WEEKDAYS[d.weekday()]} {d.isoformat()} — Shift {shift}"
+
+
+def scheduleFilterDescription(shift: int | None, start: datetime.date | None,
+                              end: datetime.date | None) -> str:
+    """A human-readable description of an active filter (Step 67) for the status
+    line and the filtered-PDF subtitle, e.g. 'Shift 3, 2026-07-06 to 2026-07-08'
+    or 'All shifts'. A date bound shown as '…' when open-ended."""
+    parts = [f"Shift {shift}" if shift is not None else "All shifts"]
+    if start is not None or end is not None:
+        lo = start.isoformat() if start is not None else "…"
+        hi = end.isoformat() if end is not None else "…"
+        parts.append(f"{lo} to {hi}")
+    return ", ".join(parts)

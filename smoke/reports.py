@@ -591,6 +591,9 @@ def schedule_report() -> list[str]:
             ("schedule-flags", lambda p: p.scheduleReport(syntheticResult, 30)),
             # horizonDays=None drops the horizon clause from the subtitle.
             ("schedule-no-horizon", lambda p: p.scheduleReport(syntheticResult)),
+            # Step 67: a filtered variant (shift slice) with the filterDesc subtitle.
+            ("schedule-filtered", lambda p: p.scheduleReport(
+                S.filterSchedule(fuzzResult, shift=1), 365, filterDesc="Shift 1")),
         ]
         for name, fn in reports:
             tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)

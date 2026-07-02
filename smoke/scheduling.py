@@ -640,3 +640,67 @@ def scheduling_primitives_fuzz() -> list[str]:
     except Exception as e:  # noqa: BLE001 - a crash here is the failure we report
         errors.append(f"primitive raised on fuzzed data: {e!r}")
     return errors
+
+
+def scheduling_view_slice() -> list[str]:
+    """Step 67 view helpers (filterSchedule / groupScheduleRows /
+    scheduleGroupHeading / scheduleFilterDescription) on a hand-built result with
+    exact expected output: shift-only / date-range / combined / open-ended filters,
+    flags passing through unfiltered, contiguous (date, shift) grouping, the
+    weekday+ISO+shift heading, and the filter-description strings."""
+    import scheduling as S
+
+    errors: list[str] = []
+    monday = _findMonday()
+    tuesday = monday + datetime.timedelta(days=1)
+
+    rows = [
+        S.ScheduleRow(monday, 1, "PA", "P1", 10.0, 1.0, 100),
+        S.ScheduleRow(monday, 1, "PB", "P2", 20.0, 2.0, 101),
+        S.ScheduleRow(monday, 2, "PA", "P1", 30.0, 3.0, 102),
+        S.ScheduleRow(tuesday, 1, "PA", "P3", 40.0, 4.0, 103),
+    ]
+    flag = S.OrderFlag("O1", "P1", S.LATE, daysLate=1, piecesShort=5.0)
+    result = S.ScheduleResult(monday, rows, [flag], [])
+
+    # Shift-only filter keeps every shift-1 row across both dates.
+    f1 = S.filterSchedule(result, shift=1)
+    _expect(errors, "filter shift1", [(r.date, r.press) for r in f1.rows],
+            [(monday, "PA"), (monday, "PB"), (tuesday, "PA")])
+    _expect(errors, "filter keeps flags unfiltered", f1.flags, [flag])
+    _expect(errors, "filter preserves today", f1.today, monday)
+
+    # Date-range filter (monday only) drops tuesday.
+    f2 = S.filterSchedule(result, start=monday, end=monday)
+    _expect(errors, "filter monday-only dates", {r.date for r in f2.rows}, {monday})
+    _expect(errors, "filter monday-only count", len(f2.rows), 3)
+
+    # Combined shift + single-day.
+    f3 = S.filterSchedule(result, shift=2, start=monday, end=monday)
+    _expect(errors, "filter combined", [(r.shift, r.press) for r in f3.rows], [(2, "PA")])
+
+    # Open-ended (end bound only) excludes the later date.
+    f4 = S.filterSchedule(result, end=monday)
+    _expect(errors, "filter end-only count", len(f4.rows), 3)
+    _expect(errors, "filter end-only excludes tuesday", all(r.date <= monday for r in f4.rows), True)
+
+    # Grouping: contiguous (date, shift) buckets in chronological order.
+    groups = S.groupScheduleRows(rows)
+    _expect(errors, "group keys", [key for key, _ in groups],
+            [(monday, 1), (monday, 2), (tuesday, 1)])
+    _expect(errors, "group sizes", [len(g) for _, g in groups], [2, 1, 1])
+
+    # Headings + filter descriptions.
+    _expect(errors, "heading monday shift1", S.scheduleGroupHeading(monday, 1),
+            f"Mon {monday.isoformat()} — Shift 1")
+    _expect(errors, "heading tuesday shift2", S.scheduleGroupHeading(tuesday, 2),
+            f"Tue {tuesday.isoformat()} — Shift 2")
+    _expect(errors, "desc shift+range",
+            S.scheduleFilterDescription(3, monday, tuesday),
+            f"Shift 3, {monday.isoformat()} to {tuesday.isoformat()}")
+    _expect(errors, "desc all shifts, no range",
+            S.scheduleFilterDescription(None, None, None), "All shifts")
+    _expect(errors, "desc open-ended start",
+            S.scheduleFilterDescription(1, None, tuesday),
+            f"Shift 1, … to {tuesday.isoformat()}")
+    return errors

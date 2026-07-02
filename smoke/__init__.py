@@ -43,6 +43,7 @@ from smoke.scheduling import (
     scheduling_pressing_rate, scheduling_scrap_inflation,
     scheduling_deadlines, scheduling_primitives_fuzz,
     scheduling_scheduler, scheduling_scheduler_fuzz,
+    scheduling_view_slice,
 )
 from smoke.pyright import pyright_baseline
 from smoke.ui_fuzz import crash_fuzz
@@ -75,6 +76,7 @@ __all__ = [
     "scheduling_pressing_rate", "scheduling_scrap_inflation",
     "scheduling_deadlines", "scheduling_primitives_fuzz",
     "scheduling_scheduler", "scheduling_scheduler_fuzz",
+    "scheduling_view_slice",
     "pyright_baseline",
     "crash_fuzz",
 ]

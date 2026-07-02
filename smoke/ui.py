@@ -2765,16 +2765,22 @@ def holidays_tab_defaults_crud() -> list[str]:
 
 
 def schedule_tab_generates() -> list[str]:
-    """Step 53: ScheduleTab generates, exports, and clears on refresh.
+    """Step 53/66/67: ScheduleTab generates, groups, filters, exports, and clears.
 
     Seeds tiny fuzz data, then drives the on-screen Schedule report:
-      - Generate populates the schedule + flags tables to exactly match a direct
-        ``schedule()`` call (the tab is a thin view over the stateless seam),
-        enables Export, and updates the status line;
-      - a shorter horizon re-runs cleanly and re-uses the same config path;
-      - Export writes a real %PDF- file (``startfile`` stubbed so nothing opens);
-      - ``refresh()`` (the DB-open hook) clears the result, empties both tables,
-        and re-disables Export so a schedule from a prior file never lingers.
+      - Generate makes ``displayed`` equal a direct ``schedule()`` call (the tab
+        is a thin view over the stateless seam), enables Export + the filter
+        controls, and updates the status line;
+      - the grouped render (Step 67) has one mini-table per (date, shift) group,
+        and their rows union back to the full displayed schedule with no loss;
+      - Show Filtered (Step 67) slices ``displayed`` to a single shift matching
+        ``filterSchedule()`` while flagged orders still show in full (design
+        call), and updates the status line;
+      - Export and Export Filtered both write real %PDF- files (``startfile``
+        stubbed so nothing opens);
+      - ``refresh()`` (the DB-open hook) clears the result/displayed, empties the
+        group + flags tables, and re-disables Export + the filter controls so a
+        schedule from a prior file never lingers.
     """
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
@@ -2800,67 +2806,95 @@ def schedule_tab_generates() -> list[str]:
         w._refreshAllTabs()
 
         tab = w.scheduleTab
-        if tab.result is not None:
-            errors.append("expected result=None before first Generate")
+        if tab.result is not None or tab.displayed is not None:
+            errors.append("expected result/displayed None before first Generate")
         if tab.exportB.isEnabled():
             errors.append("Export should be disabled before first Generate")
+        if tab.showFilteredB.isEnabled():
+            errors.append("filter controls should be disabled before first Generate")
 
-        # --- Generate: tab view must equal a direct schedule() at full horizon ---
+        # --- Generate: displayed must equal a direct schedule() at full horizon ---
         tab.horizonSpin.setValue(S.MAX_HORIZON_DAYS)
         tab.generate()
-        if tab.result is None:
-            errors.append("result is None after Generate")
+        if tab.result is None or tab.displayed is None:
+            errors.append("result/displayed is None after Generate")
             return errors
         expected = S.schedule(w.db, None, S.ScheduleConfig(maxHorizonDays=S.MAX_HORIZON_DAYS))
-        if len(tab.scheduleTable.dbModel._data) != len(expected.rows):
-            errors.append(f"schedule table rows={len(tab.scheduleTable.dbModel._data)} "
-                          f"!= schedule() rows={len(expected.rows)}")
+        if tab.displayed.rows != expected.rows:
+            errors.append("displayed rows != schedule() rows after Generate")
         if len(tab.flagsTable.dbModel._data) != len(expected.flags):
             errors.append(f"flags table rows={len(tab.flagsTable.dbModel._data)} "
                           f"!= schedule() flags={len(expected.flags)}")
         if not tab.exportB.isEnabled():
             errors.append("Export should be enabled after Generate")
+        if not tab.showFilteredB.isEnabled():
+            errors.append("filter controls should be enabled after Generate")
         if not tab.statusLabel.text().startswith("Generated "):
             errors.append(f"status not updated after Generate: {tab.statusLabel.text()!r}")
-        # Each schedule row lands on a real press / real part (view integrity).
-        for row in tab.scheduleTable.dbModel._data:
-            if row[2] not in w.db.presses:
-                errors.append(f"schedule row on unknown press: {row[2]!r}")
-            if row[3] not in w.db.parts:
-                errors.append(f"schedule row on unknown part: {row[3]!r}")
 
-        # --- A shorter horizon re-runs without error ---
-        tab.horizonSpin.setValue(1)
-        tab.generate()
-        if tab.result is None:
-            errors.append("result is None after short-horizon Generate")
+        # Grouped render: one mini-table per (date, shift) group, and the union of
+        # their rows equals the displayed schedule (no rows lost in the regroup).
+        groups = S.groupScheduleRows(tab.displayed.rows)
+        if len(tab._groupTables) != len(groups):
+            errors.append(f"group tables={len(tab._groupTables)} != groups={len(groups)}")
+        renderedRows = sum(len(t.dbModel._data) for t in tab._groupTables)
+        if renderedRows != len(tab.displayed.rows):
+            errors.append(f"rendered group rows={renderedRows} != displayed rows={len(tab.displayed.rows)}")
+        # Each rendered row lands on a real press / real part (grouped table is
+        # Press/Part/Quantity/Press-hours/Presser -> cols 0/1).
+        for t in tab._groupTables:
+            for row in t.dbModel._data:
+                if row[0] not in w.db.presses:
+                    errors.append(f"schedule row on unknown press: {row[0]!r}")
+                if row[1] not in w.db.parts:
+                    errors.append(f"schedule row on unknown part: {row[1]!r}")
 
-        # --- Export writes a real PDF (startfile stubbed) ---
-        before = len(exported)
-        tab.exportPdf()
-        if len(exported) != before + 1:
-            errors.append(f"Export did not call startfile (exported={exported})")
-        else:
+        # --- Filtered view: slice by a shift present in the schedule ---
+        if expected.rows:
+            targetShift = expected.rows[0].shift
+            idx = tab.shiftCombo.findData(targetShift)
+            if idx >= 0:
+                tab.shiftCombo.setCurrentIndex(idx)
+            tab.showFiltered()
+            shift, start, end = tab._filterArgs()
+            wantFiltered = S.filterSchedule(tab.result, shift, start, end)
+            if tab.displayed.rows != wantFiltered.rows:
+                errors.append("displayed rows != filterSchedule() rows after Show Filtered")
+            if not all(r.shift == targetShift for r in tab.displayed.rows):
+                errors.append("filtered view contains rows from other shifts")
+            if not tab.statusLabel.text().startswith("Filtered view"):
+                errors.append(f"status not updated after Show Filtered: {tab.statusLabel.text()!r}")
+            # Flags are order-level -> shown in full even when filtered (design call).
+            if len(tab.flagsTable.dbModel._data) != len(tab.result.flags):
+                errors.append("filtered view dropped flagged orders (should show in full)")
+
+        # --- Export (full) and Export Filtered both write real PDFs (stubbed) ---
+        for label, fn in (("full", tab.exportPdf), ("filtered", tab.exportFilteredPdf)):
+            before = len(exported)
+            fn()
+            if len(exported) != before + 1:
+                errors.append(f"{label} export did not call startfile (exported={exported})")
+                continue
             path = exported[-1]
             if not os.path.exists(path) or os.path.getsize(path) == 0:
-                errors.append("Export produced empty/missing PDF")
-            else:
-                with open(path, "rb") as f:
-                    if f.read(5) != b"%PDF-":
-                        errors.append("Export PDF lacks %PDF- magic")
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
+                errors.append(f"{label} export produced empty/missing PDF")
+                continue
+            with open(path, "rb") as f:
+                if f.read(5) != b"%PDF-":
+                    errors.append(f"{label} export PDF lacks %PDF- magic")
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
         # --- refresh() (DB-open hook) clears everything ---
         tab.refresh()
-        if tab.result is not None:
-            errors.append("refresh did not clear result")
-        if tab.scheduleTable.dbModel._data or tab.flagsTable.dbModel._data:
-            errors.append("refresh did not clear the schedule/flags tables")
-        if tab.exportB.isEnabled():
-            errors.append("refresh did not re-disable Export")
+        if tab.result is not None or tab.displayed is not None:
+            errors.append("refresh did not clear result/displayed")
+        if tab._groupTables or tab.flagsTable.dbModel._data:
+            errors.append("refresh did not clear the schedule groups / flags table")
+        if tab.exportB.isEnabled() or tab.showFilteredB.isEnabled():
+            errors.append("refresh did not re-disable Export / filter controls")
     finally:
         ST.startfile = origStartfile  # type: ignore[assignment]
         restore()

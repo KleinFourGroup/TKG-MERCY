@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from scheduling import (
     LATE, INFEASIBLE_NO_CAPACITY, INFEASIBLE_NO_RATE,
     WARN_FALLBACK_RATE, WARN_MISSING_FIRESCRAP,
+    groupScheduleRows, scheduleGroupHeading,
 )
 
 if TYPE_CHECKING:
@@ -68,61 +69,130 @@ class ScheduleReportsMixin:
         # Attributes + helpers provided by PDFReportCore (composed in last).
         db: Database
         pdf: canvas.Canvas
+        font: str
+        fontSize: int
+        lastLine: float
+        bottom: float
+        lineSpace: float
+        def setFont(self, font: str, size: int) -> None: ...
         def setupPage(self) -> None: ...
         def nextPage(self) -> None: ...
         def skipLines(self, numLines) -> None: ...
         def drawText(self, text: str) -> None: ...
         def drawTitle(self, text: str) -> None: ...
         def drawSubtitle(self, text: str) -> None: ...
+        def drawParagraph(self, text: str) -> None: ...
         def drawSection(self, text: str) -> None: ...
         def drawTable(self, data: list[list[str]], headers: list[str] | None = None, widths: list[float] | None = None) -> int: ...
 
-    def _scheduleSection(self, title: str, subtitle: str, sectionName: str,
+    def _subHeading(self, text: str) -> None:
+        # A (date, shift) group subheading (Step 67), sized between drawSection
+        # (18) and body text (12) so groups read as a level under the "Schedule"
+        # section heading.
+        oldFont = (self.font, self.fontSize)
+        self.setFont("Times-Bold", 14)
+        self.drawText(text)
+        self.setFont(*oldFont)
+
+    def _scheduleBanner(self, title: str, subtitle: str, meta: str,
+                        sectionName: str, continued: bool) -> None:
+        # The per-page banner shared by every schedule section: a big bold title +
+        # subtitle (just the generation date, kept short so it never overflows the
+        # page), then the horizon / active-filter metadata on a normal-weight line
+        # that *wraps* (drawSubtitle doesn't — Step 67 fix for a long filter
+        # subtitle running off the page), then the section heading. setupPage
+        # resets lastLine to the page top first.
+        self.setupPage()
+        self.drawTitle(title)
+        self.drawSubtitle(subtitle)
+        if meta:
+            self.drawParagraph(meta)
+        self.skipLines(1)
+        self.drawSection(f"{sectionName} -- Continued" if continued else sectionName)
+
+    def _groupedScheduleSection(self, title: str, subtitle: str, meta: str,
+                                sectionName: str, groups: list[tuple[str, list[list[str]]]],
+                                headers: list[str], emptyText: str) -> None:
+        # The Step 67 grouped Schedule section: one banner + a "Schedule" heading,
+        # then a per-(date, shift) subheading over a table for each group, flowing
+        # across pages. Re-draws the banner + a "-- Continued" heading on each
+        # overflow page, and repeats a group's subheading with "(cont.)" when its
+        # table spans a page break.
+        if not groups:
+            self._scheduleBanner(title, subtitle, meta, sectionName, False)
+            self.drawText(emptyText)
+            self.nextPage()
+            return
+
+        self._scheduleBanner(title, subtitle, meta, sectionName, False)
+        for heading, rows in groups:
+            # Don't orphan a subheading at the page bottom: if there isn't room for
+            # the heading plus a header row and one data row, start a fresh page.
+            if self.lastLine - self.fontSize * self.lineSpace * 4 < self.bottom:
+                self.nextPage()
+                self._scheduleBanner(title, subtitle, meta, sectionName, True)
+            self._subHeading(heading)
+            remaining = rows
+            while len(remaining) > 0:
+                drawn = self.drawTable(remaining, headers)
+                remaining = remaining[drawn:]
+                if len(remaining) > 0:
+                    # Page filled mid-group -> continue on a fresh page. (On a
+                    # fresh page at least one row always fits, so this terminates.)
+                    self.nextPage()
+                    self._scheduleBanner(title, subtitle, meta, sectionName, True)
+                    self._subHeading(f"{heading} (cont.)")
+        self.nextPage()
+
+    def _scheduleSection(self, title: str, subtitle: str, meta: str, sectionName: str,
                          headers: list[str], rows: list[list[str]],
                          emptyText: str) -> None:
-        # One report section with its own title/subtitle banner, paginating the
-        # table the way the production reports do — re-drawing the banner and a
-        # "-- Continued" heading on each overflow page. setupPage resets lastLine
-        # to the top so drawTable always fits at least one row per page.
+        # One report section with its own banner, paginating the table the way the
+        # production reports do — re-drawing the banner and a "-- Continued"
+        # heading on each overflow page. _scheduleBanner resets lastLine to the top
+        # so drawTable always fits at least one row per page.
         olen = len(rows)
         if olen == 0:
-            self.setupPage()
-            self.drawTitle(title)
-            self.drawSubtitle(subtitle)
-            self.skipLines(1)
-            self.drawSection(sectionName)
+            self._scheduleBanner(title, subtitle, meta, sectionName, False)
             self.drawText(emptyText)
             self.nextPage()
             return
         while len(rows) > 0:
-            self.setupPage()
-            self.drawTitle(title)
-            self.drawSubtitle(subtitle)
-            self.skipLines(1)
-            self.drawSection(sectionName if len(rows) == olen
-                             else f"{sectionName} -- Continued")
+            self._scheduleBanner(title, subtitle, meta, sectionName, len(rows) != olen)
             drawn = self.drawTable(rows, headers)
             rows = rows[drawn:]
             self.nextPage()
 
-    def scheduleReport(self, result: "ScheduleResult", horizonDays: int | None = None):
+    def scheduleReport(self, result: "ScheduleResult", horizonDays: int | None = None,
+                       filterDesc: str | None = None):
         title = "TKG Production Schedule"
         subtitle = f"Generated {result.today.isoformat()}"
+        # Horizon + active filter go on a wrapped, normal-weight metadata line
+        # rather than the bold subtitle: a long filter description on the bold
+        # subtitle overflowed the page width (drawSubtitle doesn't wrap) — Step 67.
+        metaParts = []
         if horizonDays is not None:
-            subtitle += f" — horizon {horizonDays} day(s)"
+            metaParts.append(f"horizon {horizonDays} day(s)")
+        if filterDesc:
+            metaParts.append(filterDesc)
+        meta = " — ".join(metaParts)
 
-        scheduleHeaders = ["Date", "Shift", "Press", "Part", "Quantity", "Press-hours", "Presser"]
-        scheduleData = [[
-            r.date.isoformat(),
-            str(r.shift),
-            r.press,
-            r.part,
-            f"{r.quantity:g}",
-            f"{r.hours:g}",
-            _presserCell(self.db, r.presser),
-        ] for r in result.rows]
-        self._scheduleSection(title, subtitle, "Schedule", scheduleHeaders,
-                              scheduleData, "No production scheduled.")
+        # Step 67: the schedule is grouped by (date, shift) subheadings, each over
+        # a 5-column table — Date and Shift move out of the repeated columns into
+        # the group heading, freeing width for the Presser column.
+        groupHeaders = ["Press", "Part", "Quantity", "Press-hours", "Presser"]
+        groups = [
+            (scheduleGroupHeading(key[0], key[1]), [[
+                r.press,
+                r.part,
+                f"{r.quantity:g}",
+                f"{r.hours:g}",
+                _presserCell(self.db, r.presser),
+            ] for r in rows])
+            for key, rows in groupScheduleRows(result.rows)
+        ]
+        self._groupedScheduleSection(title, subtitle, meta, "Schedule", groups,
+                                     groupHeaders, "No production scheduled.")
 
         flagHeaders = ["Order", "Part", "Issue", "Detail"]
         flagData = [[
@@ -131,8 +201,11 @@ class ScheduleReportsMixin:
             _FLAG_LABEL.get(f.kind, f.kind),
             _flagDetail(f),
         ] for f in result.flags]
+        # Flags are order-level / dateless, so a filtered variant still shows them
+        # all (design call 2026-07-02) — the section name says so when filtered.
+        flagSection = "Flagged Orders (all orders)" if filterDesc else "Flagged Orders"
         self._scheduleSection(
-            title, subtitle, "Flagged Orders", flagHeaders, flagData,
+            title, subtitle, meta, flagSection, flagHeaders, flagData,
             "No late or infeasible orders — all eligible orders fit before their "
             "effective press-by dates.")
 
@@ -141,7 +214,7 @@ class ScheduleReportsMixin:
         if result.warnings:
             warnHeaders = ["Part", "Warning"]
             warnData = [[w.part, _warningNote(w)] for w in result.warnings]
-            self._scheduleSection(title, subtitle, "Warnings", warnHeaders,
+            self._scheduleSection(title, subtitle, meta, "Warnings", warnHeaders,
                                   warnData, "")
 
         self.pdf.save()
