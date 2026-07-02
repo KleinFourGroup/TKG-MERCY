@@ -5,6 +5,7 @@ import logging
 import os
 
 from app import MainWindow
+from style import applyStyle
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -25,6 +26,7 @@ if __name__ == "__main__":
     QCoreApplication.setOrganizationName("tkg")
     QCoreApplication.setApplicationName("MERCY")
     app = QApplication([])
+    applyStyle(app)
     app.setWindowIcon(QIcon(os.path.join(basedir, 'ceramics_icon.ico')))
     window = MainWindow(db)
     window.show()

@@ -109,7 +109,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 60 | ✅ Done | Harden the `db.updateX(old, new)` rekey helpers against a missing original key (stale-window Update) — prereq for Step 58 — see §13.36 |
 | 61 | ✅ Done | Harden `getComboBox` against a stored value missing from its options (combo-prefill crash) — prereq for Step 58 — see §13.37 |
 | 62 | ✅ Done | Fix inventory edit `readData` crash class (date guarded before indexing; part editor checks `.parts`) — fuzzer-found, audited as a class — see §13.41 |
-| 63 | 📋 Planned | Selected tab / sub-tab high-contrast styling (first global QSS) — see §13.44 |
+| 63 | ✅ Done | Selected tab / sub-tab high-contrast styling — first global QSS, mode-aware — see §13.44 |
 | 64 | 📋 Planned | Interactive press-preference grid (parts × presses, in-cell drop-downs) + "Not set" rename + 5↔1 heat-map cue — see §13.44 |
 | 65 | 📋 Planned | Presser → Press preference table + tab (reuses the Step 64 grid; db_version 11→12) — see §13.44 |
 | 66 | 📋 Planned | Scheduler assigns pressers (secondary to presses; preference-only, balanced reserved behind the seam) — see §13.44 |
@@ -638,6 +638,8 @@ Second post-release feature block from the team (relayed by Matthew, 2026-07-02)
 **Manual UI gates** (standing rule — smoke can't cover in-cell editing / heat-map render / tab styling / selection logic): Steps **63, 64, 65, 67**. Step 66 is logic-first (like Steps 51 / 52); its Presser column is a mechanical add covered by smoke, but worth a glance.
 
 **Migration-version-churn upkeep (Step 65 only):** bumping `db_version` 11→12 forces updating the hardcoded terminal-version literals + docstrings in `smoke/migrations.py`, registering the new CRUD check in both `smoke/__init__.py` and `smoke/__main__.py`, and adding the new table via migration + fresh-schema path **only** — never into `UNIFIED_TABLES` (the format fingerprint stays frozen at the v4 shape), per CONVENTIONS.md.
+
+**Step 63 landed 2026-07-02.** First global QSS in the app: a new [`style.py`](style.py) owns the accent + tab stylesheet, applied on the `QApplication` in [`main.py`](main.py). The selected (sub)tab is a fixed filled blue (`#1a6dd8`) with bold white text and a slight height bump; the unselected face / hover / borders draw from `palette(...)` roles so the tab bar follows the system light/dark theme — the first cut hardcoded light greys that stood out in dark mode, fixed to palette-driven before commit. Manual UI sweep cleared (light + dark, per the standing UI gate). Smoke 59 PASS (`compile_all` picks up the new root module; `pyright_baseline` clean).
 
 ---
 
