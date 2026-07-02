@@ -517,6 +517,71 @@ def qsettings_reopen() -> list[str]:
     return errors
 
 
+def file_dialog_dir_memory() -> list[str]:
+    """§13.45: the Open / Save As / Import dialogs seed from the last-browsed
+    directory (``lastDir`` in QSettings) instead of always starting at home.
+
+    Drives ``MainWindow._lastDir`` / ``_rememberDir`` directly (the file
+    dialogs themselves are modal and can't be smoke-driven). Asserts: unset →
+    home; a remembered real directory is returned verbatim; ``_rememberDir``
+    stores the *directory* of a picked file; and a stale (since-deleted)
+    remembered directory falls back to home rather than surfacing a bad path.
+    """
+    from PySide6.QtCore import QCoreApplication, QSettings
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+
+    errors = []
+    _ = QApplication.instance() or QApplication(sys.argv)
+
+    # Isolate QSettings storage so the test never touches the user's real store.
+    origOrg = QCoreApplication.organizationName()
+    origApp = QCoreApplication.applicationName()
+    QCoreApplication.setOrganizationName("k4g-mercy-smoke")
+    QCoreApplication.setApplicationName("MERCY-smoke")
+    settingsDir = tempfile.mkdtemp(prefix="mercy-qsettings-")
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, settingsDir)
+
+    home = os.path.expanduser("~")
+    realDir = tempfile.mkdtemp(prefix="mercy-lastdir-")
+    w = None
+    try:
+        QSettings().remove("lastDir")
+        QSettings().sync()
+        w = MainWindow()
+
+        # Unset → home.
+        if w._lastDir() != home:
+            errors.append(f"_lastDir() with no stored value: expected home {home!r}, got {w._lastDir()!r}")
+
+        # Remembering a picked file stores its containing directory.
+        w._rememberDir(os.path.join(realDir, "somedb.db"))
+        stored = QSettings().value("lastDir")
+        if stored != realDir:
+            errors.append(f"_rememberDir stored {stored!r}, expected {realDir!r}")
+        if w._lastDir() != realDir:
+            errors.append(f"_lastDir() after remember: expected {realDir!r}, got {w._lastDir()!r}")
+
+        # Stale (deleted) remembered directory → fall back to home, no bad path.
+        staleDir = os.path.join(realDir, "gone")
+        QSettings().setValue("lastDir", staleDir)
+        QSettings().sync()
+        if os.path.isdir(staleDir):
+            errors.append(f"test setup bug: {staleDir} should not exist")
+        elif w._lastDir() != home:
+            errors.append(f"_lastDir() with stale dir {staleDir!r}: expected home {home!r}, got {w._lastDir()!r}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        import shutil
+        shutil.rmtree(realDir, ignore_errors=True)
+        shutil.rmtree(settingsDir, ignore_errors=True)
+        QCoreApplication.setOrganizationName(origOrg)
+        QCoreApplication.setApplicationName(origApp)
+    return errors
+
+
 def close_confirm() -> list[str]:
     """Step 25: close-event prompts Save / Don't Save / Cancel.
 

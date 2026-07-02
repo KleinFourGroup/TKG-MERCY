@@ -202,6 +202,22 @@ class MainWindow(QWidget):
         # Schedule (stateless report view — clears any schedule from the old DB)
         self.scheduleTab.refresh()
 
+    def _lastDir(self) -> str:
+        # §13.45: seed the Open / Save As / Import file dialogs from the
+        # directory the user last browsed, instead of always starting at the
+        # home directory. Mirrors the Step 20 lastDbPath QSettings pattern.
+        # Falls back to home on first use, and if the remembered directory has
+        # since been deleted/renamed (stale value) — never surfaces a bad path.
+        lastDir = QSettings().value("lastDir")
+        if isinstance(lastDir, str) and os.path.isdir(lastDir):
+            return lastDir
+        return os.path.expanduser("~")
+
+    def _rememberDir(self, path: str) -> None:
+        # Persist the containing directory of a file the user just picked, so
+        # the next dialog reopens there. Called only on a non-empty pick.
+        QSettings().setValue("lastDir", os.path.dirname(path))
+
     def _loadPath(self, path: str) -> bool:
         # Shared entry point for loading a DB from a known path — used by the
         # File → Open dialog and by the startup auto-reopen hook. Skips any modal
@@ -222,8 +238,9 @@ class MainWindow(QWidget):
         self.openButton.setEnabled(False)
         self.saveButton.setEnabled(False)
         self.saveAsButton.setEnabled(False)
-        dbFile = QFileDialog.getOpenFileName(self, "Open Database", os.path.expanduser("~"), "Database (*.db)")
+        dbFile = QFileDialog.getOpenFileName(self, "Open Database", self._lastDir(), "Database (*.db)")
         if not dbFile[0] == "":
+            self._rememberDir(dbFile[0])
             self._loadPath(dbFile[0])
         else:
             self.setFileLabel()
@@ -242,8 +259,9 @@ class MainWindow(QWidget):
         self.openButton.setEnabled(False)
         self.saveButton.setEnabled(False)
         self.saveAsButton.setEnabled(False)
-        dbFile = QFileDialog.getSaveFileName(self, "Save Database As", os.path.expanduser("~"), "Database (*.db)")
+        dbFile = QFileDialog.getSaveFileName(self, "Save Database As", self._lastDir(), "Database (*.db)")
         if not dbFile[0] == "":
+            self._rememberDir(dbFile[0])
             if self.fileManager.setFile(dbFile[0]):
                 self.fileManager.saveFile()
                 QSettings().setValue("lastDbPath", self.fileManager.filePath)
@@ -295,9 +313,10 @@ class MainWindow(QWidget):
         self.saveAsButton.setEnabled(False)
         self.importButton.setEnabled(False)
         try:
-            dbFile = QFileDialog.getOpenFileName(self, "Import Database", os.path.expanduser("~"), "Database (*.db)")
+            dbFile = QFileDialog.getOpenFileName(self, "Import Database", self._lastDir(), "Database (*.db)")
             if dbFile[0] == "":
                 return
+            self._rememberDir(dbFile[0])
 
             otherDb, fmt = self.fileManager.importOtherDb(dbFile[0])
             if otherDb is None:

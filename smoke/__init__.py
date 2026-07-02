@@ -27,7 +27,7 @@ from smoke.reports import (
 )
 from smoke.ui import (
     production_refresh_on_delete, inventory_edit_missing_date, production_batch_roundtrip,
-    qsettings_reopen, close_confirm,
+    qsettings_reopen, file_dialog_dir_memory, close_confirm,
     parts_tab_crud, employees_tab_crud, presses_tab_crud, pressers_tab_crud,
     shift_workweek_roundtrip, part_press_pref_crud, presser_press_pref_crud,
     clients_tab_crud, orders_tab_crud,
@@ -62,7 +62,7 @@ __all__ = [
     "production_employee_productivity_report", "production_trend_report",
     "product_employee_reports", "schedule_report",
     "production_refresh_on_delete", "inventory_edit_missing_date", "production_batch_roundtrip",
-    "qsettings_reopen", "close_confirm",
+    "qsettings_reopen", "file_dialog_dir_memory", "close_confirm",
     "parts_tab_crud", "employees_tab_crud", "presses_tab_crud", "pressers_tab_crud",
     "shift_workweek_roundtrip", "part_press_pref_crud", "presser_press_pref_crud",
     "clients_tab_crud", "orders_tab_crud",
