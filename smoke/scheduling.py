@@ -301,8 +301,9 @@ def scheduling_scheduler() -> list[str]:
     """schedule(): the greedy EDF core (addendum §3-§4) on hand-built fixtures
     with exact expected output — front-loaded multi-day placement, the LATE flag
     + magnitude on a tight deadline, INFEASIBLE_NO_RATE on a rate-less part, the
-    cold-start fallback warning, preference-ranked lane splitting (§3.4), and
-    determinism."""
+    cold-start fallback warning, preference-ranked lane splitting (§3.4), the
+    Step 66 greedy presser staffing (preference win, neutral tiebreak, preference
+    beating the tiebreak), and determinism."""
     from records.database import emptyDB
     from records.scheduling import Press, Presser
     from records.sales import Client, Order
@@ -392,6 +393,41 @@ def scheduling_scheduler() -> list[str]:
             [(f.kind, f.orderNum, f.piecesShort, f.shortHours) for f in rE.flags],
             [(S.INFEASIBLE_NO_CAPACITY, "O1", 760.0, 76.0)])
 
+    # --- F: presser assignment (Step 66). Same two-press run as D (PA takes 2h,
+    #        PB takes 8h); two present pressers — 10 prefers PA (5), 11 prefers
+    #        PB (5). Greedy max-score staffs 10->PA and 11->PB, and the placed
+    #        work (press/part/quantity/hours) is byte-identical to D — the presser
+    #        pass only fills in who stands where.
+    dbF = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
+               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
+    dbF.setPresserPressScore(10, "PA", 5)
+    dbF.setPresserPressScore(11, "PB", 5)
+    rF = S.schedule(dbF, monday, cfg)
+    _expect(errors, "F work unchanged by presser pass", _rowTuples(rF), [
+        (monday, 1, "PA", "P", 20.0, 2.0),
+        (monday, 1, "PB", "P", 80.0, 8.0),
+    ])
+    _expect(errors, "F presser assignment",
+            [(r.press, r.presser) for r in rF.rows], [("PA", 10), ("PB", 11)])
+
+    # --- G: all-neutral presser prefs -> the deterministic tiebreak staffs the
+    #        lowest employeeId onto the alphabetically-first running press.
+    dbG = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
+               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
+    rG = S.schedule(dbG, monday, cfg)
+    _expect(errors, "G neutral presser tiebreak",
+            [(r.press, r.presser) for r in rG.rows], [("PA", 10), ("PB", 11)])
+
+    # --- H: a strong preference overrides the neutral tiebreak — presser 11
+    #        prefers PA (5) while everything else is neutral, so 11 takes PA and
+    #        10 is left with PB (the inverse of G's id-order default).
+    dbH = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
+               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
+    dbH.setPresserPressScore(11, "PA", 5)
+    rH = S.schedule(dbH, monday, cfg)
+    _expect(errors, "H preference beats id tiebreak",
+            [(r.press, r.presser) for r in rH.rows], [("PA", 11), ("PB", 10)])
+
     # --- Determinism: identical (db, today, config) -> identical result.
     _expect(errors, "deterministic", S.schedule(dbA, monday, cfg), rA)
     return errors
@@ -402,7 +438,8 @@ def scheduling_scheduler_fuzz() -> list[str]:
     no crash, determinism (byte-identical on a re-run), every row on a working
     shift-day, per-(date,shift) placed press-hours never exceed capacity, every
     eligible order is accounted for (scheduled and/or flagged, never silently
-    dropped), and flag magnitudes are non-negative."""
+    dropped), flag magnitudes are non-negative, and the Step 66 presser staffing
+    (each running press staffed by one present, non-double-booked presser)."""
     import random
     from records.database import emptyDB
     import scheduling as S
@@ -432,6 +469,7 @@ def scheduling_scheduler_fuzz() -> list[str]:
         F.populateShiftWorkweek(db, rng)
         pressNames = list(db.presses)
         F.populatePartPressPref(db, rng, partNames, pressNames)
+        F.populatePresserPressPref(db, rng, list(db.pressers), pressNames)
         clientNames = F.populateClients(db, rng, cfg["clients"])
         orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
         F.populateOrderStatus(db, rng, orderNums, today)
@@ -486,6 +524,30 @@ def scheduling_scheduler_fuzz() -> list[str]:
                 errors.append(f"unknown flag kind: {f.kind}")
             if f.daysLate < 0 or f.piecesShort < 0 or f.shortHours < 0:
                 errors.append(f"negative flag magnitude: {f}")
+
+        # Step 66 presser staffing invariants. Per (date, shift): every running
+        # press is staffed by exactly one present presser, all rows for the same
+        # press share that presser, and no presser is double-booked across presses
+        # that shift-day (surplus pressers simply go unassigned).
+        presserByPress: dict[tuple, dict[str, int | None]] = {}
+        for r in result.rows:
+            key = (r.date, r.shift)
+            byPress = presserByPress.setdefault(key, {})
+            if r.press in byPress and byPress[r.press] != r.presser:
+                errors.append(f"press {r.press} staffed by two pressers on {r.date} shift={r.shift}")
+            byPress[r.press] = r.presser
+        for (d, shift), byPress in presserByPress.items():
+            presentIds = {p.employeeId for p in S.pressersPresent(db, shift, d)}
+            seen: set[int] = set()
+            for press, presser in byPress.items():
+                if presser is None:
+                    errors.append(f"running press {press} unstaffed on {d} shift={shift}")
+                    continue
+                if presser not in presentIds:
+                    errors.append(f"presser {presser} not present on {d} shift={shift}")
+                if presser in seen:
+                    errors.append(f"presser {presser} double-booked on {d} shift={shift}")
+                seen.add(presser)
     except Exception as e:  # noqa: BLE001 - a crash here is the failure we report
         errors.append(f"scheduler raised on fuzzed data: {e!r}")
     return errors

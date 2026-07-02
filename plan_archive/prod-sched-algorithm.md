@@ -443,3 +443,44 @@ objective. So Step 52 keeps the heuristic **easy to rip out**:
 
 Ship a working, honest greedy schedule now; trade it up cheaply once the real
 numbers say what "good enough" actually is.
+
+---
+
+## 11. Presser assignment (Step 66 addendum, 2026-07-02)
+
+The team asked for the schedule to also say **who stands where** — assign a specific
+presser to each running press — using the Step 65 presser→press preference the exact
+way §3.4 uses part→press preference. This is layered on as a **third pass** in
+`schedule()`, run once per (date, shift) *after* `_assignLanes` has fixed which
+presses run and what they press. It is deliberately **secondary and non-perturbing**:
+
+- **Invariant (design call 2026-07-02):** presser assignment never changes *what* is
+  produced or *which* presses run — only *who stands where*. `_assignLanes` is
+  untouched; the third pass only fills in each `ScheduleRow.presser` (the rows are
+  frozen, so it rebuilds them via `dataclasses.replace`). No row is added, dropped,
+  or re-quantified.
+- **Candidates = `pressersPresent`** (§2.2) — the same active, on-shift,
+  not-on-PTO crew the capacity model already counts. The lanes' press-hours came
+  from the *top-by-hours* pressers (§2.6); v1 has **no per-presser throughput
+  effect** (preference is pure staffing, like part preference), so staffing a
+  different present presser onto a lane can't change whether the pooled hours fit —
+  hence the pass is safe to run purely on preference.
+- **Heuristic = greedy max-score matching** (decision 2026-07-02; the lighter of
+  greedy-vs-optimal, chosen to match the greedy EDF core and the provisional-seam
+  spirit — the coarse 1–5 scores with no throughput effect make marginal
+  suboptimality cosmetic). Score every (running press, present presser) pair by the
+  presser's press preference — missing pair = **`presserNeutralScore` (midpoint 3)**,
+  the presser twin of decision #5 — then assign top-down, highest score first,
+  **press name then employeeId** breaking ties (total order ⇒ §5 determinism).
+  Each running press ends up with exactly one present presser.
+- **Cardinality.** Running presses = `min(present, presses)` lanes ≤ `present`, so
+  there are always enough present pressers to staff every running press. The normal
+  case is **pressers ≤ presses** — every present presser gets a press, nobody
+  starved; the rarer **pressers > presses** leaves the surplus present pressers
+  unassigned that shift (they simply don't appear in any row).
+- **Policy seam (§10 pattern).** `ScheduleConfig.presserAssignment = "preference"`
+  is the only implemented policy; `"balanced"` / rotation-weighted staffing (spread
+  the work so the same person isn't always on the least-preferred press) are
+  **reserved but unimplemented** until real production weeks show whether reshuffling
+  annoys anyone — an unrecognized policy **raises** rather than silently mis-staffing.
+  Like the core, this is stateless: no schema, no `db_version` bump.

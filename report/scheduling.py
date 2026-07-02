@@ -41,6 +41,21 @@ def _warningNote(warning: "ScheduleWarning") -> str:
     return warning.kind
 
 
+def _presserCell(db, employeeId) -> str:
+    """The Presser column for a schedule row (Step 66): the staffed presser's
+    label, empty when unstaffed (never in practice — a running press always has a
+    present presser). Rendered inline from db.employees rather than via the Qt tab
+    helpers so the report layer stays decoupled from the widgets, matching the
+    inline employee labels in report/employees.py. Format mirrors _employeeLabel /
+    pressers_tab._presserLabel so the on-screen table and the PDF read identically."""
+    if employeeId is None:
+        return ""
+    emp = db.employees.get(employeeId)
+    if emp is None:
+        return f"(missing #{employeeId})"
+    return f"{emp.lastName.upper()} {emp.firstName} ({emp.idNum})"
+
+
 class ScheduleReportsMixin:
     # Production Schedule Report (Step 53). Consumes a `ScheduleResult` from the
     # stateless scheduler seam (scheduling.schedule) — never the algorithm's
@@ -96,7 +111,7 @@ class ScheduleReportsMixin:
         if horizonDays is not None:
             subtitle += f" — horizon {horizonDays} day(s)"
 
-        scheduleHeaders = ["Date", "Shift", "Press", "Part", "Quantity", "Press-hours"]
+        scheduleHeaders = ["Date", "Shift", "Press", "Part", "Quantity", "Press-hours", "Presser"]
         scheduleData = [[
             r.date.isoformat(),
             str(r.shift),
@@ -104,6 +119,7 @@ class ScheduleReportsMixin:
             r.part,
             f"{r.quantity:g}",
             f"{r.hours:g}",
+            _presserCell(self.db, r.presser),
         ] for r in result.rows]
         self._scheduleSection(title, subtitle, "Schedule", scheduleHeaders,
                               scheduleData, "No production scheduled.")

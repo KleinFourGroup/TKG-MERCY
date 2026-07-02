@@ -2,6 +2,10 @@
 
 *.xlsx
 *.db
+# SQLite WAL-mode sidecars (created while a *.db is open; transient, never commit)
+*.db-shm
+*.db-wal
+*.db-journal
 
 scripts/
 .claude/

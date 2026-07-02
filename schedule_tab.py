@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from table import DBTable
 from app import MainWindow
 from report import PDFReport
+from pressers_tab import _presserLabel
 from scheduling import (
     schedule, ScheduleConfig, MAX_HORIZON_DAYS,
     LATE, INFEASIBLE_NO_CAPACITY, INFEASIBLE_NO_RATE,
@@ -80,7 +81,7 @@ class ScheduleTab(QWidget):
 
         self.statusLabel = QLabel(_PROMPT)
 
-        self.scheduleHeaders = ["Date", "Shift", "Press", "Part", "Quantity", "Press-hours"]
+        self.scheduleHeaders = ["Date", "Shift", "Press", "Part", "Quantity", "Press-hours", "Presser"]
         self.scheduleTable = DBTable([], self.scheduleHeaders)
         self.flagHeaders = ["Order", "Part", "Issue", "Detail"]
         self.flagsTable = DBTable([], self.flagHeaders)
@@ -116,6 +117,7 @@ class ScheduleTab(QWidget):
             r.part,
             f"{r.quantity:g}",
             f"{r.hours:g}",
+            _presserLabel(self.mainApp.db, r.presser) if r.presser is not None else "",
         ] for r in result.rows]
         self.scheduleTable.setData(scheduleData)
 

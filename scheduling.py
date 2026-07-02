@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import datetime
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from records.scheduling import SHIFTS
@@ -228,6 +228,13 @@ INFEASIBLE_NO_RATE = "INFEASIBLE_NO_RATE"
 WARN_FALLBACK_RATE = "FALLBACK_RATE"
 WARN_MISSING_FIRESCRAP = "MISSING_FIRESCRAP"
 
+# Presser-assignment policy (Step 66, §13.44). "preference" is the only v1
+# heuristic: staff the present pressers onto the running presses by presser->press
+# preference (greedy max-score). "balanced" / rotation-weighted policies are
+# reserved behind this config seam (addendum §10 provisional pattern) but
+# unimplemented — an unrecognized policy raises rather than silently mis-staffing.
+PRESSER_ASSIGNMENT_PREFERENCE = "preference"
+
 
 @dataclass(frozen=True)
 class ScheduleConfig:
@@ -237,19 +244,31 @@ class ScheduleConfig:
     rateWindowDays: int = RATE_WINDOW_DAYS
     rateMinHours: float = RATE_MIN_HOURS
     maxHorizonDays: int = MAX_HORIZON_DAYS
+    # Step 66: a presser with no scored preference for a press ranks as this
+    # neutral midpoint (the presser twin of NEUTRAL_PRESS_SCORE). Only a staffing
+    # tiebreaker — never a throughput effect.
+    presserNeutralScore: int = NEUTRAL_PRESS_SCORE
+    # Step 66: which heuristic staffs pressers onto presses (see
+    # PRESSER_ASSIGNMENT_PREFERENCE). Other policies are reserved (§10).
+    presserAssignment: str = PRESSER_ASSIGNMENT_PREFERENCE
 
 
 @dataclass(frozen=True)
 class ScheduleRow:
     """One cell of the schedule (addendum §3.5): press `part` on `press` during
-    `shift` on `date`, targeting `quantity` pieces over `hours` press-hours. No
-    named presser — the crew self-assigns (spec §2 non-goal)."""
+    `shift` on `date`, targeting `quantity` pieces over `hours` press-hours,
+    staffed by `presser` (an employeeId, or None when no present presser was
+    assignable — never in practice, since a running press always has a present
+    presser to staff it). Step 66 adds `presser` as a secondary, preference-only
+    assignment layered on *after* the press/part decision: it never changes what
+    runs or which presses run, only who stands where."""
     date: datetime.date
     shift: int
     press: str
     part: str
     quantity: float
     hours: float
+    presser: int | None = None
 
 
 @dataclass(frozen=True)
@@ -335,6 +354,19 @@ def _prefScore(db: Database, part: str, press: str) -> int:
     return score if score is not None else NEUTRAL_PRESS_SCORE
 
 
+def _presserPrefScore(db: Database, employeeId: int, press: str, neutral: int) -> int:
+    """A presser's preference score for a press, with a missing pair treated as
+    `neutral` (Step 66 / §13.44) — the presser twin of `_prefScore`. The neutral
+    midpoint is passed in from ScheduleConfig.presserNeutralScore rather than read
+    from a module constant, so the staffing policy stays tunable behind the
+    schedule() seam."""
+    pref = db.presserPressPref.get(employeeId)
+    if pref is None:
+        return neutral
+    score = pref.getScore(press)
+    return score if score is not None else neutral
+
+
 @dataclass
 class _Lane:
     """One running press lane during press assignment: a press name plus the
@@ -396,6 +428,47 @@ def _assignLanes(db: Database, shift: int, d: datetime.date,
     return rows
 
 
+def _assignPressers(db: Database, shift: int, d: datetime.date,
+                    rows: list[ScheduleRow], config: ScheduleConfig) -> list[ScheduleRow]:
+    """Step 66 (§13.44): staff the present pressers onto the running presses of a
+    shift-day — a pass secondary to the press/part decision `_assignLanes` already
+    made, run once per (date, shift) over that shift-day's rows.
+
+    Greedy max-score matching (decision 2026-07-02): score every
+    (running press, present presser) pair by the presser's press preference
+    (`_presserPrefScore`, missing = config.presserNeutralScore), then assign
+    top-down — highest score first, press name then employeeId breaking ties —
+    skipping any press or presser already taken. Each running press ends up with
+    exactly one present presser; when pressers outnumber presses the surplus stay
+    unassigned that shift (the rarer direction — normally pressers <= presses, so
+    nobody is starved). This never changes whether or what runs, only who stands
+    where: no row is added, dropped, or re-quantified — only its `presser` field
+    is filled in (the rows are frozen, so it rebuilds them via `replace`)."""
+    if config.presserAssignment != PRESSER_ASSIGNMENT_PREFERENCE:
+        raise NotImplementedError(
+            f"presserAssignment={config.presserAssignment!r} is reserved but not "
+            "implemented; only 'preference' is available in v1.")
+    runningPresses = sorted({r.press for r in rows})
+    presserIds = sorted(p.employeeId for p in pressersPresent(db, shift, d))
+
+    # All (press, presser) pairs, best score first; ties broken deterministically
+    # by press name then employeeId so a re-run staffs the same crew identically
+    # (§5 determinism).
+    pairs = sorted(
+        ((press, empId) for press in runningPresses for empId in presserIds),
+        key=lambda pe: (-_presserPrefScore(db, pe[1], pe[0], config.presserNeutralScore),
+                        pe[0], pe[1]))
+    pressToPresser: dict[str, int] = {}
+    takenPressers: set[int] = set()
+    for press, empId in pairs:
+        if press in pressToPresser or empId in takenPressers:
+            continue
+        pressToPresser[press] = empId
+        takenPressers.add(empId)
+
+    return [replace(r, presser=pressToPresser.get(r.press)) for r in rows]
+
+
 def schedule(db: Database, today: datetime.date | None = None,
              config: ScheduleConfig | None = None) -> ScheduleResult:
     """Addendum §3-§4: the greedy earliest-deadline-first, front-loaded scheduler.
@@ -407,7 +480,9 @@ def schedule(db: Database, today: datetime.date | None = None,
     that can't fit even by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part
     with no usable rate is flagged INFEASIBLE_NO_RATE. Nothing is ever silently
     dropped (§4 never-drop). A second pass pins each shift-day's pooled work onto
-    specific press lanes (§3.4). Deterministic given (db, today, config)."""
+    specific press lanes (§3.4), then a third staffs the present pressers onto
+    those lanes by presser->press preference (Step 66, secondary to the press
+    decision). Deterministic given (db, today, config)."""
     if today is None:
         today = datetime.date.today()
     if config is None:
@@ -483,7 +558,10 @@ def schedule(db: Database, today: datetime.date | None = None,
 
     rows: list[ScheduleRow] = []
     for (d, shift), placedByPart in placed.items():
-        rows.extend(_assignLanes(db, shift, d, placedByPart, rates))
+        laneRows = _assignLanes(db, shift, d, placedByPart, rates)
+        # Step 66: staff pressers onto the lanes this shift-day just fixed
+        # (secondary to the part-preference lane decision, which stays untouched).
+        rows.extend(_assignPressers(db, shift, d, laneRows, config))
 
     rows.sort(key=lambda r: (r.date, r.shift, r.press, r.part))
     flags.sort(key=lambda f: (f.kind, f.orderNum))
