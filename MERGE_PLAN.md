@@ -117,6 +117,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 66 | ✅ Done | Scheduler assigns pressers (secondary to presses; greedy preference match, balanced reserved behind the seam) — see §13.44 |
 | 67 | ✅ Done | Schedule report: date/shift-grouped layout + per-shift / date-range view variants — see §13.44 |
 | 68 | ✅ Done | File dialogs remember last-used directory (`QSettings` `lastDir`; Open / Save As / Import) — see §13.45 |
+| 69 | ✅ Done | Order sort modes (due date / client name, never order #) on the Orders + Order Updates tabs — see §13.46 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -687,6 +688,42 @@ Optional, non-blocking follow-ups that had accumulated as inline notes across §
 
 **Cosmetic — likely skip:**
 - **`file_manager/load.py` bundled `from records import (...)` → per-method imports** (the last Step 28.1 leftover, §13.16). Explicitly judged cosmetic-only and left as-is; do it only if that file is being touched anyway.
+
+### 13.46 Truck-based order entry + scheduling-tab UX polish + order sort modes (planned 2026-07-03) — Steps 69–74
+
+Third post-release feature block from the team (relayed by Matthew, 2026-07-03) after living with the Steps 63–67 scheduling-UX work. Six asks; sequenced smallest / lowest-risk first in the §13 tradition (the team asked for the quick UI wins ahead of the headline data-entry feature). Each is one step / one commit. Design calls settled in this planning session are recorded inline.
+
+**The six asks.**
+1. **Trucks-based order-update entry.** Every part gains a *parts-per-truck* figure; a **remaining-to-press / remaining-to-ship** snapshot can be entered in **trucks** (half-truck precision) instead of raw pieces — a data-entry convenience they intend to phase out. Everything stays **stored in pieces internally and shown in pieces externally**; trucks are purely an input reinterpretation. The mode is **togglable**.
+2. **Hide the Horizon knob** from the average user (they read it as "show the next X days"). De-emphasize — bottom of the controls / behind an advanced affordance — rather than remove.
+3. **One unified schedule report row.** Fold today's two rows (main Generate/Export + the Step 67 Show-Filtered / Export-Filtered row) into one, with the date range built into the display à la the Daily Reports tab: `[Generate Schedule] [From ▸] [To ▸] [Shift] [Export PDF]`. One export that draws from the on-screen filter.
+4. **Condense the flagged-orders / fallback-warnings area** — it crowds out the schedule scroll area. Replace the full flags table + wrapped warnings label with one-line summaries + detail buttons: `["N orders flagged"] [Flagged Orders]  ["M parts flagged"] [Flagged Parts]`.
+5. **Flagged orders sorted by due date + showing the client** — in both the detail window (ask 4) and the PDF report.
+6. **Sort-mode toggle on the Orders and Order Updates tabs** — by **due date** or by **client name** (explicitly *not* by order number).
+
+**Shape of the work.** Only **Step 74a** touches the schema (a new `part_truck` table, `db_version` 12→13, additive migration — the §13.30 vertical-slice template). Steps 69–73 are UI-only. Step 73 is presentation-only: `OrderFlag` still carries just `orderNum`/`part` ([scheduling.py](scheduling.py)); the tab detail dialog and the PDF both look up `db.orders[num].client` / `.dueDate` at render time and sort by due date, so the record stays a pure data carrier. Step 74b is UI-only: a live checkbox on the snapshot editor reinterprets the two input fields as trucks and converts to pieces via `part_truck` before storing — no persistence, no scheduler change.
+
+**Ordering / dependencies.** 69 (standalone) → 70 (standalone) → **71 → 72 → 73** (all in [`schedule_tab.py`](schedule_tab.py) / [`report/scheduling.py`](report/scheduling.py); done back-to-back to avoid layout churn — 73 renders in the detail dialog 72 builds) → **74a** (schema + config tab) → **74b** (consumes `part_truck`). 74a/74b may split further if the review surface is large, à la Steps 64/65.
+
+| Step | Description | Risk | Testable milestone |
+|------|-------------|------|--------------------|
+| 69 | **Order sort modes.** A sort-mode selector (due date / client name) on the Orders and Order Updates tabs; both currently hard-sort by order # (`row[0]`). Data (client, due date) is already in `genTableData`'s reach — Order Updates looks due date up from `db.orders`. No order-number sort option. [`orders_tab.py`](orders_tab.py) + [`order_status_tab.py`](order_status_tab.py). | Low | Toggle re-sorts both tables live; survives refresh; selection preserved. Manual UI gate. |
+| 70 | **De-emphasize Horizon.** Move the horizon spin box out of the primary controls to the bottom / an "Advanced" affordance in [`schedule_tab.py`](schedule_tab.py). Pure layout; still feeds `ScheduleConfig.maxHorizonDays`. | Low | Horizon no longer prominent; schedule output unchanged. |
+| 71 | **Unified schedule report row.** Collapse the two control rows into one — `[Generate] [From] [To] [Shift] [Export PDF]` — with the date/shift widgets always filtering the on-screen view and a single Export exporting the shown slice (the Daily Reports pattern). Removes the separate Show-Filtered / Export-Filtered actions (Step 67). Flags/warnings still render in **full** regardless of filter (the Step 67 "a slice must never hide a late order" rule). [`schedule_tab.py`](schedule_tab.py). | Med | One row drives display + export; filter never hides flags. Manual UI gate. |
+| 72 | **Condense flags/warnings to summaries + details.** Replace the flags `DBTable` + wrapped warnings label with `["N orders flagged"] [Flagged Orders]` + `["M parts flagged"] [Flagged Parts]` one-liners opening detail dialogs; "parts flagged" = the part-level `warnings` (fallback-rate / missing fireScrap), "orders flagged" = `flags`. Frees the schedule scroll area. [`schedule_tab.py`](schedule_tab.py). | Med | Summaries + detail dialogs; schedule area visibly larger. Manual UI gate. |
+| 73 | **Flagged orders: due-date sort + client.** The flagged-orders detail dialog (Step 72) and the PDF flagged-orders section gain a **Client** column and sort by **due date**, both via a render-time `db.orders` lookup. `OrderFlag` unchanged. [`schedule_tab.py`](schedule_tab.py) + [`report/scheduling.py`](report/scheduling.py). | Low-Med | Flagged orders show client, ordered by due date, on screen + PDF. |
+| 74a | **Parts-per-truck config (schema).** Full §13.30 vertical slice: `part_truck(part PRIMARY KEY, partsPerTruck INTEGER)`, `_createSchedulingTables` + additive `_migrateV12ToV13` (**db_version 12→13**), record + save/load, `database.py` dict + setter + **cascades on part rename/delete** (mirrors the Step 48 part-press-pref cascades — no FK orphans), `fuzz_db` populator, a new **Parts per Truck** tab under "Scheduling config", smoke CRUD + crash_fuzz dispatcher + projection-tab registry. | Med | Set parts-per-truck per part; roundtrips; full migration chain replays on a real DB. Manual UI gate. |
+| 74b | **Trucks-mode snapshot entry.** A live **"Enter in trucks"** checkbox on the Order Status snapshot editor ([`order_status_tab.py`](order_status_tab.py)): when checked, the remaining-to-press / -ship fields accept **half-truck** values and convert to pieces via the order's `part_truck` value before storing. **Stored + displayed always in pieces.** No persistence (see toggle design call). | Med | Trucks input yields the right piece counts, stored/shown in pieces; blocks per the validation call below. |
+
+**Design calls settled 2026-07-03 (this planning session).**
+- **Parts-per-truck lives in its own table + tab**, not a column on the costing Parts tab — mirrors the `part_press_pref` precedent, keeps the ANIKA costing part editor clean, and is literally the "another configuration database" the team asked for.
+- **Toggle = a live, unpersisted checkbox on the snapshot editor**, *not* a per-DB global or a `QSettings` machine setting. Rationale (Matthew, 2026-07-03): the team shares workstations and different people enter differently, so a remembered mode would fight them; a per-window checkbox lets each person pick per session. The checkbox only reinterprets the input fields — internal storage and every display stay in pieces.
+- **Missing / odd handling = block, don't guess.** Truck entry requires the part to have a parts-per-truck value set — otherwise a clear error telling them to set it first (a genuine data gap, per the dual-mandate: fail loudly, corrupt nothing). A half-truck of an *odd* parts-per-truck (which would land on a non-integer piece count) is rejected rather than silently rounded. Half-truck precision is enforced by the input widget (step 0.5).
+- **Unified report row supersedes the Step 67 split.** The separate Show-Filtered / Export-Filtered actions land only ~1 day; folding them into the always-on filter row is the team's correction to that design, not a reversal of the underlying `filterSchedule` slice logic (which stays — flags still show in full).
+
+**Manual UI gates** (standing rule — smoke can't cover combo visibility / rebuild / selection logic / in-cell layout): Steps **69, 71, 72, 74a**, plus a glance at **73** and **74b**. Step 70 is trivial layout.
+
+**Migration-version-churn upkeep (Step 74a only):** bumping `db_version` 12→13 forces updating the hardcoded terminal-version literals + docstrings in [`smoke/migrations.py`](smoke/migrations.py), registering the new CRUD check in both `smoke/__init__.py` and `smoke/__main__.py`, and adding `part_truck` via the migration + fresh-schema path **only** — never into `UNIFIED_TABLES` (the format fingerprint stays frozen at the v4 shape), per [`CONVENTIONS.md`](CONVENTIONS.md).
 
 ---
 

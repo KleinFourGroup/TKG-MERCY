@@ -6,7 +6,10 @@ from PySide6.QtCore import Qt
 from table import DBTable
 from app import MainWindow
 from error import errorMessage
-from utils import checkInput, toQDate, fromQDate, centerOnScreen
+from utils import (
+    checkInput, toQDate, fromQDate, centerOnScreen,
+    orderSortCombo, orderSortKey, ORDER_SORT_DUEDATE,
+)
 import datetime
 import logging
 
@@ -22,6 +25,7 @@ class OrderStatusTab(QWidget):
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()
         self.mainApp = mainApp
+        self.sortMode = ORDER_SORT_DUEDATE
         self.genTableData()
         self.table = DBTable(self.data, self.headers)
         self.table.parentTab = self  # type: ignore
@@ -29,10 +33,15 @@ class OrderStatusTab(QWidget):
         self.selection = []
         self.selectLabel = QLabel("Selection: N/A")
 
+        self.sortCombo = orderSortCombo(self.sortMode)
+        self.sortCombo.currentIndexChanged.connect(self.changeSort)
+
         edit = QPushButton("Edit")
         edit.clicked.connect(self.openEdits)
 
         barLayout = QHBoxLayout()
+        barLayout.addWidget(QLabel("Sort by:"))
+        barLayout.addWidget(self.sortCombo)
         barLayout.addWidget(self.selectLabel)
         barLayout.addWidget(edit)
 
@@ -46,7 +55,8 @@ class OrderStatusTab(QWidget):
         self.headers = ["Order #", "Client", "Part", "Quantity",
                         "Latest Snapshot", "Rem. to Press", "Rem. to Ship", "Fulfilled?"]
         self.data = []
-        for num, order in db.orders.items():
+        for num, order in sorted(db.orders.items(),
+                                 key=lambda kv: orderSortKey(kv[1], self.sortMode)):
             status = db.orderStatus.get(num)
             latestDate = status.latestDate() if status is not None else None
             latest = latestDate.isoformat() if latestDate is not None else "(none)"
@@ -60,7 +70,6 @@ class OrderStatusTab(QWidget):
             fulfilled = "Yes" if status is not None and status.isFulfilled() else "No"
             self.data.append([num, order.client, order.part, f"{order.quantity}",
                               latest, f"{press}", f"{ship}", fulfilled])
-        self.data.sort(key=lambda row: row[0])
 
     def setSelection(self, selection):
         self.selection = selection
@@ -78,6 +87,10 @@ class OrderStatusTab(QWidget):
             if orderNum not in self.mainApp.db.orders:
                 continue
             OrderStatusEditWindow(orderNum, self.mainApp)
+
+    def changeSort(self):
+        self.sortMode = self.sortCombo.currentData()
+        self.refreshTable()
 
     def refreshTable(self):
         self.genTableData()

@@ -123,3 +123,27 @@ def toQDate(date: datetime.date):
 
 def fromQDate(date: QDate):
     return datetime.date(date.year(), date.month(), date.day())
+
+# Order sort modes shared by the Orders and Order Updates tabs (Step 69). The
+# team sorts by due date or client name — deliberately never by order number.
+ORDER_SORT_DUEDATE = "duedate"
+ORDER_SORT_CLIENT = "client"
+_ORDER_SORT_LABELS = [("Due date", ORDER_SORT_DUEDATE), ("Client name", ORDER_SORT_CLIENT)]
+
+def orderSortCombo(mode: str) -> QComboBox:
+    # A sort-mode selector preloaded with the shared order sort modes and set to
+    # `mode`. The caller connects currentIndexChanged and reads currentData().
+    box = QComboBox()
+    for label, key in _ORDER_SORT_LABELS:
+        box.addItem(label, key)
+    idx = box.findData(mode)
+    box.setCurrentIndex(idx if idx >= 0 else 0)
+    return box
+
+def orderSortKey(order, mode: str):
+    # Sort key for an Order under the selected mode (Step 69). Client name is
+    # case-insensitive; due date sorts undated orders last; orderNum breaks ties
+    # so the order stays deterministic (matching the scheduler's tiebreak style).
+    if mode == ORDER_SORT_CLIENT:
+        return (order.client.casefold(), order.orderNum)
+    return (order.dueDate is None, order.dueDate or datetime.date.max, order.orderNum)
