@@ -7,7 +7,7 @@ from records.employees import (
     EmployeeReview, EmployeeTrainingDate, EmployeePoint, EmployeePTORange, EmployeeNote, HolidayObservance,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref, PartTruck
 from records.sales import Client, Order
 import datetime
 
@@ -352,6 +352,17 @@ class LoadMixin:
                 db.presserPressPref[employeeId] = PresserPressPref(employeeId)
             db.presserPressPref[employeeId].setScore(press, score)
             logging.info(f" * Loaded presser-press preference ({employeeId}, {press}, {score})")
+
+        # --- Production Scheduling: parts per truck ---
+        # Each (part, partsPerTruck) row is one part's truck size (Step 74a); a part
+        # with no row simply has no entry (missing = unset).
+        logging.info(f"Loading parts per truck from {self.filePath}")
+        res = self.dbFile.execute("SELECT * FROM part_truck")
+        for values in res.fetchall():
+            truck = PartTruck("ERROR")
+            truck.fromTuple(values)
+            db.partTruck[truck.part] = truck
+            logging.info(f" * Loaded parts per truck {values}")
 
         # --- Sales: order status ---
         # Each (orderNum, date, remainingToPress, remainingToShip) row is one dated

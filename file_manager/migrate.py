@@ -320,3 +320,16 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS presser_press_pref(employeeId, press, score INTEGER, UNIQUE(employeeId, press))")
         self._setDbVersion(12)
         logging.info(" --> v11->v12 migration complete")
+
+    def _migrateV12ToV13(self):
+        # Production Scheduling (Step 74a): add the (initially empty) `part_truck`
+        # table — one (part, partsPerTruck INTEGER) row per part with a parts-per-truck
+        # figure set. Same additive + idempotent shape as v4->v5 .. v11->v12 — no
+        # existing data is touched, no backup needed, and the chain replays cleanly
+        # on re-open.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v12->v13 migration: add part_truck table")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_truck(part PRIMARY KEY, partsPerTruck INTEGER)")
+        self._setDbVersion(13)
+        logging.info(" --> v12->v13 migration complete")

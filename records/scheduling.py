@@ -150,3 +150,30 @@ class PresserPressPref:
 
     def __str__(self) -> str:
         return "({}, {})".format(self.employeeId, sorted(self.scores.items()))
+
+
+class PartTruck:
+    # One part's parts-per-truck figure (Step 74a, MERGE_PLAN §13.46). Keyed by part
+    # name (FK -> parts), `partsPerTruck` is how many finished pieces fill one truck.
+    # It's a data-entry convenience consumed by the Order Status trucks-mode input
+    # (Step 74b): a remaining-to-press / -ship figure entered in trucks is multiplied
+    # by this to store pieces (everything stays stored + displayed in pieces). A part
+    # with no figure simply has no PartTruck (missing = unset), so trucks-mode entry
+    # is blocked until one is set. Structurally the scalar twin of Presser — a keyed
+    # field plus one value column, not the nested-relational scores dict of
+    # PartPressPref. Like the other scheduling records, a flat reference record with no
+    # `db` back-reference. Persisted as one (part, partsPerTruck) row in the
+    # `part_truck` table.
+    def __init__(self, part, partsPerTruck=None) -> None:
+        self.part = part
+        self.partsPerTruck = partsPerTruck
+
+    def getTuple(self):
+        return (self.part, self.partsPerTruck)
+
+    def fromTuple(self, values):
+        self.part = values[0]
+        self.partsPerTruck = values[1]
+
+    def __str__(self) -> str:
+        return "({}, {})".format(self.part, self.partsPerTruck)

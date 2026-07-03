@@ -640,6 +640,24 @@ def populatePresserPressPref(db, rng, presserIds, pressNames):
     return count
 
 
+def populatePartTruck(db, rng, partNames):
+    # Give some parts a parts-per-truck figure (Step 74a) so the config grid / the
+    # Step 74b trucks-mode input have demo data; the rest stay unset (no row),
+    # exercising the missing-is-unset path. Values are multiples of 50, so a
+    # half-truck still lands on whole pieces (the Step 74b odd-count guard mostly
+    # isn't tripped by fuzz data). Needs at least one part. Returns the number set.
+    if not partNames:
+        return 0
+    count = 0
+    for part in partNames:
+        # Roughly two-thirds of parts get a truck size; the rest stay unset.
+        if rng.random() < 0.33:
+            continue
+        db.setPartTruck(part, rng.randrange(100, 5001, 50))
+        count += 1
+    return count
+
+
 def build(output: str, seed: int | None, scale: str):
     rng = random.Random(seed)
     cfg = SCALES[scale]
@@ -694,6 +712,8 @@ def build(output: str, seed: int | None, scale: str):
     print(f"  partPressPref: {nPref} scored pairs over {len(db.partPressPref)} parts")
     nPresserPref = populatePresserPressPref(db, rng, presserIds, pressNames)
     print(f"  presserPressPref: {nPresserPref} scored pairs over {len(db.presserPressPref)} pressers")
+    nTruck = populatePartTruck(db, rng, partNames)
+    print(f"  partTruck: {nTruck} parts with a truck size")
 
     # Sales subsystem (Steps 46+).
     clientNames = populateClients(db, rng, cfg["clients"])

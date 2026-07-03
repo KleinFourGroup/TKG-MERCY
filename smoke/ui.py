@@ -1357,6 +1357,159 @@ def part_press_pref_crud() -> list[str]:
     return errors
 
 
+def part_truck_crud() -> list[str]:
+    """Step 74a: PartTruckTab interactive grid CRUD + cascades + save/reload roundtrip.
+
+    Seeds tiny fuzz data, then drives the single-value in-cell grid through its
+    TruckValueDelegate (a QLineEdit, not a combo):
+      - the delegate prefills a cell from the stored figure / blank (unset);
+      - an in-cell edit sets one part's figure and clears another to blank (=> no row);
+      - renames the part: the figure rekeys AND the grid refreshes (FK-rename rule);
+      - deletes a part (after clearing its orders): its figure cascades away;
+      - saves, reloads into a fresh MainWindow, confirms figures roundtrip.
+    """
+    from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
+    from app import MainWindow
+    from part_truck_tab import TruckValueDelegate
+    from parts_tab import PartsEditWindow
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = w2 = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+
+        parts = sorted(w.db.parts)
+        if len(parts) < 2:
+            errors.append(f"expected >=2 parts from tiny seed, got {len(parts)}")
+            return errors
+        partA, partB = parts[0], parts[1]
+
+        tab = w.partTruckTab
+        model = tab.table.dbModel
+        delegate = TruckValueDelegate()
+        opt = QStyleOptionViewItem()
+
+        def idx(part_):
+            return model.index(tab.rowKeys.index(part_), 1)
+
+        def cell(part_):
+            # Current on-screen figure for `part`, read from the live grid matrix.
+            t = w.partTruckTab
+            if part_ not in t.rowKeys:
+                return "MISSING"
+            return t.data[t.rowKeys.index(part_)][1]
+
+        # Deterministic slate: partA has a figure, partB is unset.
+        w.db.setPartTruck(partA, None)
+        w.db.setPartTruck(partB, None)
+        w.db.setPartTruck(partA, 200)
+        w.partTruckTab.refreshTable()
+
+        # --- in-cell prefill: the delegate opens a line edit showing the stored figure ---
+        setEditor = delegate.createEditor(tab.table, opt, idx(partA))
+        delegate.setEditorData(setEditor, idx(partA))
+        if setEditor.text() != "200":
+            errors.append(f"prefill: {partA} editor={setEditor.text()!r}, want '200'")
+        unsetEditor = delegate.createEditor(tab.table, opt, idx(partB))
+        delegate.setEditorData(unsetEditor, idx(partB))
+        if unsetEditor.text() != "":
+            errors.append(f"prefill: unset {partB} editor={unsetEditor.text()!r}, want ''")
+
+        # --- regression guard (Step 74a manual-gate find): an empty field must stay
+        # *acceptable* to the editor's validator, or Qt's delegate silently refuses to
+        # commit a blank (reverting to the old value) and "clear to unset" is
+        # unreachable in the UI — a QIntValidator(min=1) has exactly that defect. ---
+        setEditor.setText("")
+        if not setEditor.hasAcceptableInput():
+            errors.append("empty editor not acceptable — clearing a cell to unset "
+                          "would be blocked by Qt's commit gate")
+
+        # --- in-cell edit: set partB = 350, clear partA to blank (=> no row) ---
+        unsetEditor.setText("350")
+        delegate.setModelData(unsetEditor, model, idx(partB))
+        setEditor.setText("")
+        delegate.setModelData(setEditor, model, idx(partA))
+        if partA in w.db.partTruck:
+            errors.append(f"after clear: {partA!r} should be unset, still in partTruck")
+        truckB = w.db.partTruck.get(partB)
+        if truckB is None or truckB.partsPerTruck != 350:
+            errors.append(f"after in-cell edit: {partB} figure={truckB and truckB.partsPerTruck}, want 350")
+        if cell(partB) != 350 or cell(partA) is not None:
+            errors.append(f"grid did not reflect the edit: {partB}={cell(partB)!r}, {partA}={cell(partA)!r}")
+
+        # --- a non-positive entry clears back to unset (the widget guard) ---
+        zeroEditor = delegate.createEditor(tab.table, opt, idx(partB))
+        zeroEditor.setText("0")
+        delegate.setModelData(zeroEditor, model, idx(partB))
+        if partB in w.db.partTruck:
+            errors.append(f"'0' entry should clear {partB!r} to unset, still in partTruck")
+        # Restore a figure on partB for the rename / roundtrip below.
+        w.db.setPartTruck(partB, 350)
+        w.partTruckTab.refreshTable()
+
+        # --- part rename: figure rekeys + grid refreshes (FK-rename rule) ---
+        renamedPart = "Renamed Truck Part"
+        pe = PartsEditWindow(partB, w)
+        pe.nameEdit.setText(renamedPart)
+        pe.updateButton.click()
+        if partB in w.db.partTruck:
+            errors.append(f"part rename: stale key {partB!r} still in partTruck")
+        renamed = w.db.partTruck.get(renamedPart)
+        if renamed is None or renamed.part != renamedPart or renamed.partsPerTruck != 350:
+            errors.append(f"part rename: figure did not rekey to {renamedPart!r} ({renamed})")
+        if not any(r[0] == renamedPart for r in w.partTruckTab.data):
+            errors.append("part rename: Parts per Truck grid not refreshed")
+
+        # --- part delete: its figure cascades away (clear referencing orders first) ---
+        for onum in [n for n, o in w.db.orders.items() if o.part == renamedPart]:
+            w.db.delOrder(onum)
+        w.partsTab.setSelection([renamedPart])
+        w.partsTab.deleteSelection()
+        if renamedPart in w.db.parts:
+            errors.append(f"part delete: {renamedPart!r} survived (unexpected order ref?)")
+        elif renamedPart in w.db.partTruck:
+            errors.append(f"part delete: figure for {renamedPart!r} not cascaded")
+
+        # --- save / reload roundtrip ---
+        anyPart = sorted(w.db.parts)[0]
+        w.db.setPartTruck(anyPart, 480)
+        expected = {p: t.partsPerTruck for p, t in w.db.partTruck.items()}
+        w.fileManager.saveFile()
+        if w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+
+        w2 = MainWindow()
+        if not w2.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False when reloading truck DB")
+        else:
+            w2.fileManager.loadFile()
+            got = {p: t.partsPerTruck for p, t in w2.db.partTruck.items()}
+            if got != expected:
+                errors.append(f"parts-per-truck roundtrip mismatch: expected {expected}, got {got}")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if w2 is not None and w2.fileManager.dbFile is not None:
+            w2.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def presser_press_pref_crud() -> list[str]:
     """Step 65: PresserPressPrefTab interactive grid CRUD + cascades + save/reload roundtrip.
 

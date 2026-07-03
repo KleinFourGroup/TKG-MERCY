@@ -509,6 +509,22 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error deleting orphan presser-press preferences {orphans}: {repr(e)}")
 
+        # --- Production Scheduling: parts per truck (part-keyed, like clients) ---
+        # Scalar per-part value column (Step 74a): upsert each part's row, then
+        # clearOld sweeps rows whose part is no longer in db.partTruck (covers both
+        # cleared values and parts that dropped out entirely). The in-memory cascades
+        # (delPart / updatePart) keep db.partTruck tidy; this sweep is the
+        # persistence-side backstop.
+        logging.info(f"Saving parts per truck to {self.filePath}")
+        for part in db.partTruck:
+            vals = db.partTruck[part].getTuple()
+            try:
+                self.dbFile.execute("INSERT OR REPLACE INTO part_truck VALUES (?, ?)", vals)
+                logging.info(f" * Saving {vals}")
+            except Exception as e:
+                logging.error(f" * Error saving {vals}: {repr(e)}")
+        clearOld("part_truck", db.partTruck, "part")
+
         # --- Sales: order status ((orderNum, date) dated-snapshot rows) ---
         # Composite-key nested table like part_press_pref — wipe each order's child
         # rows and re-insert, then orphan-sweep rows whose orderNum is no longer in

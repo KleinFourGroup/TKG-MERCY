@@ -9,7 +9,7 @@ from records.employees import (
     EmployeePTODB, EmployeeNotesDB, ObservancesDB,
 )
 from records.production import ProductionRecord
-from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref
+from records.scheduling import Press, Presser, ShiftWorkweek, PartPressPref, PresserPressPref, PartTruck
 from records.sales import Client, Order, OrderStatus
 
 
@@ -34,6 +34,7 @@ class Database:
                  shiftWorkweek: dict[int, ShiftWorkweek],
                  partPressPref: dict[str, PartPressPref],
                  presserPressPref: dict[int, PresserPressPref],
+                 partTruck: dict[str, PartTruck],
                  clients: dict[str, Client],
                  orders: dict[str, Order],
                  orderStatus: dict[str, OrderStatus]) -> None:
@@ -56,6 +57,7 @@ class Database:
         self.shiftWorkweek = shiftWorkweek
         self.partPressPref = partPressPref
         self.presserPressPref = presserPressPref
+        self.partTruck = partTruck
         self.clients = clients
         self.orders = orders
         self.orderStatus = orderStatus
@@ -87,6 +89,12 @@ class Database:
                 pref = self.partPressPref.pop(entry)
                 pref.part = name
                 self.partPressPref[name] = pref
+            # Parts-per-truck figures are keyed by part name too (Step 74a), so follow
+            # the rename the same way — rekey the entry and fix up the stored part.
+            if entry in self.partTruck:
+                truck = self.partTruck.pop(entry)
+                truck.part = name
+                self.partTruck[name] = truck
 
     def addPart(self, part: Part):
         if part.name in self.parts:
@@ -108,6 +116,9 @@ class Database:
             # which block), so cascade-drop them when the part is deleted (Step 48) —
             # the same config-cascades-but-history-blocks split as delEmployee/pressers.
             self.partPressPref.pop(name, None)
+            # Parts-per-truck is likewise per-part config (Step 74a), so drop it with
+            # the part — same config-cascade as the part-press preference above.
+            self.partTruck.pop(name, None)
         return usedIn
 
     def updatePackaging(self, entry, name):
@@ -445,6 +456,22 @@ class Database:
             if not self.partPressPref[part].scores:
                 del self.partPressPref[part]
 
+    # ---- Production Scheduling: parts per truck ------------------------------------------
+
+    def setPartTruck(self, part, partsPerTruck):
+        # Set or clear one part's parts-per-truck figure (Step 74a), keeping
+        # self.partTruck in lockstep with the persisted rows: a part entry exists only
+        # while it has a value, so clearing it (None) drops the entry (and an empty DB
+        # has an empty dict — same shape as partPressPref). Parts are created/deleted
+        # from their own tab, so there's no add/del here; the grid tab sets values
+        # through this.
+        if partsPerTruck is None:
+            self.partTruck.pop(part, None)
+        elif part in self.partTruck:
+            self.partTruck[part].partsPerTruck = partsPerTruck
+        else:
+            self.partTruck[part] = PartTruck(part, partsPerTruck)
+
     # ---- Production Scheduling: presser-press preference ---------------------------------
 
     def setPresserPressScore(self, employeeId, press, score):
@@ -752,6 +779,7 @@ def emptyDB():
         {},          # shiftWorkweek
         {},          # partPressPref
         {},          # presserPressPref
+        {},          # partTruck
         {},          # clients
         {},          # orders
         {}           # orderStatus

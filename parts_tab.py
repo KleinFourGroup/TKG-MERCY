@@ -112,6 +112,9 @@ class PartsTab(QWidget):
                     # delPart cascade-drops the part's press preferences (Step 48),
                     # so refresh that table to drop the now-deleted part's row.
                     self.mainApp.partPressPrefTab.refreshTable()
+                    # It also cascade-drops the part's parts-per-truck (Step 74a), so
+                    # refresh that grid to drop the now-deleted part's row too.
+                    self.mainApp.partTruckTab.refreshTable()
                     QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
                 else:
                     errorMessage(self.mainApp, [f"{part} is used in order {item}!" for item in usedIn])
@@ -364,6 +367,9 @@ class PartsEditWindow(QWidget):
             # shows up as an all-"Not set" row and a rename rekeys its prefs, so the
             # Part-Press Preference grid must refresh too (Step 64).
             self.mainApp.partPressPrefTab.refreshTable()
+            # Parts per truck is keyed by part name too (Step 74a): a new part shows
+            # as a blank row and a rename rekeys its value, so refresh that grid too.
+            self.mainApp.partTruckTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)
