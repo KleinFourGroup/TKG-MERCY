@@ -118,6 +118,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 67 | ✅ Done | Schedule report: date/shift-grouped layout + per-shift / date-range view variants — see §13.44 |
 | 68 | ✅ Done | File dialogs remember last-used directory (`QSettings` `lastDir`; Open / Save As / Import) — see §13.45 |
 | 69 | ✅ Done | Order sort modes (due date / client name, never order #) on the Orders + Order Updates tabs — see §13.46 |
+| 70 | ✅ Done | De-emphasize the schedule Horizon knob (collapsed "Advanced" panel; clarifies it's plan-ahead depth, not a display filter) — see §13.46 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 

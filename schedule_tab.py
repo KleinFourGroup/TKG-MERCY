@@ -74,14 +74,12 @@ class ScheduleTab(QWidget):
         self.displayed = None   # what's on screen now (full or a filtered slice)
         self._groupTables: list[DBTable] = []
 
-        # --- Main controls: horizon + Generate + Export (full schedule) ---
-        # Horizon caps the scheduler's forward walk (ScheduleConfig.maxHorizonDays,
-        # addendum §6). Default is the full horizon (spec §5.1).
-        self.horizonSpin = QSpinBox()
-        self.horizonSpin.setRange(1, MAX_HORIZON_DAYS)
-        self.horizonSpin.setValue(MAX_HORIZON_DAYS)
-        self.horizonSpin.setSuffix(" days")
-
+        # --- Main controls: Generate + Export (full schedule). The horizon knob
+        # moved to a collapsed "Advanced" panel at the bottom (Step 70): the team
+        # read it as a "show the next X days" display filter, so it's de-emphasized
+        # to keep the average user out of it. It actually caps how far ahead the
+        # scheduler plans (ScheduleConfig.maxHorizonDays, addendum §6); default is
+        # the full horizon (spec §5.1). ---
         self.generateB = QPushButton("Generate Schedule")
         self.generateB.clicked.connect(self.generate)
         self.exportB = QPushButton("Export PDF")
@@ -89,8 +87,6 @@ class ScheduleTab(QWidget):
         self.exportB.setEnabled(False)  # nothing to export until a Generate
 
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Horizon:"))
-        controls.addWidget(self.horizonSpin)
         controls.addWidget(self.generateB)
         controls.addWidget(self.exportB)
         controls.addStretch()
@@ -150,6 +146,28 @@ class ScheduleTab(QWidget):
         self.warningsLabel = QLabel("")
         self.warningsLabel.setWordWrap(True)
 
+        # --- Advanced (collapsed by default): the horizon knob, de-emphasized per
+        # Step 70 so the average user doesn't mistake it for a display filter. ---
+        self.horizonSpin = QSpinBox()
+        self.horizonSpin.setRange(1, MAX_HORIZON_DAYS)
+        self.horizonSpin.setValue(MAX_HORIZON_DAYS)
+        self.horizonSpin.setSuffix(" days")
+
+        self.advancedToggle = QPushButton("Advanced ▸")  # ▸ collapsed
+        self.advancedToggle.setCheckable(True)
+        self.advancedToggle.setFlat(True)
+        self.advancedToggle.toggled.connect(self._toggleAdvanced)
+
+        self.advancedPanel = QWidget()
+        advLayout = QHBoxLayout(self.advancedPanel)
+        advLayout.setContentsMargins(0, 0, 0, 0)
+        advLayout.addWidget(QLabel("Horizon:"))
+        advLayout.addWidget(self.horizonSpin)
+        advLayout.addWidget(QLabel(
+            "— how many days ahead the scheduler plans, not a display filter."))
+        advLayout.addStretch()
+        self.advancedPanel.setVisible(False)
+
         layout = QVBoxLayout()
         layout.addLayout(controls)
         layout.addLayout(filterRow)
@@ -159,9 +177,17 @@ class ScheduleTab(QWidget):
         layout.addWidget(QLabel("Flagged Orders (order-level — shown in full, not filtered)"))
         layout.addWidget(self.flagsTable)
         layout.addWidget(self.warningsLabel)
+        layout.addWidget(self.advancedToggle)
+        layout.addWidget(self.advancedPanel)
         self.setLayout(layout)
 
     # --- config / actions ---
+
+    def _toggleAdvanced(self, checked: bool):
+        # Show/hide the collapsed Advanced (horizon) panel and flip the disclosure
+        # arrow (Step 70).
+        self.advancedPanel.setVisible(checked)
+        self.advancedToggle.setText("Advanced ▾" if checked else "Advanced ▸")
 
     def _config(self) -> ScheduleConfig:
         return ScheduleConfig(maxHorizonDays=self.horizonSpin.value())
