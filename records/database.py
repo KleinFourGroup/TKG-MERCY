@@ -470,19 +470,26 @@ class Database:
         # employee, mirroring updateEmployee's rekey. employeeId is the PK; the
         # hoursPerShift field is set directly on the record by the edit window.
         # A new-id collision is rejected at the tab (PresserEditWindow.readData).
-        if not newId == oldId:
-            pressers = {newId if key == oldId else key: val for key, val in self.pressers.items()}
-            self.pressers = pressers
+        # Guarded against a stale original id — a presser deleted or reassigned
+        # while an Edit window stayed open — the way updateEmployee is (Step 60
+        # class): a missing oldId makes the rekey a no-op rather than a KeyError on
+        # `self.pressers[newId]` (crash_fuzz-found; the last updateX helper that
+        # still assumed its original key was present).
+        if newId == oldId:
+            return
+        if oldId in self.pressers:
+            self.pressers = {newId if key == oldId else key: val
+                             for key, val in self.pressers.items()}
             self.pressers[newId].employeeId = newId
-            # Presser-press preferences are keyed by employeeId (Step 65), exactly
-            # like pressers, so rekey the entry and fix up the stored id — the same
-            # follow-the-presser rule used everywhere pressers is rekeyed. No
-            # collision: the tab rejects reassigning to an existing presser, so newId
-            # has no pre-existing preference row.
-            if oldId in self.presserPressPref:
-                pref = self.presserPressPref.pop(oldId)
-                pref.employeeId = newId
-                self.presserPressPref[newId] = pref
+        # Presser-press preferences are keyed by employeeId (Step 65), exactly
+        # like pressers, so rekey the entry and fix up the stored id — the same
+        # follow-the-presser rule used everywhere pressers is rekeyed. No
+        # collision: the tab rejects reassigning to an existing presser, so newId
+        # has no pre-existing preference row.
+        if oldId in self.presserPressPref:
+            pref = self.presserPressPref.pop(oldId)
+            pref.employeeId = newId
+            self.presserPressPref[newId] = pref
 
     def addPresser(self, presser: Presser):
         if presser.employeeId in self.pressers:

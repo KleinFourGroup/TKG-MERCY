@@ -1796,6 +1796,22 @@ def pressers_tab_crud() -> list[str]:
         elif w.db.pressers[fixtureId].hoursPerShift != 9.5:
             errors.append(f"after Update: hoursPerShift={w.db.pressers[fixtureId].hoursPerShift}, want 9.5")
 
+        # --- Stale-key guard: an Update whose original presser id is gone (deleted
+        # / reassigned while an Edit window stayed open) must be a no-op, not a
+        # KeyError on self.pressers[newId] (Step 60 class; crash_fuzz-found for
+        # updatePresser). ---
+        absentId = max(w.db.employees, default=0) + 100000
+        while absentId in w.db.pressers:
+            absentId += 1
+        keysBefore = set(w.db.pressers)
+        try:
+            w.db.updatePresser(absentId, absentId + 1)
+        except Exception as e:  # the whole point is that this must not raise
+            errors.append(f"updatePresser on a missing original id raised {type(e).__name__}: {e}")
+        if set(w.db.pressers) != keysBefore:
+            errors.append(f"updatePresser on a missing original id changed the key set: "
+                          f"{sorted(w.db.pressers)} vs {sorted(keysBefore)}")
+
         # --- Create a new presser on an employee who isn't one yet ---
         freeId = next((e for e in w.db.employees if e not in w.db.pressers), None)
         if freeId is None:
