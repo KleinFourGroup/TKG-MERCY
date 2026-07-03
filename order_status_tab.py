@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QDateEdit, QMessageBox,
+    QDateEdit, QMessageBox, QCheckBox,
 )
 from PySide6.QtCore import Qt
 from table import DBTable
@@ -118,6 +118,7 @@ class OrderStatusEditWindow(QWidget):
         self.setWindowTitle(f"Order Status: {orderNum}")
 
         order = self.mainApp.db.orders[orderNum]
+        self.order = order
 
         # --- snapshot sub-table ---
         self.genSnapshotData()
@@ -130,6 +131,23 @@ class OrderStatusEditWindow(QWidget):
         self.dateEdit.setDate(toQDate(datetime.date.today()))
         self.pressEdit = QLineEdit()
         self.shipEdit = QLineEdit()
+        # Unit is shown on the field labels and flips with the trucks checkbox (Step
+        # 74b); the fields still store + display pieces, so the labels start in pieces.
+        self.pressLabel = QLabel()
+        self.shipLabel = QLabel()
+
+        # "Enter in trucks" (Step 74b): a live, unpersisted per-window toggle that
+        # reinterprets the two fields as trucks (half-truck steps) and converts to
+        # pieces via this part's parts-per-truck before storing. Blocked outright when
+        # the part has no truck size (checked at toggle time, below). Everything stays
+        # stored + displayed in pieces.
+        self.trucksCheck = QCheckBox("Enter in trucks")
+        self.trucksCheck.setToolTip(
+            "Interpret the two fields as trucks (in half-truck steps) and convert to "
+            "pieces using this part's parts-per-truck figure. Everything is still "
+            "stored and shown in pieces.")
+        self.trucksCheck.toggled.connect(self.onTrucksToggled)
+        self._applyUnitLabels()
 
         self.addButton = QPushButton("Add / Update Snapshot")
         self.addButton.clicked.connect(self.addSnapshot)
@@ -138,14 +156,18 @@ class OrderStatusEditWindow(QWidget):
 
         def row(label, widget):
             line = QHBoxLayout()
-            line.addWidget(QLabel(label))
+            line.addWidget(label if isinstance(label, QLabel) else QLabel(label))
             line.addWidget(widget)
             return line
 
-        editorLayout = QHBoxLayout()
-        editorLayout.addLayout(row("Date:", self.dateEdit))
-        editorLayout.addLayout(row("Remaining to press:", self.pressEdit))
-        editorLayout.addLayout(row("Remaining to ship:", self.shipEdit))
+        fieldsLayout = QHBoxLayout()
+        fieldsLayout.addLayout(row("Date:", self.dateEdit))
+        fieldsLayout.addLayout(row(self.pressLabel, self.pressEdit))
+        fieldsLayout.addLayout(row(self.shipLabel, self.shipEdit))
+
+        editorLayout = QVBoxLayout()
+        editorLayout.addWidget(self.trucksCheck)
+        editorLayout.addLayout(fieldsLayout)
 
         buttonLayout = QHBoxLayout()
         buttonLayout.addWidget(self.addButton)
@@ -187,6 +209,11 @@ class OrderStatusEditWindow(QWidget):
         date = datetime.date.fromisoformat(dateStr)
         if date in status.snapshots:
             press, ship = status.snapshots[date]
+            # Snapshots are stored in pieces, so drop back to pieces mode before
+            # prefilling (unchecking clears + relabels via onTrucksToggled) — otherwise
+            # a pieces value would be misread as trucks (Step 74b).
+            if self.trucksCheck.isChecked():
+                self.trucksCheck.setChecked(False)
             self.dateEdit.setDate(toQDate(date))
             self.pressEdit.setText(f"{press}")
             self.shipEdit.setText(f"{ship}")
@@ -226,11 +253,70 @@ class OrderStatusEditWindow(QWidget):
                     f"({predDate.isoformat()}): {", ".join(increases)}.")
         return warnings
 
+    def _applyUnitLabels(self):
+        # The field labels carry the current input unit so the mode is unmistakable
+        # (Step 74b). Storage + display stay in pieces regardless.
+        unit = "trucks" if self.trucksCheck.isChecked() else "pieces"
+        self.pressLabel.setText(f"Remaining to press ({unit}):")
+        self.shipLabel.setText(f"Remaining to ship ({unit}):")
+
+    def onTrucksToggled(self, checked):
+        # Block trucks mode outright when the part has no parts-per-truck set — there's
+        # nothing to convert with, so revert the checkbox immediately rather than let
+        # the user enter trucks that can't be stored (block, don't guess; design call
+        # 2026-07-03). The odd-count / fractional-piece case can't be known until a
+        # value is typed, so it's caught at commit in _readRemaining instead.
+        if checked:
+            truck = self.mainApp.db.partTruck.get(self.order.part)
+            if truck is None or truck.partsPerTruck is None:
+                errorMessage(self, [
+                    f"{self.order.part} has no parts-per-truck figure set. Set it on "
+                    f"the Parts per Truck tab first, then you can enter in trucks."])
+                self.trucksCheck.blockSignals(True)
+                self.trucksCheck.setChecked(False)
+                self.trucksCheck.blockSignals(False)
+                return
+        # Unit changed (engaged trucks, or reverted to pieces): clear both fields and
+        # relabel so a value typed / prefilled in the old unit can't be misread in the
+        # new one (design call: clear + relabel, don't auto-convert).
+        self.pressEdit.clear()
+        self.shipEdit.clear()
+        self._applyUnitLabels()
+
+    def _readRemaining(self, text, label, errors):
+        # Read one remaining-to-* field as a piece count, honoring the trucks toggle.
+        # Pieces mode: a non-negative integer, stored as-is. Trucks mode: a non-negative
+        # multiple of 0.5 (half-truck precision) converted to pieces via the part's
+        # parts-per-truck; a half-truck of an odd count (=> a fractional piece) is
+        # rejected rather than rounded (block, don't guess). Appends to `errors` and
+        # returns 0 on any problem — the caller bails on a non-empty error list.
+        if not self.trucksCheck.isChecked():
+            return int(checkInput(text, int, "nonneg", errors, label))
+        before = len(errors)
+        trucks = checkInput(text, float, "nonneg", errors, label)
+        if len(errors) > before:
+            return 0
+        if (trucks * 2) % 1 != 0:
+            errors.append(f"{label}: {trucks:g} isn't a whole or half truck — enter it in 0.5 steps.")
+            return 0
+        truck = self.mainApp.db.partTruck.get(self.order.part)
+        if truck is None or truck.partsPerTruck is None:
+            errors.append(f"{self.order.part} has no parts-per-truck figure set — set it on the "
+                          f"Parts per Truck tab, or uncheck 'Enter in trucks'.")
+            return 0
+        pieces = trucks * truck.partsPerTruck
+        if pieces % 1 != 0:
+            errors.append(f"{label}: {trucks:g} trucks x {truck.partsPerTruck} = {pieces:g} pieces, "
+                          f"not a whole number. Enter a whole number of trucks, or switch to pieces.")
+            return 0
+        return int(pieces)
+
     def addSnapshot(self):
         errors = []
         date = fromQDate(self.dateEdit.date())
-        press = int(checkInput(self.pressEdit.text(), int, "nonneg", errors, "Remaining to press"))
-        ship = int(checkInput(self.shipEdit.text(), int, "nonneg", errors, "Remaining to ship"))
+        # Both fields read as pieces regardless of the trucks toggle (converted here).
+        press = self._readRemaining(self.pressEdit.text(), "Remaining to press", errors)
+        ship = self._readRemaining(self.shipEdit.text(), "Remaining to ship", errors)
         if len(errors) > 0:
             errorMessage(self, errors)
             return

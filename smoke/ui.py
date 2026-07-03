@@ -1891,6 +1891,110 @@ def order_status_crud() -> list[str]:
     return errors
 
 
+def order_status_trucks_entry() -> list[str]:
+    """Step 74b: the "Enter in trucks" toggle on the Order Status snapshot editor.
+
+    Seeds tiny fuzz data, picks an order, and drives OrderStatusEditWindow's trucks
+    toggle + _readRemaining conversion (stored + displayed always in pieces):
+      - the toggle blocks (reverts) when the part has no parts-per-truck set;
+      - with a truck size set, engaging the toggle clears + relabels the two fields;
+      - a 2.5-truck entry stores 2.5 * partsPerTruck pieces;
+      - a half-truck of an odd count (=> fractional pieces) is rejected, as is a
+        non-0.5-step value;
+      - selecting a stored snapshot drops back to pieces mode and prefills pieces.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from order_status_tab import OrderStatusEditWindow
+    from utils import toQDate
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+        if len(w.db.orders) == 0:
+            errors.append("expected fuzz seed to populate orders, got 0")
+            return errors
+
+        orderNum = sorted(w.db.orders)[0]
+        part = w.db.orders[orderNum].part
+        w.db.setPartTruck(part, None)  # deterministic slate: no truck size
+
+        editor = OrderStatusEditWindow(orderNum, w)
+
+        # --- toggle blocks (reverts) with no parts-per-truck set ---
+        editor.trucksCheck.setChecked(True)
+        if editor.trucksCheck.isChecked():
+            errors.append("trucks toggle engaged with no parts-per-truck set (should revert)")
+
+        # --- with an even truck size, the toggle engages + clears + relabels ---
+        w.db.setPartTruck(part, 20)
+        editor.pressEdit.setText("999")  # stale pieces value that must clear on toggle
+        editor.trucksCheck.setChecked(True)
+        if not editor.trucksCheck.isChecked():
+            errors.append("trucks toggle did not engage with a truck size set")
+        if editor.pressEdit.text() != "":
+            errors.append(f"toggle should clear fields; pressEdit={editor.pressEdit.text()!r}")
+        if "trucks" not in editor.pressLabel.text():
+            errors.append(f"toggle should relabel to trucks; label={editor.pressLabel.text()!r}")
+
+        # --- 2.5 trucks x 20 = 50 pieces; 1 truck x 20 = 20 pieces (stored in pieces) ---
+        d1 = datetime.date.today() - datetime.timedelta(days=205)
+        editor.dateEdit.setDate(toQDate(d1))
+        editor.pressEdit.setText("2.5")
+        editor.shipEdit.setText("1")
+        editor.addButton.click()
+        got = w.db.orderStatus[orderNum].snapshots.get(d1)
+        if got != (50, 20):
+            errors.append(f"trucks conversion: snapshot[{d1}]={got}, want (50, 20)")
+
+        # --- a half-truck of an ODD count is rejected (fractional pieces) ---
+        w.db.setPartTruck(part, 15)
+        d2 = datetime.date.today() - datetime.timedelta(days=206)
+        editor.dateEdit.setDate(toQDate(d2))
+        editor.pressEdit.setText("0.5")  # 0.5 * 15 = 7.5 -> reject
+        editor.shipEdit.setText("1")
+        editor.addButton.click()
+        if d2 in w.db.orderStatus[orderNum].snapshots:
+            errors.append("half-truck of an odd count stored (should be blocked)")
+
+        # --- a non-0.5-step value is rejected ---
+        editor.pressEdit.setText("0.3")
+        editor.shipEdit.setText("1")
+        editor.addButton.click()
+        if d2 in w.db.orderStatus[orderNum].snapshots:
+            errors.append("non-0.5-step trucks value stored (should be blocked)")
+
+        # --- selecting a stored snapshot drops to pieces mode + prefills pieces ---
+        editor.setSelection([d1.isoformat()])
+        if editor.trucksCheck.isChecked():
+            errors.append("selecting a snapshot should drop to pieces mode")
+        if editor.pressEdit.text() != "50" or "pieces" not in editor.pressLabel.text():
+            errors.append(f"snapshot prefill: press={editor.pressEdit.text()!r} "
+                          f"label={editor.pressLabel.text()!r}, want pieces 50")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def pressers_tab_crud() -> list[str]:
     """Step 44: PressersTab CRUD + save/reload roundtrip + employee-delete cascade.
 
