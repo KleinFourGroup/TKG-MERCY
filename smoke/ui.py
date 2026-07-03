@@ -2830,7 +2830,7 @@ def holidays_tab_defaults_crud() -> list[str]:
 
 
 def schedule_tab_generates() -> list[str]:
-    """Step 53/66/67: ScheduleTab generates, groups, filters, exports, and clears.
+    """Step 53/66/67/71: ScheduleTab generates, groups, filters, exports, clears.
 
     Seeds tiny fuzz data, then drives the on-screen Schedule report:
       - Generate makes ``displayed`` equal a direct ``schedule()`` call (the tab
@@ -2838,14 +2838,18 @@ def schedule_tab_generates() -> list[str]:
         controls, and updates the status line;
       - the grouped render (Step 67) has one mini-table per (date, shift) group,
         and their rows union back to the full displayed schedule with no loss;
-      - Show Filtered (Step 67) slices ``displayed`` to a single shift matching
-        ``filterSchedule()`` while flagged orders still show in full (design
-        call), and updates the status line;
-      - Export and Export Filtered both write real %PDF- files (``startfile``
+      - the unified filter (Step 71) is built into the display: choosing a shift
+        live-slices ``displayed`` to match ``filterSchedule()`` while flagged
+        orders still show in full (design call), and updates the status line;
+      - Export writes exactly what's on screen — both the current (filtered)
+        slice and the reset-to-full view produce real %PDF- files (``startfile``
         stubbed so nothing opens);
+      - the flags/warnings are condensed to summary labels + detail buttons
+        (Step 72): the button is enabled iff there's something to show and
+        opening the detail window doesn't crash;
       - ``refresh()`` (the DB-open hook) clears the result/displayed, empties the
-        group + flags tables, and re-disables Export + the filter controls so a
-        schedule from a prior file never lingers.
+        group tables + flag data, and re-disables Export + the filter controls so
+        a schedule from a prior file never lingers.
     """
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
@@ -2875,7 +2879,7 @@ def schedule_tab_generates() -> list[str]:
             errors.append("expected result/displayed None before first Generate")
         if tab.exportB.isEnabled():
             errors.append("Export should be disabled before first Generate")
-        if tab.showFilteredB.isEnabled():
+        if tab.shiftCombo.isEnabled():
             errors.append("filter controls should be disabled before first Generate")
 
         # --- Generate: displayed must equal a direct schedule() at full horizon ---
@@ -2887,12 +2891,21 @@ def schedule_tab_generates() -> list[str]:
         expected = S.schedule(w.db, None, S.ScheduleConfig(maxHorizonDays=S.MAX_HORIZON_DAYS))
         if tab.displayed.rows != expected.rows:
             errors.append("displayed rows != schedule() rows after Generate")
-        if len(tab.flagsTable.dbModel._data) != len(expected.flags):
-            errors.append(f"flags table rows={len(tab.flagsTable.dbModel._data)} "
+        if len(tab._flagData) != len(expected.flags):
+            errors.append(f"flag data rows={len(tab._flagData)} "
                           f"!= schedule() flags={len(expected.flags)}")
+        # Step 72: flags/warnings are condensed to summary labels + detail buttons.
+        # The button is enabled iff there's something to show; the summary text
+        # leads with the count; opening the detail windows doesn't crash.
+        if (len(expected.flags) > 0) != tab.flagsButton.isEnabled():
+            errors.append("Flagged Orders button enabled-state doesn't match flag count")
+        if not tab.flagsSummary.text().startswith(f"{len(expected.flags)} order"):
+            errors.append(f"flags summary text wrong: {tab.flagsSummary.text()!r}")
+        tab._openFlags()
+        tab._openWarnings()
         if not tab.exportB.isEnabled():
             errors.append("Export should be enabled after Generate")
-        if not tab.showFilteredB.isEnabled():
+        if not tab.shiftCombo.isEnabled():
             errors.append("filter controls should be enabled after Generate")
         if not tab.statusLabel.text().startswith("Generated "):
             errors.append(f"status not updated after Generate: {tab.statusLabel.text()!r}")
@@ -2914,36 +2927,39 @@ def schedule_tab_generates() -> list[str]:
                 if row[1] not in w.db.parts:
                     errors.append(f"schedule row on unknown part: {row[1]!r}")
 
-        # --- Filtered view: slice by a shift present in the schedule ---
+        # --- Filtered view: the date range is built into the display, so choosing
+        # a shift live-slices the shown schedule (Step 71) ---
         if expected.rows:
             targetShift = expected.rows[0].shift
             idx = tab.shiftCombo.findData(targetShift)
             if idx >= 0:
                 tab.shiftCombo.setCurrentIndex(idx)
-            tab.showFiltered()
+            tab._applyFilter()
             shift, start, end = tab._filterArgs()
             wantFiltered = S.filterSchedule(tab.result, shift, start, end)
             if tab.displayed.rows != wantFiltered.rows:
-                errors.append("displayed rows != filterSchedule() rows after Show Filtered")
+                errors.append("displayed rows != filterSchedule() rows after live filter")
             if not all(r.shift == targetShift for r in tab.displayed.rows):
                 errors.append("filtered view contains rows from other shifts")
             if not tab.statusLabel.text().startswith("Filtered view"):
-                errors.append(f"status not updated after Show Filtered: {tab.statusLabel.text()!r}")
+                errors.append(f"status not updated after live filter: {tab.statusLabel.text()!r}")
             # Flags are order-level -> shown in full even when filtered (design call).
-            if len(tab.flagsTable.dbModel._data) != len(tab.result.flags):
+            if len(tab._flagData) != len(tab.result.flags):
                 errors.append("filtered view dropped flagged orders (should show in full)")
 
-        # --- Export (full) and Export Filtered both write real PDFs (stubbed) ---
-        for label, fn in (("full", tab.exportPdf), ("filtered", tab.exportFilteredPdf)):
+        # --- Export writes exactly what's on screen (Step 71): both the current
+        # (filtered, if the block above ran) slice and the reset-to-full view
+        # produce real %PDF- files (startfile stubbed so nothing opens) ---
+        def _checkExport(label):
             before = len(exported)
-            fn()
+            tab.exportPdf()
             if len(exported) != before + 1:
                 errors.append(f"{label} export did not call startfile (exported={exported})")
-                continue
+                return
             path = exported[-1]
             if not os.path.exists(path) or os.path.getsize(path) == 0:
                 errors.append(f"{label} export produced empty/missing PDF")
-                continue
+                return
             with open(path, "rb") as f:
                 if f.read(5) != b"%PDF-":
                     errors.append(f"{label} export PDF lacks %PDF- magic")
@@ -2952,13 +2968,18 @@ def schedule_tab_generates() -> list[str]:
             except OSError:
                 pass
 
+        _checkExport("current view")
+        tab.shiftCombo.setCurrentIndex(0)  # back to All shifts / full range
+        tab._applyFilter()
+        _checkExport("full")
+
         # --- refresh() (DB-open hook) clears everything ---
         tab.refresh()
         if tab.result is not None or tab.displayed is not None:
             errors.append("refresh did not clear result/displayed")
-        if tab._groupTables or tab.flagsTable.dbModel._data:
-            errors.append("refresh did not clear the schedule groups / flags table")
-        if tab.exportB.isEnabled() or tab.showFilteredB.isEnabled():
+        if tab._groupTables or tab._flagData:
+            errors.append("refresh did not clear the schedule groups / flag data")
+        if tab.exportB.isEnabled() or tab.shiftCombo.isEnabled():
             errors.append("refresh did not re-disable Export / filter controls")
     finally:
         ST.startfile = origStartfile  # type: ignore[assignment]

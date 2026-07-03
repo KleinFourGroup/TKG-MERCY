@@ -1,3 +1,4 @@
+import datetime
 from typing import TYPE_CHECKING
 
 from scheduling import (
@@ -40,6 +41,28 @@ def _warningNote(warning: "ScheduleWarning") -> str:
     if warning.kind == WARN_MISSING_FIRESCRAP:
         return "fireScrap not set (scrap inflation may be understated)"
     return warning.kind
+
+
+# Flagged-order client / due-date presentation (Step 73). Looked up from the
+# order at render time so OrderFlag stays a pure data carrier; mirrors
+# schedule_tab.py so the PDF and the on-screen detail window read identically.
+def _flagClient(db, flag: "OrderFlag") -> str:
+    order = db.orders.get(flag.orderNum)
+    return order.client if order is not None else ""
+
+
+def _flagDueStr(db, flag: "OrderFlag") -> str:
+    order = db.orders.get(flag.orderNum)
+    if order is None or order.dueDate is None:
+        return "?"
+    return order.dueDate.isoformat()
+
+
+def _flagSortKey(db, flag: "OrderFlag"):
+    # Sort flagged orders by due date (undated last), orderNum breaking ties.
+    order = db.orders.get(flag.orderNum)
+    due = order.dueDate if order is not None else None
+    return (due is None, due or datetime.date.max, flag.orderNum)
 
 
 def _presserCell(db, employeeId) -> str:
@@ -194,13 +217,17 @@ class ScheduleReportsMixin:
         self._groupedScheduleSection(title, subtitle, meta, "Schedule", groups,
                                      groupHeaders, "No production scheduled.")
 
-        flagHeaders = ["Order", "Part", "Issue", "Detail"]
+        # Flagged orders carry their client and sort by due date (Step 73), looked
+        # up from the order at render time so OrderFlag stays a pure data carrier.
+        flagHeaders = ["Order", "Client", "Part", "Due Date", "Issue", "Detail"]
         flagData = [[
             f.orderNum,
+            _flagClient(self.db, f),
             f.part,
+            _flagDueStr(self.db, f),
             _FLAG_LABEL.get(f.kind, f.kind),
             _flagDetail(f),
-        ] for f in result.flags]
+        ] for f in sorted(result.flags, key=lambda fl: _flagSortKey(self.db, fl))]
         # Flags are order-level / dateless, so a filtered variant still shows them
         # all (design call 2026-07-02) — the section name says so when filtered.
         flagSection = "Flagged Orders (all orders)" if filterDesc else "Flagged Orders"
