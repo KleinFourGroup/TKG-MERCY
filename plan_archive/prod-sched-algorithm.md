@@ -484,3 +484,51 @@ presses run and what they press. It is deliberately **secondary and non-perturbi
   **reserved but unimplemented** until real production weeks show whether reshuffling
   annoys anyone — an unrecognized policy **raises** rather than silently mis-staffing.
   Like the core, this is stateless: no schema, no `db_version` bump.
+
+## 12. Die constraint — one press per part at a time (Step 78 addendum, 2026-07-14)
+
+Team correction after living with the scheduler (relayed 2026-07-14): a part is
+pressed with a **die**, and each part has exactly **one** die, so a part can be
+pressed on **at most one press at any instant**. The original §3.3/§3.4 pooled the
+whole shift-day's press-hours and let §3.4 split a single part across presses — a
+plausible-but-impossible plan (the same die in two presses at once). Fixed as a
+constraint on allocation, not a post-hoc filter.
+
+- **Model.** The "instant" quantum is the **(date, shift)** cell (shifts don't
+  overlap, so a die can move between them). Within one (date, shift) a part occupies
+  **one lane** (`laneBudgets` — the per-lane split of the §2.6 capacity, one entry per
+  running lane). A part's per-shift-day throughput is therefore capped by a **single
+  lane's budget**, not the pooled sum — so a large single-part order **can no longer
+  be parallelized across presses**; it runs on one press at one press's rate and
+  **spills to later shift-days**, taking as many as it needs (and earning more LATE /
+  NO_CAPACITY flags than the old pooled model — correctly).
+- **Sequential sharing is allowed** (design call 2026-07-14 — the minimal faithful
+  reading). The constraint forbids only the physically-impossible case (a part on two
+  presses *simultaneously*); a press may still run **several parts across a shift**
+  (a mid-shift die swap). So a lane is a bin that holds multiple parts up to its
+  budget; a part is an item in exactly one bin per shift-day. Allocation is a per-lane
+  greedy: each part picks the lane with the most effective free hours and spills to
+  the next shift-day when its lane fills — never opening a second lane the same
+  shift-day.
+- **Die-change cost seam.** A die swap is what the **Tool Change** production event
+  logs (its `hours`). v1 prices it at **0.0** (`ScheduleConfig.dieChangeHours` —
+  instantaneous; not enough real data yet), but the mechanism is built: the first
+  time a *new distinct* part lands on a lane already running a different part that
+  shift-day, `dieChangeHours` is charged against that lane's budget (the press is busy
+  swapping, not pressing). A **fixed** cost is a non-zero literal (10 min = `10/60`);
+  an **empirical** cost drops in via `empiricalDieChangeHours(db, today)` (avg Tool
+  Change record hours, the twin of §2.3's empirical rate) — reserved, not wired as
+  default, mirroring the §11 presser `"balanced"` seam.
+- **Press assignment (revised §3.4).** Allocation now fixes *which lane* each part
+  sits on (anonymous bins); a second pass pins each occupied lane to a distinct
+  physical press by the lane's hours-weighted `PartPressPref` score (press name then
+  lane index breaking ties). No part is ever split across presses. Presser staffing
+  (§11) is unchanged — it runs over whatever presses this pass lit up.
+- **Statelessness / provisional.** Still stateless (no schema, no `db_version` bump)
+  behind the one `schedule(db, today, config)` seam. The greedy core stays provisional
+  (§10): the die constraint materially changes throughput for large orders, so the
+  standing "validate against real order data" item should re-judge front-load, slack,
+  and whether a non-zero `dieChangeHours` is warranted once real orders exist.
+- **Durable net.** `scheduling_scheduler_fuzz` asserts the machine-checkable statement
+  of the whole feature: **no part appears on two different presses within one
+  (date, shift)**.

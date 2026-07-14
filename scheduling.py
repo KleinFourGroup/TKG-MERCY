@@ -99,20 +99,31 @@ def concurrentPresses(db: Database, shift: int, d: datetime.date) -> int:
     return min(len(pressersPresent(db, shift, d)), len(db.presses))
 
 
-def capacityHours(db: Database, shift: int, d: datetime.date) -> float:
-    """Addendum §2.6: total press-hours available on `shift`/`d`. Each running
-    press (a lane) delivers one presser's hoursPerShift; the lane count is
-    min(pressers present, presses). When pressers > presses the highest-hours
-    pressers take the lanes (maximizes capacity — pressers are interchangeable).
-    0.0 on a non-working shift-day or with no presses / no pressers present."""
+def laneBudgets(db: Database, shift: int, d: datetime.date) -> list[float]:
+    """Addendum §2.6 (Step 78): the per-lane press-hour budgets on `shift`/`d` — one
+    entry per running lane, each a presser's hoursPerShift, highest first. The lane
+    count is min(pressers present, presses); when pressers > presses the highest-hours
+    pressers take the lanes (pressers are interchangeable). Empty on a non-working
+    shift-day or with no lanes. This is the per-lane view the die constraint needs — a
+    single part runs on at most ONE lane per shift-day (one press at a time), so its
+    per-shift-day throughput is capped by one budget, not their sum. `capacityHours`
+    (the pooled total) is their sum."""
     if not shiftWorksOn(db, shift, d):
-        return 0.0
+        return []
     present = pressersPresent(db, shift, d)
     lanes = min(len(present), len(db.presses))
     if lanes == 0:
-        return 0.0
+        return []
     hours = sorted((p.hoursPerShift for p in present), reverse=True)
-    return float(sum(hours[:lanes]))
+    return [float(h) for h in hours[:lanes]]
+
+
+def capacityHours(db: Database, shift: int, d: datetime.date) -> float:
+    """Addendum §2.6: total press-hours available on `shift`/`d` = the sum of the
+    per-lane budgets (`laneBudgets`). 0.0 on a non-working shift-day or with no lanes.
+    The pooled total; the die constraint is enforced against the per-lane budgets, not
+    this sum (a part can't use the whole pool in one shift-day — only one lane)."""
+    return float(sum(laneBudgets(db, shift, d)))
 
 
 def empiricalPressingRate(db: Database, part: str, today: datetime.date,
@@ -153,6 +164,36 @@ def pressingRate(db: Database, part: str, today: datetime.date,
     part_obj = db.parts.get(part)
     if part_obj is not None and part_obj.pressing is not None and part_obj.pressing > 0:
         return part_obj.pressing
+    return None
+
+
+def empiricalDieChangeHours(db: Database, today: datetime.date,
+                            windowDays: int = RATE_WINDOW_DAYS,
+                            minChanges: int = 3) -> float | None:
+    """Step 78 (reserved seam): the empirical die-change cost = the average `hours`
+    logged per **Tool Change** production record in the trailing `windowDays` window,
+    or None when the history is thin (< `minChanges` records). The Tool Change twin of
+    `empiricalPressingRate`.
+
+    NOT applied by default — `schedule()` reads `ScheduleConfig.dieChangeHours`, which
+    defaults to 0.0 (instantaneous, the v1 policy). A caller opts into an empirical cost
+    explicitly, e.g. `ScheduleConfig(dieChangeHours=empiricalDieChangeHours(db, today) or 0.0)`;
+    a fixed cost is just a literal (10 min = `10/60`). This keeps the die-change price a
+    swappable policy behind the one `schedule()` seam (addendum §10) without wiring an
+    unvalidated number into the default schedule."""
+    totalH = 0.0
+    count = 0
+    for rec in db.production.values():
+        if rec.action != "Tool Change":
+            continue
+        if rec.date is None or rec.hours <= 0:
+            continue
+        age = (today - rec.date).days
+        if 0 <= age <= windowDays:
+            totalH += rec.hours
+            count += 1
+    if count >= minChanges:
+        return totalH / count
     return None
 
 
@@ -251,6 +292,14 @@ class ScheduleConfig:
     # Step 66: which heuristic staffs pressers onto presses (see
     # PRESSER_ASSIGNMENT_PREFERENCE). Other policies are reserved (§10).
     presserAssignment: str = PRESSER_ASSIGNMENT_PREFERENCE
+    # Step 78: press-hours consumed by a die change — the setup time to swap the die
+    # when a press switches to a *different* part within a shift-day (a part runs on
+    # one press at a time — the die constraint — but a press can run several parts in a
+    # shift, each swap costing this). v1 default 0.0 (instantaneous; not enough real
+    # data to price it yet, per the team). A fixed cost is a non-zero literal here
+    # (10 min = 10/60); an empirical cost drops in via empiricalDieChangeHours(). Only
+    # prices the swap — the die constraint itself holds regardless.
+    dieChangeHours: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -367,71 +416,50 @@ def _presserPrefScore(db: Database, employeeId: int, press: str, neutral: int) -
     return score if score is not None else neutral
 
 
-@dataclass
-class _Lane:
-    """One running press lane during press assignment: a press name plus the
-    press-hours still free on it (one presser's hoursPerShift, drawn down as
-    parts are pinned). Mutable, internal to `_assignLanes`."""
-    press: str
-    remaining: float
+def _assignPresses(db: Database, shift: int, d: datetime.date,
+                   used: list[tuple[int, dict[str, float]]],
+                   rates: dict[str, float]) -> list[ScheduleRow]:
+    """Addendum §3.4 (Step 78 rewrite): assign each used lane its own press and emit
+    the (date, shift, press, part) rows.
 
-
-def _assignLanes(db: Database, shift: int, d: datetime.date,
-                 placedByPart: dict[str, float], rates: dict[str, float]) -> list[ScheduleRow]:
-    """Addendum §3.4: pin a shift-day's pooled (part -> press-hours) work onto
-    specific press lanes, producing the (date, shift, press, part) rows.
-
-    The lanes are the `min(present, presses)` running presses (§2.6), each with
-    one presser's hoursPerShift as its budget; the budgets are the top-by-hours
-    presser shifts (matching capacityHours). The presses chosen to run are the
-    ones the pressed parts most prefer (highest aggregate PartPressPref score,
-    press name breaking ties), paired largest-budget-first. Each part's hours are
-    then placed onto lanes preferring that part's score, largest parts first,
-    splitting across lanes when one lane's remaining budget is too small. This
-    only decides *which lane* runs work — whether it fits was settled in §3.3
-    against the pooled hours — so it never drops a piece."""
-    present = pressersPresent(db, shift, d)
-    lanesCount = min(len(present), len(db.presses))
-    if lanesCount == 0:
-        return []
-    budgets = sorted((p.hoursPerShift for p in present), reverse=True)[:lanesCount]
+    `used` is the shift-day's occupied lanes as (laneIndex, {part -> press-hours}) —
+    the lanes the allocator (`_place`) filled under the die constraint: each part sits
+    on exactly ONE lane per shift-day, never split across presses, though a lane may
+    run several parts (sequentially). Here we only pin lanes to physical presses: each
+    lane goes to a distinct press by its aggregate (hours-weighted) PartPressPref score
+    — highest score first, press name then lane index breaking ties for §5 determinism
+    — so a shift-day runs the presses its parts most prefer. There are always enough
+    presses (used lanes <= min(present, presses) <= presses)."""
+    contentsByLane = {li: contents for li, contents in used}
     pressNames = sorted(db.presses.keys())
 
-    def aggScore(press: str) -> int:
-        return sum(_prefScore(db, part, press) for part in placedByPart)
+    def laneScore(li: int, press: str) -> float:
+        return sum(hours * _prefScore(db, part, press)
+                   for part, hours in contentsByLane[li].items())
 
-    chosen = sorted(pressNames, key=lambda press: (-aggScore(press), press))[:lanesCount]
-    lanes = [_Lane(press, budget) for press, budget in zip(chosen, budgets)]
-
-    # part -> {press -> hours}
-    assigned: dict[str, dict[str, float]] = {}
-    for part in sorted(placedByPart, key=lambda p: (-placedByPart[p], p)):
-        hoursLeft = placedByPart[part]
-        while hoursLeft > EPS:
-            open_lanes = [lane for lane in lanes if lane.remaining > EPS]
-            if not open_lanes:
-                break  # §3.3 guarantees total placed <= sum(budgets), so unreachable
-            lane = min(open_lanes,
-                       key=lambda lane: (-_prefScore(db, part, lane.press),
-                                         -lane.remaining, lane.press))
-            take = min(hoursLeft, lane.remaining)
-            assigned.setdefault(part, {})
-            assigned[part][lane.press] = assigned[part].get(lane.press, 0.0) + take
-            lane.remaining -= take
-            hoursLeft -= take
+    pairs = sorted(
+        ((li, press) for li in contentsByLane for press in pressNames),
+        key=lambda lp: (-laneScore(lp[0], lp[1]), lp[1], lp[0]))
+    laneToPress: dict[int, str] = {}
+    takenPresses: set[str] = set()
+    for li, press in pairs:
+        if li in laneToPress or press in takenPresses:
+            continue
+        laneToPress[li] = press
+        takenPresses.add(press)
 
     rows: list[ScheduleRow] = []
-    for part, byPress in assigned.items():
-        rate = rates[part]
-        for press, hours in byPress.items():
-            rows.append(ScheduleRow(d, shift, press, part, hours * rate, hours))
+    for li, contents in used:
+        press = laneToPress[li]
+        for part, hours in contents.items():
+            rows.append(ScheduleRow(d, shift, press, part, hours * rates[part], hours))
     return rows
 
 
 def _assignPressers(db: Database, shift: int, d: datetime.date,
                     rows: list[ScheduleRow], config: ScheduleConfig) -> list[ScheduleRow]:
     """Step 66 (§13.44): staff the present pressers onto the running presses of a
-    shift-day — a pass secondary to the press/part decision `_assignLanes` already
+    shift-day — a pass secondary to the press/part decision `_assignPresses` already
     made, run once per (date, shift) over that shift-day's rows.
 
     Greedy max-score matching (decision 2026-07-02): score every
@@ -474,15 +502,18 @@ def schedule(db: Database, today: datetime.date | None = None,
     """Addendum §3-§4: the greedy earliest-deadline-first, front-loaded scheduler.
 
     Walks eligible orders by urgency (§3.1) and places each one's scrap-inflated
-    press demand into the earliest available shift-day capacity (§3.3), front to
-    back from `today`. An order that can't finish before its effective press-by
-    keeps getting placed into later working shift-days and is flagged LATE; one
-    that can't fit even by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part
-    with no usable rate is flagged INFEASIBLE_NO_RATE. Nothing is ever silently
-    dropped (§4 never-drop). A second pass pins each shift-day's pooled work onto
-    specific press lanes (§3.4), then a third staffs the present pressers onto
-    those lanes by presser->press preference (Step 66, secondary to the press
-    decision). Deterministic given (db, today, config)."""
+    press demand into the earliest available shift-day lane (§3.3), front to back
+    from `today`. Under the die constraint (Step 78) a part runs on at most one press
+    per shift-day, so its per-shift-day throughput is capped by a single lane's budget
+    — a big order can't be parallelized across presses and spills to later shift-days.
+    A press may still run several parts across a shift (sequential sharing); each swap
+    to a different part costs `config.dieChangeHours` (0 by default). An order that
+    can't finish before its effective press-by is flagged LATE; one that can't fit even
+    by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part with no usable rate is
+    flagged INFEASIBLE_NO_RATE. Nothing is ever silently dropped (§4 never-drop). A
+    second pass pins each shift-day's occupied lanes to specific presses by part
+    preference (§3.4), then a third staffs the present pressers onto those presses
+    (Step 66, secondary to the press decision). Deterministic given (db, today, config)."""
     if today is None:
         today = datetime.date.today()
     if config is None:
@@ -491,16 +522,56 @@ def schedule(db: Database, today: datetime.date | None = None,
     flags: list[OrderFlag] = []
     warnings: set[ScheduleWarning] = set()
     rates: dict[str, float] = {}
-    # (date, shift) -> {part -> press-hours placed}
-    placed: dict[tuple[datetime.date, int], dict[str, float]] = {}
-    # (date, shift) -> remaining press-hours, computed lazily from capacityHours.
-    remaining: dict[tuple[datetime.date, int], float] = {}
+    # Per (date, shift): the lane state the die constraint needs. `binRemaining[k]` is
+    # each lane's press-hours left; `binParts[k][j]` is lane j's {part -> press-hours};
+    # `partBin[k][part]` pins a part to the one lane it runs on that shift-day (a part
+    # never spans two lanes in a shift-day — one press at a time). Built lazily from
+    # laneBudgets and carried across orders so later orders see earlier placements.
+    binRemaining: dict[tuple[datetime.date, int], list[float]] = {}
+    binParts: dict[tuple[datetime.date, int], list[dict[str, float]]] = {}
+    partBin: dict[tuple[datetime.date, int], dict[str, int]] = {}
 
-    def remainingHours(d: datetime.date, shift: int) -> float:
+    def _place(d: datetime.date, shift: int, part: str, need: float) -> float:
+        """Place up to `need` press-hours of `part` into ONE lane of (d, shift) and
+        return the hours placed (0 if the shift-day can't take this part). Reuses the
+        part's pinned lane here if it has one; else picks the lane with the most
+        effective free hours, charging config.dieChangeHours when the chosen lane is
+        already running a different part (the die swap)."""
         key = (d, shift)
-        if key not in remaining:
-            remaining[key] = capacityHours(db, shift, d)
-        return remaining[key]
+        if key not in binRemaining:
+            budgets = laneBudgets(db, shift, d)
+            binRemaining[key] = list(budgets)
+            binParts[key] = [{} for _ in budgets]
+            partBin[key] = {}
+        rem = binRemaining[key]
+        lanes = binParts[key]
+        pins = partBin[key]
+        if part in pins:
+            j = pins[part]
+            take = min(need, rem[j])
+            if take <= EPS:
+                return 0.0
+            rem[j] -= take
+            lanes[j][part] = lanes[j].get(part, 0.0) + take
+            return take
+        # A part new to this shift-day: pick the lane with the most effective room,
+        # discounting a die-change charge on any lane already running a different part.
+        best = -1
+        bestEff = EPS
+        for j in range(len(rem)):
+            eff = rem[j] - (config.dieChangeHours if lanes[j] else 0.0)
+            if eff > bestEff:
+                bestEff = eff
+                best = j
+        if best < 0:
+            return 0.0
+        if lanes[best]:
+            rem[best] -= config.dieChangeHours  # the swap consumes press-hours
+        take = min(need, rem[best])
+        rem[best] -= take
+        lanes[best][part] = lanes[best].get(part, 0.0) + take
+        pins[part] = best
+        return take
 
     for order in _eligibleOrders(db, config):
         part = order.part
@@ -536,15 +607,11 @@ def schedule(db: Database, today: datetime.date | None = None,
                 if deadline is not None and d > deadline and not lateRecorded:
                     lateRecorded = True
                     piecesShortAtDeadline = needHours * rate
-                avail = remainingHours(d, shift)
-                if avail <= EPS:
+                got = _place(d, shift, part, needHours)
+                if got <= EPS:
                     continue
-                take = min(needHours, avail)
-                cell = placed.setdefault((d, shift), {})
-                cell[part] = cell.get(part, 0.0) + take
-                remaining[(d, shift)] = avail - take
                 rates[part] = rate
-                needHours -= take
+                needHours -= got
                 completion = d
 
         if needHours > EPS:
@@ -557,10 +624,15 @@ def schedule(db: Database, today: datetime.date | None = None,
                                    piecesShort=piecesShortAtDeadline))
 
     rows: list[ScheduleRow] = []
-    for (d, shift), placedByPart in placed.items():
-        laneRows = _assignLanes(db, shift, d, placedByPart, rates)
-        # Step 66: staff pressers onto the lanes this shift-day just fixed
-        # (secondary to the part-preference lane decision, which stays untouched).
+    for key in binParts:
+        d, shift = key
+        laneContents = binParts[key]
+        used = [(j, laneContents[j]) for j in range(len(laneContents)) if laneContents[j]]
+        if not used:
+            continue
+        laneRows = _assignPresses(db, shift, d, used, rates)
+        # Step 66: staff pressers onto the presses this shift-day just fixed
+        # (secondary to the part-preference press decision, which stays untouched).
         rows.extend(_assignPressers(db, shift, d, laneRows, config))
 
     rows.sort(key=lambda r: (r.date, r.shift, r.press, r.part))

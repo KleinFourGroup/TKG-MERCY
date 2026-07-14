@@ -127,6 +127,13 @@ def scheduling_presser_capacity() -> list[str]:
     _expect(errors, "capacity shift1 Sunday (non-working)", S.capacityHours(db, 1, sunday), 0.0)
     _expect(errors, "capacity shift2 Monday", S.capacityHours(db, 2, monday), 7.0)
 
+    # laneBudgets (Step 78): the per-lane budgets whose sum is capacityHours — one
+    # present presser Monday (idle presses), two Tuesday (top-by-hours), empty on the
+    # non-working Sunday. The die constraint is enforced against these, not their sum.
+    _expect(errors, "laneBudgets shift1 Monday", S.laneBudgets(db, 1, monday), [8.0])
+    _expect(errors, "laneBudgets shift1 Tuesday", S.laneBudgets(db, 1, tuesday), [8.0, 6.0])
+    _expect(errors, "laneBudgets shift1 Sunday (non-working)", S.laneBudgets(db, 1, sunday), [])
+
     # Pressers > presses: one press, three present pressers -> one lane, taking
     # the highest hoursPerShift (9.0).
     db2 = emptyDB()
@@ -144,6 +151,8 @@ def scheduling_presser_capacity() -> list[str]:
     _expect(errors, "concurrent pressers>presses", S.concurrentPresses(db2, 1, monday), 1)
     _expect(errors, "capacity pressers>presses (top-by-hours lane)",
             S.capacityHours(db2, 1, monday), 9.0)
+    _expect(errors, "laneBudgets pressers>presses (one top-by-hours lane)",
+            S.laneBudgets(db2, 1, monday), [9.0])
     return errors
 
 
@@ -298,12 +307,15 @@ def _rowTuples(result):
 
 
 def scheduling_scheduler() -> list[str]:
-    """schedule(): the greedy EDF core (addendum §3-§4) on hand-built fixtures
-    with exact expected output — front-loaded multi-day placement, the LATE flag
-    + magnitude on a tight deadline, INFEASIBLE_NO_RATE on a rate-less part, the
-    cold-start fallback warning, preference-ranked lane splitting (§3.4), the
-    Step 66 greedy presser staffing (preference win, neutral tiebreak, preference
-    beating the tiebreak), and determinism."""
+    """schedule(): the greedy EDF core (addendum §3-§4) + the Step 78 die constraint
+    on hand-built fixtures with exact expected output — single-press front-loaded
+    placement (A), the LATE flag + magnitude on a tight deadline (B), INFEASIBLE_NO_RATE
+    + the cold-start warning (C), the die cap (D: one part uses one press across
+    shift-days even with a second press free), INFEASIBLE_NO_CAPACITY under a capped
+    horizon (E), sequential sharing (I: two parts share one press in a shift), the
+    die-change cost seam (J: dieChangeHours pushes work to the next day), and two-part /
+    two-press running + Step 66 presser staffing (K: preference, neutral tiebreak,
+    preference beating the tiebreak), plus determinism."""
     from records.database import emptyDB
     from records.scheduling import Press, Presser
     from records.sales import Client, Order
@@ -337,8 +349,32 @@ def scheduling_scheduler() -> list[str]:
             db.setPartPressScore("P", press, score)
         return db
 
+    def build(presses, pressers, parts, orders, partPrefs=None, presserPrefs=None):
+        # Multi-part / multi-order fixture builder for the die-constraint cases (I/J/K).
+        # parts: (name, pressing, fire); orders: (orderNum, part, qty, price, dueDate).
+        db = emptyDB()
+        for weekday in range(5):
+            db.setShiftWorkday(1, weekday, True)
+        for name in presses:
+            db.addPress(Press(name))
+        for idn, hrs in pressers:
+            _addEmployee(db, idn, 1, True)
+            db.addPresser(Presser(idn, hrs))
+        for name, pressing, fire in parts:
+            _addPart(db, name, pressing, fire)
+        db.globals.greenScrap = 0.0
+        db.addClient(Client("C", 0))
+        for onum, part, qty, price, due in orders:
+            db.addOrder(Order(onum, "C", part, qty, price, due))
+        for (part, press), score in (partPrefs or {}).items():
+            db.setPartPressScore(part, press, score)
+        for (emp, press), score in (presserPrefs or {}).items():
+            db.setPresserPressScore(emp, press, score)
+        return db
+
     # --- A: ample deadline, one press/presser, 200 pcs @ 10/hr = 20 press-hrs over
     #        8/8/4 across Mon/Tue/Wed; finishes Wed, well before Friday -> no flags.
+    #        One press => one lane, so the die constraint doesn't change this.
     dbA = base(10.0, 0.0, friday)
     rA = S.schedule(dbA, monday, cfg)
     _expect(errors, "A rows", _rowTuples(rA), [
@@ -372,14 +408,16 @@ def scheduling_scheduler() -> list[str]:
             [(S.INFEASIBLE_NO_RATE, "O1", "P")])
     _expect(errors, "C no warnings (skipped before warn checks)", rC.warnings, [])
 
-    # --- D: two presses, P prefers PB(5) over neutral PA(3); 100 pcs = 10 press-hrs
-    #        on one Monday, capacity 16 -> PB fills first (8h), PA takes the rest (2h).
-    dbD = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
+    # --- D: the DIE CAP (Step 78). One part, TWO presses free (Monday capacity 16h),
+    #        P prefers PB. 100 pcs = 10 press-hrs. A part runs on one press at a time,
+    #        so it takes PB for all of Monday (8h) and spills the last 2h to Tuesday —
+    #        it is NOT split 8h+2h across PB+PA on Monday. Ample deadline -> no flags.
+    dbD = base(10.0, 0.0, friday, qty=100, prefs={"PB": 5},
                presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
     rD = S.schedule(dbD, monday, cfg)
-    _expect(errors, "D preference-split rows", _rowTuples(rD), [
-        (monday, 1, "PA", "P", 20.0, 2.0),
+    _expect(errors, "D die-cap rows (one press across two days)", _rowTuples(rD), [
         (monday, 1, "PB", "P", 80.0, 8.0),
+        (tuesday, 1, "PB", "P", 20.0, 2.0),
     ])
     _expect(errors, "D no flags", rD.flags, [])
 
@@ -393,40 +431,70 @@ def scheduling_scheduler() -> list[str]:
             [(f.kind, f.orderNum, f.piecesShort, f.shortHours) for f in rE.flags],
             [(S.INFEASIBLE_NO_CAPACITY, "O1", 760.0, 76.0)])
 
-    # --- F: presser assignment (Step 66). Same two-press run as D (PA takes 2h,
-    #        PB takes 8h); two present pressers — 10 prefers PA (5), 11 prefers
-    #        PB (5). Greedy max-score staffs 10->PA and 11->PB, and the placed
-    #        work (press/part/quantity/hours) is byte-identical to D — the presser
-    #        pass only fills in who stands where.
-    dbF = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
-               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
-    dbF.setPresserPressScore(10, "PA", 5)
-    dbF.setPresserPressScore(11, "PB", 5)
-    rF = S.schedule(dbF, monday, cfg)
-    _expect(errors, "F work unchanged by presser pass", _rowTuples(rF), [
-        (monday, 1, "PA", "P", 20.0, 2.0),
-        (monday, 1, "PB", "P", 80.0, 8.0),
+    # --- I: SEQUENTIAL SHARING (Step 78). One press, two parts (X 3h, Y 4h). A press
+    #        may run several parts across a shift, so both land on P1 Monday (3h then
+    #        4h = 7h <= 8h) — the die constraint forbids a part on two presses, not two
+    #        parts sharing one press.
+    dbI = build(("P1",), ((10, 8.0),),
+                [("X", 10.0, 0.0), ("Y", 10.0, 0.0)],
+                [("O1", "X", 30, 100.0, friday), ("O2", "Y", 40, 100.0, friday)])
+    rI = S.schedule(dbI, monday, cfg)
+    _expect(errors, "I sequential-sharing rows (two parts, one press)", _rowTuples(rI), [
+        (monday, 1, "P1", "X", 30.0, 3.0),
+        (monday, 1, "P1", "Y", 40.0, 4.0),
     ])
-    _expect(errors, "F presser assignment",
-            [(r.press, r.presser) for r in rF.rows], [("PA", 10), ("PB", 11)])
+    _expect(errors, "I no flags", rI.flags, [])
 
-    # --- G: all-neutral presser prefs -> the deterministic tiebreak staffs the
-    #        lowest employeeId onto the alphabetically-first running press.
-    dbG = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
-               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
-    rG = S.schedule(dbG, monday, cfg)
-    _expect(errors, "G neutral presser tiebreak",
-            [(r.press, r.presser) for r in rG.rows], [("PA", 10), ("PB", 11)])
+    # --- J: the DIE-CHANGE COST SEAM (Step 78). Same one-press / two-part setup but Y
+    #        needs 5h and dieChangeHours=1: X takes 3h, the swap to Y costs 1h, so only
+    #        4h of Y fit Monday (3+1+4=8) and the last 1h spills to Tuesday. With the
+    #        default cost 0, Y's full 5h fits Monday (asserted for contrast).
+    dbJ = build(("P1",), ((10, 8.0),),
+                [("X", 10.0, 0.0), ("Y", 10.0, 0.0)],
+                [("O1", "X", 30, 100.0, friday), ("O2", "Y", 50, 100.0, friday)])
+    rJ = S.schedule(dbJ, monday, S.ScheduleConfig(slackBusinessDays=0, dieChangeHours=1.0))
+    _expect(errors, "J die-change spills to next day", _rowTuples(rJ), [
+        (monday, 1, "P1", "X", 30.0, 3.0),
+        (monday, 1, "P1", "Y", 40.0, 4.0),
+        (tuesday, 1, "P1", "Y", 10.0, 1.0),
+    ])
+    _expect(errors, "J no flags", rJ.flags, [])
+    rJ0 = S.schedule(dbJ, monday, cfg)  # dieChangeHours=0: Y's 5h all fit Monday
+    _expect(errors, "J cost 0 keeps Y whole on Monday", _rowTuples(rJ0), [
+        (monday, 1, "P1", "X", 30.0, 3.0),
+        (monday, 1, "P1", "Y", 50.0, 5.0),
+    ])
 
-    # --- H: a strong preference overrides the neutral tiebreak — presser 11
-    #        prefers PA (5) while everything else is neutral, so 11 takes PA and
-    #        10 is left with PB (the inverse of G's id-order default).
-    dbH = base(10.0, 0.0, monday, qty=100, prefs={"PB": 5},
-               presses=("PA", "PB"), pressers=((10, 8.0), (11, 8.0)))
-    dbH.setPresserPressScore(11, "PA", 5)
-    rH = S.schedule(dbH, monday, cfg)
-    _expect(errors, "H preference beats id tiebreak",
-            [(r.press, r.presser) for r in rH.rows], [("PA", 11), ("PB", 10)])
+    # --- K: TWO PARTS -> TWO PRESSES + presser staffing (Step 66 under Step 78). Two
+    #        parts each on their own press (X prefers PA, Y prefers PB), so two presses
+    #        run concurrently — the setup the presser pass staffs.
+    kparts = [("X", 10.0, 0.0), ("Y", 10.0, 0.0)]
+    korders = [("O1", "X", 40, 100.0, friday), ("O2", "Y", 40, 100.0, friday)]
+    kprefs = {("X", "PA"): 5, ("Y", "PB"): 5}
+    dbK = build(("PA", "PB"), ((10, 8.0), (11, 8.0)), kparts, korders, partPrefs=kprefs,
+                presserPrefs={(10, "PA"): 5, (11, "PB"): 5})
+    rK = S.schedule(dbK, monday, cfg)
+    _expect(errors, "K two-press rows", _rowTuples(rK), [
+        (monday, 1, "PA", "X", 40.0, 4.0),
+        (monday, 1, "PB", "Y", 40.0, 4.0),
+    ])
+    _expect(errors, "K presser preference",
+            [(r.press, r.presser) for r in rK.rows], [("PA", 10), ("PB", 11)])
+
+    # All-neutral presser prefs -> lowest employeeId onto the alphabetically-first
+    # running press.
+    dbKn = build(("PA", "PB"), ((10, 8.0), (11, 8.0)), kparts, korders, partPrefs=kprefs)
+    rKn = S.schedule(dbKn, monday, cfg)
+    _expect(errors, "K neutral presser tiebreak",
+            [(r.press, r.presser) for r in rKn.rows], [("PA", 10), ("PB", 11)])
+
+    # A strong presser preference overrides the tiebreak: 11 prefers PA, so 11 takes
+    # PA and 10 is left with PB.
+    dbKh = build(("PA", "PB"), ((10, 8.0), (11, 8.0)), kparts, korders, partPrefs=kprefs,
+                 presserPrefs={(11, "PA"): 5})
+    rKh = S.schedule(dbKh, monday, cfg)
+    _expect(errors, "K preference beats id tiebreak",
+            [(r.press, r.presser) for r in rKh.rows], [("PA", 11), ("PB", 10)])
 
     # --- Determinism: identical (db, today, config) -> identical result.
     _expect(errors, "deterministic", S.schedule(dbA, monday, cfg), rA)
@@ -499,6 +567,19 @@ def scheduling_scheduler_fuzz() -> list[str]:
             cap = S.capacityHours(db, shift, d)
             if hours > cap + 1e-6:
                 errors.append(f"over capacity at {d} shift={shift}: {hours} > {cap}")
+
+        # Step 78 die constraint: a part runs on at most one press within a
+        # (date, shift) — a part never appears on two different presses the same
+        # shift-day (one die, one press at a time). The machine-checkable statement of
+        # the whole feature.
+        partPressByShiftDay: dict[tuple, dict[str, str]] = {}
+        for r in result.rows:
+            key = (r.date, r.shift)
+            pressOf = partPressByShiftDay.setdefault(key, {})
+            if r.part in pressOf and pressOf[r.part] != r.press:
+                errors.append(f"part {r.part} on two presses ({pressOf[r.part]}, {r.press}) "
+                              f"on {r.date} shift={r.shift} — die constraint violated")
+            pressOf[r.part] = r.press
 
         # Every eligible order is accounted for: it has scheduled rows or a flag
         # (never silently dropped, §4). Build the eligible set the way the scheduler does.
