@@ -628,6 +628,142 @@ def schedule_report() -> list[str]:
     return errors
 
 
+def order_status_report() -> list[str]:
+    """Step 77 (§13.47): render the Orders / Order Status PDF report.
+
+    Builds a tiny fuzz DB with just what the report reads (parts, clients, orders,
+    order statuses — the report never touches the scheduler), then renders across the
+    filter matrix (all / open / closed, a specific client, a specific part, details
+    off/on, a narrow range) plus the empty-DB "no orders match" path. Also asserts the
+    pure filter logic (``_filterOrders``): a wide range covers every order, open +
+    closed partition the set, and a client filter is a correct non-empty subset.
+    Success is generation without exception, a non-empty file, and %PDF- magic.
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from reportlab.lib.pagesizes import letter, landscape
+    from app import MainWindow
+    from report import PDFReport
+    from report.sales import ORDER_STATUS_OPEN, ORDER_STATUS_CLOSED, ORDER_STATUS_ALL
+    import fuzz_db as F
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPaths: list[str] = []
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        def _renderCheck(name, fn, pageSize=None):
+            tmpPdf = tempfile.NamedTemporaryFile(suffix=f"-{name}.pdf", delete=False)
+            tmpPdf.close()
+            pdfPaths.append(tmpPdf.name)
+            try:
+                pdf = (PDFReport(w.db, tmpPdf.name, pageSize=pageSize) if pageSize is not None
+                       else PDFReport(w.db, tmpPdf.name))
+                fn(pdf)
+            except Exception as e:
+                errors.append(f"report {name} raised: {e!r}")
+                return
+            if not os.path.exists(tmpPdf.name) or os.path.getsize(tmpPdf.name) == 0:
+                errors.append(f"report {name} produced empty/missing file")
+                return
+            with open(tmpPdf.name, "rb") as f:
+                if f.read(5) != b"%PDF-":
+                    errors.append(f"report {name} lacks %PDF- magic")
+
+        wideLo = datetime.date(2000, 1, 1)
+        wideHi = datetime.date(2100, 1, 1)
+
+        # Scenario A: empty DB -> the "No orders match the selected filters." path.
+        _renderCheck("orders-empty", lambda p: p.orderStatusReport(wideLo, wideHi))
+
+        # --- populate a tiny fuzz DB (just what the report reads) ---
+        rng = random.Random(1)
+        cfg = F.SCALES["tiny"]
+        today = datetime.date(2026, 6, 25)
+        db = w.db
+        materialNames = F.populateMaterials(db, rng, cfg["materials"])
+        mixtureNames = F.populateMixtures(db, rng, cfg["mixtures"], materialNames)
+        F.populatePackaging(db, rng, cfg["packaging"])
+        packagingByKind = {k: [] for k in F.PACKAGING_POOL}
+        for pkgName in db.packaging:
+            packagingByKind[db.packaging[pkgName].kind].append(pkgName)
+        partNames = F.populateParts(db, rng, cfg["parts"], mixtureNames, packagingByKind)
+        clientNames = F.populateClients(db, rng, cfg["clients"])
+        orderNums = F.populateOrders(db, rng, clientNames, partNames, cfg["orders"], today)
+        F.populateOrderStatus(db, rng, orderNums, today)
+        if len(db.orders) == 0:
+            errors.append("expected fuzz seed to populate orders, got 0")
+            return errors
+
+        # --- pure filter-logic assertions on the mixin (no PDF parsing) ---
+        probePdf = tempfile.NamedTemporaryFile(suffix="-probe.pdf", delete=False)
+        probePdf.close()
+        pdfPaths.append(probePdf.name)
+        probe = PDFReport(db, probePdf.name)
+        allOrders = probe._filterOrders(wideLo, wideHi, ORDER_STATUS_ALL, None, None)
+        if len(allOrders) != len(db.orders):
+            errors.append(f"wide range should cover all orders: got {len(allOrders)} of {len(db.orders)}")
+        openOrders = probe._filterOrders(wideLo, wideHi, ORDER_STATUS_OPEN, None, None)
+        closedOrders = probe._filterOrders(wideLo, wideHi, ORDER_STATUS_CLOSED, None, None)
+        if len(openOrders) + len(closedOrders) != len(allOrders):
+            errors.append(f"open ({len(openOrders)}) + closed ({len(closedOrders)}) "
+                          f"should partition all ({len(allOrders)})")
+        someClient = next(iter(db.orders.values())).client
+        clientOrders = probe._filterOrders(wideLo, wideHi, ORDER_STATUS_ALL, someClient, None)
+        if not clientOrders or any(o.client != someClient for o in clientOrders):
+            errors.append(f"client filter {someClient!r} wrong: {[o.client for o in clientOrders]}")
+        somePart = next(iter(db.orders.values())).part
+
+        # --- render the filter matrix ---
+        reports = [
+            ("orders-all", lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_ALL)),
+            ("orders-all-details",
+             lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_ALL, showDetails=True)),
+            ("orders-open", lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_OPEN)),
+            ("orders-closed",
+             lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_CLOSED, showDetails=True)),
+            ("orders-client",
+             lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_ALL, client=someClient)),
+            ("orders-part",
+             lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_ALL, part=somePart,
+                                           showDetails=True)),
+            # A narrow past range: only undated orders (if any) survive -> exercises the
+            # near-empty path with a populated DB.
+            ("orders-narrow",
+             lambda p: p.orderStatusReport(datetime.date(1999, 1, 1), datetime.date(1999, 1, 2))),
+        ]
+        for name, fn in reports:
+            _renderCheck(name, fn)
+        # The widest variant in the orientation the window actually uses (Step 77):
+        # landscape exercises PDFReportCore's pageSize plumbing + the wide layout.
+        _renderCheck(
+            "orders-details-landscape",
+            lambda p: p.orderStatusReport(wideLo, wideHi, ORDER_STATUS_ALL, showDetails=True),
+            pageSize=landscape(letter))
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        for p in pdfPaths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    return errors
+
+
 def product_employee_reports() -> list[str]:
     """Step 35: render every product + employee report against a tiny fuzz DB.
 

@@ -2006,6 +2006,112 @@ def order_status_trucks_entry() -> list[str]:
     return errors
 
 
+def order_report_window_generates() -> list[str]:
+    """Step 77 (§13.47): OrderReportWindow generates the orders PDF report.
+
+    Seeds tiny fuzz data, opens the window (the same one the Report button on both the
+    Orders and Order Status tabs opens), and asserts:
+      - the client / part combos lead with an "All" sentinel (userData None) and carry
+        every client / part;
+      - the default due-date range spans the dated orders;
+      - Generate writes a real %PDF- file (``startfile`` stubbed so nothing opens),
+        with details on and a specific status filter;
+      - a From-after-To range is rejected (error path, no export).
+    """
+    import datetime
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import order_report_window as ORW
+    from report.sales import ORDER_STATUS_CLOSED
+    from utils import toQDate, fromQDate
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    restore = _silenceMessageBoxes()
+    exported: list[str] = []
+    origStartfile = ORW.startfile
+    ORW.startfile = lambda path: exported.append(path)  # type: ignore[assignment]
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+        _seedTinyFuzzDB(w)
+        w._refreshAllTabs()
+        if len(w.db.orders) == 0:
+            errors.append("expected fuzz seed to populate orders, got 0")
+            return errors
+
+        win = ORW.OrderReportWindow(w)
+
+        # Client / part combos: an "All" sentinel (None) first, then every name.
+        if win.clientBox.itemData(0) is not None:
+            errors.append("client combo[0] should be the All sentinel (None)")
+        if win.clientBox.count() != len(w.db.clients) + 1:
+            errors.append(f"client combo has {win.clientBox.count()} entries, "
+                          f"want {len(w.db.clients) + 1}")
+        if win.partBox.itemData(0) is not None:
+            errors.append("part combo[0] should be the All sentinel (None)")
+        if win.partBox.count() != len(w.db.parts) + 1:
+            errors.append(f"part combo has {win.partBox.count()} entries, "
+                          f"want {len(w.db.parts) + 1}")
+
+        # Default due-date range spans the dated orders.
+        dues = [o.dueDate for o in w.db.orders.values() if o.dueDate is not None]
+        if dues:
+            if fromQDate(win.startDateEdit.date()) != min(dues):
+                errors.append("default From != earliest due date")
+            if fromQDate(win.endDateEdit.date()) != max(dues):
+                errors.append("default To != latest due date")
+
+        # Generate: details on + a specific status -> a real %PDF- (startfile stubbed).
+        win.detailsCheck.setChecked(True)
+        idx = win.statusBox.findData(ORDER_STATUS_CLOSED)
+        if idx >= 0:
+            win.statusBox.setCurrentIndex(idx)
+        before = len(exported)
+        win.generate()
+        if len(exported) != before + 1:
+            errors.append(f"Generate did not call startfile (exported={exported})")
+        else:
+            path = exported[-1]
+            if not os.path.exists(path) or os.path.getsize(path) == 0:
+                errors.append("Generate produced empty/missing PDF")
+            else:
+                with open(path, "rb") as f:
+                    if f.read(5) != b"%PDF-":
+                        errors.append("Generated PDF lacks %PDF- magic")
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+
+        # From-after-To is rejected: a fresh window (generate() closes on success),
+        # an inverted range, and no new export.
+        win2 = ORW.OrderReportWindow(w)
+        win2.startDateEdit.setDate(toQDate(datetime.date(2100, 1, 1)))
+        win2.endDateEdit.setDate(toQDate(datetime.date(2000, 1, 1)))
+        before = len(exported)
+        win2.generate()
+        if len(exported) != before:
+            errors.append("From-after-To should be rejected (no export)")
+    finally:
+        ORW.startfile = origStartfile  # type: ignore[assignment]
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def pressers_tab_crud() -> list[str]:
     """Step 44: PressersTab CRUD + save/reload roundtrip + employee-delete cascade.
 

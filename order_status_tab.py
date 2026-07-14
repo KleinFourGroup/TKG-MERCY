@@ -38,12 +38,15 @@ class OrderStatusTab(QWidget):
 
         edit = QPushButton("Edit")
         edit.clicked.connect(self.openEdits)
+        report = QPushButton("Report")
+        report.clicked.connect(self.openReport)
 
         barLayout = QHBoxLayout()
         barLayout.addWidget(QLabel("Sort by:"))
         barLayout.addWidget(self.sortCombo)
         barLayout.addWidget(self.selectLabel)
         barLayout.addWidget(edit)
+        barLayout.addWidget(report)
 
         layout = QVBoxLayout()
         layout.addWidget(self.table)
@@ -91,6 +94,12 @@ class OrderStatusTab(QWidget):
     def changeSort(self):
         self.sortMode = self.sortCombo.currentData()
         self.refreshTable()
+
+    def openReport(self):
+        # Orders / Order Status PDF report (Step 77). Linked from both tabs; the
+        # window is import-deferred to keep the app -> tab import chain acyclic.
+        from order_report_window import OrderReportWindow
+        OrderReportWindow(self.mainApp)
 
     def refreshTable(self):
         self.genTableData()

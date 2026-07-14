@@ -11,6 +11,7 @@ from .products import ProductReportsMixin
 from .employees import EmployeeReportsMixin
 from .production import ProductionReportsMixin
 from .scheduling import ScheduleReportsMixin
+from .sales import OrderReportsMixin
 
 
 class PDFReport(
@@ -18,6 +19,7 @@ class PDFReport(
     EmployeeReportsMixin,
     ProductionReportsMixin,
     ScheduleReportsMixin,
+    OrderReportsMixin,
     PDFReportCore,
 ):
     pass

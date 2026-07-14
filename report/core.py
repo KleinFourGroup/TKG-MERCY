@@ -12,19 +12,24 @@ class PDFReportCore:
     # PDFReport last so the per-domain mixins can lean on these without having
     # to redefine them. See report/__init__.py for the composition.
 
-    def __init__(self, db: Database, path: str, margin: float = inch) -> None:
+    def __init__(self, db: Database, path: str, margin: float = inch,
+                 pageSize: tuple[float, float] = letter) -> None:
         self.db = db
-        self.pdf = canvas.Canvas(path, pagesize=letter)
+        # Page size defaults to portrait letter — every existing report is unchanged.
+        # A wide report (the Step 77 orders report) passes landscape(letter) so its
+        # many columns have room; calculateMargins derives all geometry from this.
+        self.pageSize = pageSize
+        self.pdf = canvas.Canvas(path, pagesize=pageSize)
         self.lineSpace = 1.3
         self.calculateMargins(margin)
         self.setFont("Times-Roman", 12)
 
     def calculateMargins(self, margin: float):
         self.margin = margin
-        self.top = letter[1] - self.margin
+        self.top = self.pageSize[1] - self.margin
         self.bottom = self.margin
         self.left = self.margin
-        self.right = letter[0] - self.margin
+        self.right = self.pageSize[0] - self.margin
 
     def setupPage(self):
         self.lastLine = self.top
