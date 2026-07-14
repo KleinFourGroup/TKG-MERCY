@@ -1892,13 +1892,15 @@ def order_status_crud() -> list[str]:
 
 
 def order_status_trucks_entry() -> list[str]:
-    """Step 74b: the "Enter in trucks" toggle on the Order Status snapshot editor.
+    """Step 74b/76: the "Enter in trucks" toggle on the Order Status snapshot editor.
 
     Seeds tiny fuzz data, picks an order, and drives OrderStatusEditWindow's trucks
-    toggle + _readRemaining conversion (stored + displayed always in pieces):
+    toggle + press-field conversion (stored + displayed always in pieces):
       - the toggle blocks (reverts) when the part has no parts-per-truck set;
-      - with a truck size set, engaging the toggle clears + relabels the two fields;
-      - a 2.5-truck entry stores 2.5 * partsPerTruck pieces;
+      - with a truck size set, engaging the toggle clears + relabels the PRESS field
+        only, leaving the ship field untouched and its label in pieces (Step 76);
+      - a 2.5-truck press entry stores 2.5 * partsPerTruck pieces, while ship stays
+        pieces (1 -> 1, not 1 * partsPerTruck) (Step 76);
       - a half-truck of an odd count (=> fractional pieces) is rejected, as is a
         non-0.5-step value;
       - selecting a stored snapshot drops back to pieces mode and prefills pieces.
@@ -1938,26 +1940,33 @@ def order_status_trucks_entry() -> list[str]:
         if editor.trucksCheck.isChecked():
             errors.append("trucks toggle engaged with no parts-per-truck set (should revert)")
 
-        # --- with an even truck size, the toggle engages + clears + relabels ---
+        # --- with an even truck size, the toggle engages + clears/relabels the PRESS
+        #     field only; the ship field + its label are untouched (Step 76) ---
         w.db.setPartTruck(part, 20)
         editor.pressEdit.setText("999")  # stale pieces value that must clear on toggle
+        editor.shipEdit.setText("77")    # ship is always pieces; must NOT be cleared
         editor.trucksCheck.setChecked(True)
         if not editor.trucksCheck.isChecked():
             errors.append("trucks toggle did not engage with a truck size set")
         if editor.pressEdit.text() != "":
-            errors.append(f"toggle should clear fields; pressEdit={editor.pressEdit.text()!r}")
+            errors.append(f"toggle should clear the press field; pressEdit={editor.pressEdit.text()!r}")
         if "trucks" not in editor.pressLabel.text():
-            errors.append(f"toggle should relabel to trucks; label={editor.pressLabel.text()!r}")
+            errors.append(f"toggle should relabel press to trucks; label={editor.pressLabel.text()!r}")
+        if editor.shipEdit.text() != "77":
+            errors.append(f"toggle must not clear the ship field; shipEdit={editor.shipEdit.text()!r}")
+        if "pieces" not in editor.shipLabel.text() or "trucks" in editor.shipLabel.text():
+            errors.append(f"ship label must stay pieces in trucks mode; label={editor.shipLabel.text()!r}")
 
-        # --- 2.5 trucks x 20 = 50 pieces; 1 truck x 20 = 20 pieces (stored in pieces) ---
+        # --- 2.5 trucks x 20 = 50 pieces (press converts); ship stays pieces: 1 -> 1,
+        #     NOT 1 x 20 (Step 76) ---
         d1 = datetime.date.today() - datetime.timedelta(days=205)
         editor.dateEdit.setDate(toQDate(d1))
         editor.pressEdit.setText("2.5")
         editor.shipEdit.setText("1")
         editor.addButton.click()
         got = w.db.orderStatus[orderNum].snapshots.get(d1)
-        if got != (50, 20):
-            errors.append(f"trucks conversion: snapshot[{d1}]={got}, want (50, 20)")
+        if got != (50, 1):
+            errors.append(f"trucks conversion (press only): snapshot[{d1}]={got}, want (50, 1)")
 
         # --- a half-truck of an ODD count is rejected (fractional pieces) ---
         w.db.setPartTruck(part, 15)
@@ -1983,6 +1992,8 @@ def order_status_trucks_entry() -> list[str]:
         if editor.pressEdit.text() != "50" or "pieces" not in editor.pressLabel.text():
             errors.append(f"snapshot prefill: press={editor.pressEdit.text()!r} "
                           f"label={editor.pressLabel.text()!r}, want pieces 50")
+        if editor.shipEdit.text() != "1":
+            errors.append(f"snapshot prefill: ship={editor.shipEdit.text()!r}, want pieces 1")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:

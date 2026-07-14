@@ -125,7 +125,7 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 74a | ✅ Done | Parts-per-truck config: `part_truck` table (db_version 12→13) + **Parts per Truck** in-cell grid tab under Scheduling config — see §13.46 |
 | 74b | ✅ Done | Trucks-mode Order Status entry ("Enter in trucks" checkbox; half-trucks → pieces via `part_truck`, stores/shows pieces; hybrid block) — see §13.46 |
 | 75 | ✅ Done | Harden `db.updatePresser` against a stale original id (crash_fuzz-found; Step 60 class) + deterministic guard — see §13.46 |
-| 76 | 🔲 Planned | Trucks toggle applies to remaining-to-press only; remaining-to-ship is always pieces — see §13.47 |
+| 76 | ✅ Done | Trucks toggle applies to remaining-to-press only; remaining-to-ship is always pieces — see §13.47 |
 | 77 | 🔲 Planned | Orders/Order-Status PDF report + helper window (linked on the Orders + Order Status tabs) — see §13.47 |
 | 78 | 🔲 Planned | One-press-per-part scheduler constraint (die) + die-change-cost seam — see §13.47 |
 
@@ -781,6 +781,8 @@ Fourth post-release feature block from the team (relayed by Matthew, 2026-07-14)
 **Manual UI gates** (standing rule — smoke can't cover combo visibility / rebuild / selection logic / in-cell layout): Step **77**, plus a glance at **76** and **78** (78 is logic-first like Steps 52 / 66, but worth confirming the schedule tab + PDF still render sane rows).
 
 **Scheduler-validation note (Step 78).** The die constraint materially changes throughput for large single-part orders (they can no longer be parallelized), so it feeds directly into the standing §13.45 item "validate the greedy scheduler against real order data" — the re-run against real orders should judge the die constraint + whether a non-zero `dieChangeHours` is warranted. A die-constraint + seam note gets appended to [`prod-sched-algorithm.md`](plan_archive/prod-sched-algorithm.md).
+
+**Step 76 landed 2026-07-14.** The trucks-scope fix — UI-only, [`order_status_tab.py`](order_status_tab.py) `OrderStatusEditWindow`. The "Enter in trucks" checkbox now reinterprets **only** the remaining-to-press field; remaining-to-ship is always pieces (fixed `(pieces)` label, always read as a non-negative `int`, left untouched when the toggle flips). `_readRemaining` → `_readPressRemaining` (press-only; the unset-part block + half-truck / odd-count / fractional-piece rejections all live on the press path now), and `addSnapshot` reads ship directly in pieces. The `order_status_trucks_entry` smoke check was updated — a 1-truck ship input now stores `1` piece (not `1 × partsPerTruck`), plus new assertions that the toggle leaves the ship field + its label alone and that a stored snapshot prefills ship in pieces. **Smoke 66 PASS**; `pyright_baseline` clean. No schema / scheduler / persistence change.
 
 ---
 

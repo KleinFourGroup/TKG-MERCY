@@ -131,21 +131,23 @@ class OrderStatusEditWindow(QWidget):
         self.dateEdit.setDate(toQDate(datetime.date.today()))
         self.pressEdit = QLineEdit()
         self.shipEdit = QLineEdit()
-        # Unit is shown on the field labels and flips with the trucks checkbox (Step
-        # 74b); the fields still store + display pieces, so the labels start in pieces.
+        # The press field's label carries the current input unit and flips with the
+        # trucks checkbox (Step 74b); remaining-to-ship is always in pieces (Step 76),
+        # so its label is fixed. The fields still store + display pieces regardless.
         self.pressLabel = QLabel()
         self.shipLabel = QLabel()
 
         # "Enter in trucks" (Step 74b): a live, unpersisted per-window toggle that
-        # reinterprets the two fields as trucks (half-truck steps) and converts to
-        # pieces via this part's parts-per-truck before storing. Blocked outright when
-        # the part has no truck size (checked at toggle time, below). Everything stays
-        # stored + displayed in pieces.
+        # reinterprets the remaining-to-press field as trucks (half-truck steps) and
+        # converts to pieces via this part's parts-per-truck before storing. Blocked
+        # outright when the part has no truck size (checked at toggle time, below).
+        # Remaining-to-ship is *always* entered in pieces (Step 76) — it never converts.
+        # Everything stays stored + displayed in pieces.
         self.trucksCheck = QCheckBox("Enter in trucks")
         self.trucksCheck.setToolTip(
-            "Interpret the two fields as trucks (in half-truck steps) and convert to "
-            "pieces using this part's parts-per-truck figure. Everything is still "
-            "stored and shown in pieces.")
+            "Interpret the remaining-to-press field as trucks (in half-truck steps) and "
+            "convert to pieces using this part's parts-per-truck figure. Remaining to "
+            "ship is always in pieces. Everything is still stored and shown in pieces.")
         self.trucksCheck.toggled.connect(self.onTrucksToggled)
         self._applyUnitLabels()
 
@@ -254,18 +256,19 @@ class OrderStatusEditWindow(QWidget):
         return warnings
 
     def _applyUnitLabels(self):
-        # The field labels carry the current input unit so the mode is unmistakable
-        # (Step 74b). Storage + display stay in pieces regardless.
+        # The press field's label carries the current input unit so the mode is
+        # unmistakable (Step 74b); remaining-to-ship is always in pieces (Step 76), so
+        # its label is fixed. Storage + display stay in pieces regardless.
         unit = "trucks" if self.trucksCheck.isChecked() else "pieces"
         self.pressLabel.setText(f"Remaining to press ({unit}):")
-        self.shipLabel.setText(f"Remaining to ship ({unit}):")
+        self.shipLabel.setText("Remaining to ship (pieces):")
 
     def onTrucksToggled(self, checked):
         # Block trucks mode outright when the part has no parts-per-truck set — there's
         # nothing to convert with, so revert the checkbox immediately rather than let
         # the user enter trucks that can't be stored (block, don't guess; design call
         # 2026-07-03). The odd-count / fractional-piece case can't be known until a
-        # value is typed, so it's caught at commit in _readRemaining instead.
+        # value is typed, so it's caught at commit in _readPressRemaining instead.
         if checked:
             truck = self.mainApp.db.partTruck.get(self.order.part)
             if truck is None or truck.partsPerTruck is None:
@@ -276,15 +279,16 @@ class OrderStatusEditWindow(QWidget):
                 self.trucksCheck.setChecked(False)
                 self.trucksCheck.blockSignals(False)
                 return
-        # Unit changed (engaged trucks, or reverted to pieces): clear both fields and
-        # relabel so a value typed / prefilled in the old unit can't be misread in the
-        # new one (design call: clear + relabel, don't auto-convert).
+        # Unit changed for the press field only (ship is always pieces, Step 76):
+        # clear + relabel the press field so a value typed / prefilled in the old unit
+        # can't be misread in the new one (design call: clear + relabel, don't
+        # auto-convert). The ship field is untouched.
         self.pressEdit.clear()
-        self.shipEdit.clear()
         self._applyUnitLabels()
 
-    def _readRemaining(self, text, label, errors):
-        # Read one remaining-to-* field as a piece count, honoring the trucks toggle.
+    def _readPressRemaining(self, text, label, errors):
+        # Read the remaining-to-press field as a piece count, honoring the trucks
+        # toggle (Step 76: only the press field converts; ship is always pieces).
         # Pieces mode: a non-negative integer, stored as-is. Trucks mode: a non-negative
         # multiple of 0.5 (half-truck precision) converted to pieces via the part's
         # parts-per-truck; a half-truck of an odd count (=> a fractional piece) is
@@ -314,9 +318,10 @@ class OrderStatusEditWindow(QWidget):
     def addSnapshot(self):
         errors = []
         date = fromQDate(self.dateEdit.date())
-        # Both fields read as pieces regardless of the trucks toggle (converted here).
-        press = self._readRemaining(self.pressEdit.text(), "Remaining to press", errors)
-        ship = self._readRemaining(self.shipEdit.text(), "Remaining to ship", errors)
+        # Remaining-to-press honors the trucks toggle (converted here); remaining-to-ship
+        # is always pieces (Step 76), read as a plain non-negative integer.
+        press = self._readPressRemaining(self.pressEdit.text(), "Remaining to press", errors)
+        ship = int(checkInput(self.shipEdit.text(), int, "nonneg", errors, "Remaining to ship"))
         if len(errors) > 0:
             errorMessage(self, errors)
             return
