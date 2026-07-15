@@ -128,7 +128,9 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 | 76 | ✅ Done | Trucks toggle applies to remaining-to-press only; remaining-to-ship is always pieces — see §13.47 |
 | 77 | ✅ Done | Orders/Order-Status PDF report + helper window (linked on the Orders + Order Status tabs; landscape, value + total) — see §13.47 |
 | 78 | ✅ Done | One-press-per-part scheduler constraint (die) + die-change-cost seam — see §13.47 |
-| 79 | 🔲 Planned | Press current-die state: `Press.currentPart` (part whose die is mounted, None=idle) + Presses-tab entry; db_version 13→14; no scheduler change — see §13.48 |
+| 79 | ✅ Done | Press current-die state: `Press.currentPart` (part whose die is mounted, None=idle); Presses-tab combo + list column; part rename cascade + delete-blocks-on-mounted-die; one-off Presses-tab stale-view fix; db_version 13→14; no scheduler change (data-capture only) — see §13.48 |
+| 80 | 🔲 Planned | Scheduler consumes `Press.currentPart` as the die-placement / hysteresis seed so dies stop hopping between presses; algorithm change, no schema — see §13.49 |
+| 81 | 🔲 Planned | Permanent fix for the stale-view FK-refresh bug family (recommend refresh-on-show); strip the manual per-edit `refreshTable()` fan-outs — see §13.50 |
 
 ### 12.2 Decisions / deviations worth knowing before Step 6+
 
@@ -822,7 +824,47 @@ Follow-up from the Step 78 die constraint (relayed by Matthew, 2026-07-14). Gene
 
 **Migration-version-churn upkeep (Step 79):** db_version 13 → 14 forces updating the hardcoded terminal-version literals + docstrings in [`smoke/migrations.py`](smoke/migrations.py), the `mercy_v4_to_v13_end_to_end` → `_v14_` rename, and registering `mercy_v13_to_v14_migration` in both `smoke/__init__.py` and `smoke/__main__.py`. The new column goes in via the migration + fresh-schema path **only** — never into `UNIFIED_TABLES` (fingerprint frozen at the v4 shape), per [`CONVENTIONS.md`](CONVENTIONS.md).
 
-**Deferred follow-up (NOT Step 79) — the scheduler consumes `Press.currentPart`.** Design + implement how the recorded current die placement seeds `schedule()` so a part starts on the press its die is on (the hysteresis the team wants), then decide the swap / move rules from there. Held deliberately until the data-capture lands and the consumption is designed. Pairs with the standing §13.45 "validate the greedy scheduler against real order data" item — the die-placement seed is exactly the real-world starting state that validation needs.
+**Landed 2026-07-15 (Step 79).** As planned: `Press.currentPart` (2-element get/fromTuple), `setPressCurrentPart` setter, part **rename** cascade in `updatePart`, `presses.current_part TEXT` on the fresh-schema path + additive `_migrateV13ToV14` (db_version 13→14), save `(?, ?)`, the Press-editor "(none)"+parts combo, fuzz population, extended `presses_tab_crud`, new `mercy_v13_to_v14_migration`, and the `mercy_v4_to_v13_end_to_end`→`_v14_` rename. Real-data drill on `Mercy DB 6-1-26.db` (v12): migrated to v14, `presses.current_part` added, 165 parts / 48 employees / 50 materials untouched. Scheduler still unchanged (`scheduling_scheduler*` green).
+
+**Two changes from the original plan (both from Matthew's manual-test pass, 2026-07-15):**
+- **Presses list gains a Current part column** (idle presses read `(none)`) — the die location is daily-tracked, so it needs to be visible at a glance, not only inside each editor (matches the Clients tab showing its value column).
+- **Part delete now *blocks* on a mounted die** instead of the originally-planned cascade-to-`None`. `delPart` returns the mounted-die presses as blockers alongside referencing orders (the Parts tab names them in the error popup); the team clears the press first. Rationale: a silent cascade-to-idle would erase a die location they track by hand — a loud, corruption-free stop is the right failure mode (the §dual-mandate call). The rename cascade is unchanged (rename is non-destructive).
+- **Surfaced a latent stale-view bug** (the standing FK-refresh family — see the four modes in the Step 48/64 notes): a part rename rekeyed `Press.currentPart` in the model but the Presses tab kept painting the old die name, because `PartsEditWindow` didn't refresh it. **One-off patch applied here** (`PartsEditWindow.readData` now calls `pressesTab.refreshTable()`); the permanent, whole-family fix is **Step 81 (§13.50)**.
+
+**Deferred follow-up — now formalized as Step 80 (§13.49):** the scheduler consumes `Press.currentPart` as its die-placement / hysteresis seed. Held until the data-capture (this step) landed; now scheduled.
+
+### 13.49 Scheduler consumes `Press.currentPart` — die-placement hysteresis seed (planned 2026-07-15) — Step 80
+
+The payoff half of the Step 79 data-capture, and the direct answer to the original problem that started §13.48: a part's die "hops" between presses across shift-days / regenerations because the stateless scheduler has no memory of where a die physically ended up. Step 78 gave the scheduler the one-press-per-part constraint (a die is on one press per `(date, shift)`) plus a die-change-cost seam; Step 79 records where each die *is* (`Press.currentPart`). **Step 80 wires the recorded state into `schedule()`** so a part starts pressing on the press its die is already mounted on — the hysteresis the team wants. This is where the standing "don't change the algorithm" call (§13.48) gets deliberately revisited.
+
+**Design calls to settle at the top of the step (nothing here is final — confirm with Matthew):**
+- **Seed, not hard constraint.** When a part has outstanding pressing and some press has `currentPart == part`, the greedy assignment should *prefer* that press. If the die isn't mounted anywhere, assign a press by the existing rules (Step 48 part-press score, then capacity) — that press becomes the part's implied die location for the rest of the run.
+- **Input-only vs. write-back.** Simplest v1: `currentPart` is an *input* the team maintains by hand; the schedule shows the *implied* end-state die locations as report output, and does **not** write `Press.currentPart` back to the DB. (A write-back that "learns" the new placement is a bigger, riskier call — hold it.) Confirm before building.
+- **Die moves / swaps.** When the seed can't be honored (the press is needed for higher-priority work, or capacity forces a move), the die moves — charge the Step 78 die-change-cost seam. Decide the move/swap priority rule (fewest moves? cheapest? respect due dates first?).
+- **Within-run stickiness.** Across shift-days inside one generation, a die stays put unless the algorithm moves it — the per-run analogue of the cross-run hysteresis. Make sure the seed + move rules produce this (no gratuitous hopping).
+
+**Shape of the work (Step 80) — algorithm change, no schema change.**
+- Consume `Press.currentPart` in [`scheduling.py`](scheduling.py) `schedule()` as the die-placement seed; extend the assignment to prefer the mounted press and to account die moves against the Step 78 cost seam.
+- **Smoke:** the `scheduling_scheduler*` checks change from "unchanged" to "asserts hysteresis" — a part whose die is on press P schedules on P when P has capacity; a die moves only when forced, and the move is costed. Add a focused check that seeding `currentPart` changes the assignment the expected way, and a fuzz check that dies don't hop without cause.
+- **Pairs with §13.45** ("validate the greedy scheduler against real order data") — the die-placement seed *is* the real-world starting state that validation needs, so do them together if practical.
+
+**Manual UI / real-data gate:** generate a sample schedule on `Mercy DB 6-1-26.db` with real `currentPart` values entered and eyeball that dies stop hopping — the exact symptom that motivated §13.48.
+
+### 13.50 Permanent fix for the stale-view FK-refresh bug family (planned 2026-07-15) — Step 81
+
+Step 79's manual-test miss (a part rename updated `Press.currentPart` in the model but the Presses tab kept painting the old die name) is the latest instance of a **recurring** bug: the **stale-view** mode of the FK rename/delete family. Every FK relationship added so far (Steps 48, 64, 74a, 79) has required the editing window to *manually* call each dependent tab's `refreshTable()`; forgetting one leaves a stale view. It's fragile hand-wiring that grows O(FK-edges), and Step 79 proved it isn't reliably remembered. Step 79 shipped a **one-off patch** (`PartsEditWindow.readData` → `pressesTab.refreshTable()`); **Step 81 is the systemic fix** so no future step has to remember the fan-out.
+
+Scope note: this targets the **stale-view** mode only. The other three modes in the family have their own established patterns and are *not* in scope here — incomplete db cascade (fixed per-method in `db.updateX`/`delX`), stale-window Update crash (Step 60 guards), stale combo prefill (`getComboBox` tolerance). (See the FK rename/refresh notes carried across Steps 48/60/64.)
+
+**Design options to weigh (confirm with Matthew before building):**
+- **A) Refresh-on-show (recommended).** MERCY shows one tab at a time, so have each tab repaint its table when it becomes visible (`QTabWidget.currentChanged` / a `showEvent` hook). Any view the user switches to self-heals; the entire "forgot to refresh tab Y" class disappears with almost no per-FK wiring. Cheap because only the shown tab refreshes.
+- **B) Central `refreshAllTabs()`.** Every edit-window success path calls one MainWindow method that refreshes every tab. Dead simple, robust, but repaints everything on every edit (fine at MERCY's scale) and still needs one call per edit path.
+- **C) Dependency/observer registry.** Tabs declare what they depend on (parts, presses, …); a mutation broadcasts an invalidation and only dependents refresh. Most precise, most code — likely over-engineered for MERCY.
+- Lean **A**; keep **B** as the low-effort fallback. Either way, once landed, the per-edit `refreshTable()` fan-outs (including Step 79's one-off) can be deleted.
+
+**Shape of the work (Step 81).**
+- Implement the chosen mechanism in [`app.py`](app.py) (the `MainWindow` tab container); strip the now-redundant manual `refreshTable()` fan-outs from the `*_tab.py` edit windows.
+- **Smoke:** a regression that renames/deletes a record and asserts a *dependent* tab is fresh **without** an explicit refresh call in the test — i.e. the mechanism, not hand-wiring, kept it current. Re-verify the Step 79 symptom (part rename → Presses tab shows the new die name) survives the fan-out removal.
 
 ---
 

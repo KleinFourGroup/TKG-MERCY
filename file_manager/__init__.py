@@ -42,7 +42,11 @@ from .import_db import ImportMixin
 #   v13 — Step 74a: `part_truck` table added (one (part PRIMARY KEY, partsPerTruck
 #        INTEGER) row per part with a parts-per-truck figure; missing = unset; feeds
 #        the Step 74b trucks-mode order-status input; additive).
-MERCY_DB_VERSION = 13
+#   v14 — Step 79: `current_part TEXT` column added to `presses` (the part whose die is
+#        mounted on each press, NULL = idle; a part FK for the deferred scheduler
+#        hysteresis seed). First scheduling migration that alters an existing table
+#        rather than adding one; additive (existing rows default NULL).
+MERCY_DB_VERSION = 14
 
 
 class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
@@ -128,6 +132,8 @@ class FileManager(SchemaMixin, MigrateMixin, SaveMixin, LoadMixin, ImportMixin):
                     self._migrateV11ToV12()
                 if dbVersion is not None and dbVersion < 13:
                     self._migrateV12ToV13()
+                if dbVersion is not None and dbVersion < 14:
+                    self._migrateV13ToV14()
                 self.dbFile.commit()
                 return True
 

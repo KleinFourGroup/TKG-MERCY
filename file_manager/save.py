@@ -393,12 +393,12 @@ class SaveMixin:
             except Exception as e:
                 logging.error(f" * Error deleting old entries {deleted}: {repr(e)}")
 
-        # --- Production Scheduling: presses (name-keyed, like packaging) ---
+        # --- Production Scheduling: presses (name-keyed; carries currentPart, Step 79) ---
         logging.info(f"Saving presses to {self.filePath}")
         for name in db.presses:
             vals = db.presses[name].getTuple()
             try:
-                self.dbFile.execute("INSERT OR REPLACE INTO presses VALUES (?)", vals)
+                self.dbFile.execute("INSERT OR REPLACE INTO presses VALUES (?, ?)", vals)
                 logging.info(f" * Saving {vals}")
             except Exception as e:
                 logging.error(f" * Error saving {vals}: {repr(e)}")

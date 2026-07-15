@@ -825,12 +825,20 @@ def presses_tab_crud() -> list[str]:
         name, clicks ``createButton``, and confirms it appears;
       - selects that new press and calls ``deleteSelection`` (the
         confirm dialog is stubbed to Yes), confirming removal;
+      - Step 79: drives the Current-part combo — picks a part, Updates,
+        confirms ``currentPart`` sticks and the combo prefills on reopen;
+        then exercises the part cascades — a part rename (via the real Parts
+        editor) rekeys a press's mounted die *and* repaints the Presses list
+        (the stale-view one-off fix), and a part delete is *blocked* while a
+        press has the die mounted (error, not a silent cascade);
       - saves, reloads into a fresh ``MainWindow``, and confirms the
-        surviving presses roundtrip through SQLite unchanged.
+        surviving presses roundtrip through SQLite unchanged — names *and*
+        currentPart.
     """
     from PySide6.QtWidgets import QApplication
     from app import MainWindow
     from presses_tab import PressEditWindow
+    from records import Part
 
     errors = []
     app = QApplication.instance() or QApplication(sys.argv)
@@ -881,8 +889,64 @@ def presses_tab_crud() -> list[str]:
         if len(w.db.presses) != before - 1:
             errors.append(f"after Delete: count {len(w.db.presses)} != {before - 1}")
 
-        # --- save / reload roundtrip ---
+        # --- Step 79: Current-part combo set + roundtrip through the editor ---
+        pressName = sorted(w.db.presses)[0]
+        partName = sorted(w.db.parts)[0]
+        ed = PressEditWindow(pressName, w)
+        idx = ed.currentPartCombo.findText(partName)
+        if idx < 0:
+            errors.append(f"current-part combo missing part {partName!r}")
+        else:
+            ed.currentPartCombo.setCurrentIndex(idx)
+            ed.updateButton.click()
+            if w.db.presses[pressName].currentPart != partName:
+                errors.append(f"after Update: currentPart={w.db.presses[pressName].currentPart!r}, want {partName!r}")
+        # Reopen: the combo should prefill to the stored mounted die.
+        ed2 = PressEditWindow(pressName, w)
+        if ed2.currentPartCombo.currentText() != partName:
+            errors.append(f"Edit prefill: current-part combo={ed2.currentPartCombo.currentText()!r}, want {partName!r}")
+
+        # --- Step 79: part rename cascades into the press AND refreshes the Presses tab ---
+        # Drive the real Parts editor so the stale-view one-off fix is exercised: the
+        # rename must rekey the press's mounted die (db.updatePart) *and* repaint the
+        # Presses list (PartsEditWindow.readData -> pressesTab.refreshTable).
+        from parts_tab import PartsEditWindow
+        renamedPart = "Renamed Cascade Part"
+        pe = PartsEditWindow(partName, w)
+        pe.nameEdit.setText(renamedPart)
+        pe.updateButton.click()
+        if w.db.presses[pressName].currentPart != renamedPart:
+            errors.append(f"part rename cascade: currentPart={w.db.presses[pressName].currentPart!r}, want {renamedPart!r}")
+        pressRow = next((row for row in w.pressesTab.data if row[0] == pressName), None)
+        if pressRow is None or pressRow[1] != renamedPart:
+            errors.append(f"Presses tab stale after part rename: row={pressRow}, want current part {renamedPart!r}")
+
+        # --- Step 79 amendment: deleting a part with a mounted die is BLOCKED (error, not cascade) ---
+        # A fresh part avoids order refs so the only blocker is the mounted die.
+        freshPart = Part("Cascade Delete Part")
+        w.db.addPart(freshPart)
+        w.db.setPressCurrentPart(pressName, freshPart.name)
+        blockers = w.db.delPart(freshPart.name)
+        if not blockers:
+            errors.append("delPart with a mounted die should be blocked, got no blockers")
+        if freshPart.name not in w.db.parts:
+            errors.append("blocked delPart should NOT delete the part")
+        if w.db.presses[pressName].currentPart != freshPart.name:
+            errors.append(f"blocked delPart changed the die: currentPart={w.db.presses[pressName].currentPart!r}")
+        # Clearing the press unblocks the delete.
+        w.db.setPressCurrentPart(pressName, None)
+        blockers2 = w.db.delPart(freshPart.name)
+        if blockers2:
+            errors.append(f"delPart after clearing the die should succeed, got blockers {blockers2}")
+        if freshPart.name in w.db.parts:
+            errors.append("delPart after clearing the die should delete the part")
+
+        # Leave a valid mounted die on this press so the roundtrip verifies a non-None value.
+        w.db.setPressCurrentPart(pressName, renamedPart)
+
+        # --- save / reload roundtrip (names *and* currentPart) ---
         expected = set(w.db.presses)
+        expectedCurrent = {name: w.db.presses[name].currentPart for name in w.db.presses}
         w.fileManager.saveFile()
         if w.fileManager.dbFile is not None:
             w.fileManager.dbFile.close()
@@ -895,6 +959,9 @@ def presses_tab_crud() -> list[str]:
             got = set(w2.db.presses)
             if got != expected:
                 errors.append(f"presses roundtrip mismatch: expected {sorted(expected)}, got {sorted(got)}")
+            gotCurrent = {name: w2.db.presses[name].currentPart for name in w2.db.presses}
+            if gotCurrent != expectedCurrent:
+                errors.append(f"presses currentPart roundtrip mismatch: expected {expectedCurrent}, got {gotCurrent}")
     finally:
         restore()
         if w is not None and w.fileManager.dbFile is not None:
@@ -1312,10 +1379,14 @@ def part_press_pref_crud() -> list[str]:
         if part in w.db.partPressPref:
             errors.append(f"press delete: {part!r} should have no scores left, still present")
 
-        # --- part delete: its prefs cascade away (clear referencing orders first) ---
+        # --- part delete: its prefs cascade away (clear referencing orders + mounted dies first) ---
         survivor = sorted(w.db.parts)[0]
         for onum in [n for n, o in w.db.orders.items() if o.part == survivor]:
             w.db.delOrder(onum)
+        # A press with this part's die mounted now blocks delete (Step 79), so clear it.
+        for pn, pr in list(w.db.presses.items()):
+            if pr.currentPart == survivor:
+                w.db.setPressCurrentPart(pn, None)
         livePress = sorted(w.db.presses)[0]
         w.db.setPartPressScore(survivor, livePress, 3)
         w.partPressPrefTab.refreshTable()
@@ -1470,9 +1541,13 @@ def part_truck_crud() -> list[str]:
         if not any(r[0] == renamedPart for r in w.partTruckTab.data):
             errors.append("part rename: Parts per Truck grid not refreshed")
 
-        # --- part delete: its figure cascades away (clear referencing orders first) ---
+        # --- part delete: its figure cascades away (clear referencing orders + mounted dies first) ---
         for onum in [n for n, o in w.db.orders.items() if o.part == renamedPart]:
             w.db.delOrder(onum)
+        # A press with this part's die mounted now blocks delete (Step 79), so clear it.
+        for pn, pr in list(w.db.presses.items()):
+            if pr.currentPart == renamedPart:
+                w.db.setPressCurrentPart(pn, None)
         w.partsTab.setSelection([renamedPart])
         w.partsTab.deleteSelection()
         if renamedPart in w.db.parts:

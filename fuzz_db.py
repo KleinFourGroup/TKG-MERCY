@@ -502,9 +502,15 @@ def populateProduction(db, rng, idNums, partNames, mixtureNames, days, today):
 # ---- population: Production Scheduling side ----------------------------------
 
 def populatePresses(db, rng, n):
+    # Some presses carry a mounted die (currentPart), some sit idle (None) — Step 79.
+    # Parts are populated before presses in every caller, so read the live part names
+    # off db; with no parts yet, every press just stays idle. ~2/3 get a die so the
+    # report / migration stress covers both the set and the None case.
+    partNames = list(db.parts)
     names = pickUnique(rng, PRESS_POOL, n)
     for name in names:
-        db.addPress(Press(name))
+        currentPart = rng.choice(partNames) if partNames and rng.random() < 0.66 else None
+        db.addPress(Press(name, currentPart))
     return names
 
 

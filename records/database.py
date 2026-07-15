@@ -95,6 +95,12 @@ class Database:
                 truck = self.partTruck.pop(entry)
                 truck.part = name
                 self.partTruck[name] = truck
+            # A press's mounted die is a part FK (Step 79), so a part rename rekeys
+            # any press whose currentPart points at the old name — the same
+            # follow-the-part rule as the order/pref/truck cascades above.
+            for press in self.presses.values():
+                if press.currentPart == entry:
+                    press.currentPart = name
 
     def addPart(self, part: Part):
         if part.name in self.parts:
@@ -105,21 +111,30 @@ class Database:
     def delPart(self, name):
         if name not in self.parts:
             raise RuntimeError('name not in self.parts')
-        # Refuse to delete a part an order still references (block-on-delete, like
-        # delPackaging — Step 47). Production / inventory references intentionally
-        # do NOT block; those historical records are meant to survive. Returns the
-        # referencing order numbers (empty list = nothing referenced it, deleted).
-        usedIn = [num for num, order in self.orders.items() if order.part == name]
-        if len(usedIn) == 0:
+        # Block-on-delete when anything live still references the part (like
+        # delPackaging — Step 47). Two kinds of blocker: an order needs its part, and
+        # (Step 79 amendment) a press whose die is *currently mounted* for this part —
+        # deleting would silently unmount a die the team tracks daily, so refuse and
+        # make them clear the press first (a loud, corruption-free stop, not a quiet
+        # cascade-to-idle). Production / inventory references intentionally do NOT
+        # block; those historical records are meant to survive. Config references
+        # (partPressPref, partTruck) also don't block — they cascade-drop below.
+        # Returns human-readable blocker strings (empty list = nothing referenced it,
+        # so it was deleted).
+        blockers = [f"order {num}" for num, order in self.orders.items() if order.part == name]
+        blockers += [f"press {pressName} (die mounted)"
+                     for pressName, press in self.presses.items() if press.currentPart == name]
+        if len(blockers) == 0:
             del self.parts[name]
-            # Part-press preferences are config tied to a live part (unlike orders,
-            # which block), so cascade-drop them when the part is deleted (Step 48) —
-            # the same config-cascades-but-history-blocks split as delEmployee/pressers.
+            # Part-press preferences are config tied to a live part (unlike orders /
+            # presses, which block), so cascade-drop them when the part is deleted
+            # (Step 48) — the config-cascades-but-references-block split shared with
+            # delEmployee/pressers.
             self.partPressPref.pop(name, None)
             # Parts-per-truck is likewise per-part config (Step 74a), so drop it with
             # the part — same config-cascade as the part-press preference above.
             self.partTruck.pop(name, None)
-        return usedIn
+        return blockers
 
     def updatePackaging(self, entry, name):
         # Step 60: no-op if the original is gone (stale window) so the rekey can't KeyError.
@@ -437,6 +452,18 @@ class Database:
             presserPref.setScore(name, None)
             if not presserPref.scores:
                 del self.presserPressPref[empId]
+
+    def setPressCurrentPart(self, press, part):
+        # Set or clear the part whose die is currently mounted on a press (Step 79).
+        # `part` is a part name (FK -> parts) or None to clear the press to idle (no
+        # die). The press must already exist — presses are created / deleted from
+        # their own tab, so there's no add/del here; the Press editor sets the mounted
+        # die through this. A no-op if the press is gone (stale edit window), mirroring
+        # the guarded rekeys elsewhere. The stored part name isn't validated here: the
+        # editor combo only offers live parts, a part rename follows via updatePart, and
+        # a part delete is blocked (delPart) while a press has the die mounted.
+        if press in self.presses:
+            self.presses[press].currentPart = part
 
     # ---- Production Scheduling: part-press preference ------------------------------------
 

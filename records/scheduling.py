@@ -15,17 +15,29 @@ class Press:
     # A press on the shop floor, keyed by its unique name (spec §3.3). A flat
     # reference record: nothing is computed from a Press, so it carries no `db`
     # back-reference — it's just a name the scheduler assigns pressing work to.
-    def __init__(self, name) -> None:
+    #
+    # `currentPart` (Step 79, MERGE_PLAN §13.48) is the part whose die is physically
+    # mounted on the press right now, or None when the press is idle / carries no die
+    # (the default). It's a part FK (-> parts) kept current by the team as a data-entry
+    # habit; a part rename rekeys it (db.updatePart), and a part delete is *blocked*
+    # while the die is mounted (db.delPart returns it as a blocker — the team clears the
+    # press first rather than have a tracked die silently vanish). It's the recorded die-placement
+    # state the scheduler will later consume as its hysteresis starting point — a press
+    # mounts one die at a time, so press -> part is a natural 1:1 field. NOT consumed by
+    # schedule() yet: this step is the data-capture layer only.
+    def __init__(self, name, currentPart=None) -> None:
         self.name = name
+        self.currentPart = currentPart
 
     def getTuple(self):
-        return (self.name,)
+        return (self.name, self.currentPart)
 
     def fromTuple(self, values):
         self.name = values[0]
+        self.currentPart = values[1]
 
     def __str__(self) -> str:
-        return "({})".format(self.name)
+        return "({}, {})".format(self.name, self.currentPart)
 
 
 class Presser:

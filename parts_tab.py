@@ -106,8 +106,8 @@ class PartsTab(QWidget):
             confirm = QMessageBox.question(self, f"Delete {part}?", f"Are you sure you want to delete {part}?")
 
             if confirm == QMessageBox.StandardButton.Yes:
-                usedIn = self.mainApp.db.delPart(part)
-                if len(usedIn) == 0:
+                blockers = self.mainApp.db.delPart(part)
+                if len(blockers) == 0:
                     self.refreshTable()
                     # delPart cascade-drops the part's press preferences (Step 48),
                     # so refresh that table to drop the now-deleted part's row.
@@ -117,7 +117,9 @@ class PartsTab(QWidget):
                     self.mainApp.partTruckTab.refreshTable()
                     QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
                 else:
-                    errorMessage(self.mainApp, [f"{part} is used in order {item}!" for item in usedIn])
+                    # Orders and mounted-die presses block the delete (Step 79 amendment);
+                    # name each blocker so the user knows what to clear first.
+                    errorMessage(self.mainApp, [f"Cannot delete {part}: still referenced by {b}." for b in blockers])
 
     def reportSales(self):
         path = tempReportPath("sales")
@@ -370,6 +372,11 @@ class PartsEditWindow(QWidget):
             # Parts per truck is keyed by part name too (Step 74a): a new part shows
             # as a blank row and a rename rekeys its value, so refresh that grid too.
             self.mainApp.partTruckTab.refreshTable()
+            # A press's mounted die is a part FK (Step 79): db.updatePart rekeys any
+            # press's currentPart on rename, so the Presses list would otherwise show
+            # the stale die name. Refresh it too. (One-off patch of the stale-view FK
+            # refresh bug family; Step 81 is the permanent fix — MERGE_PLAN §13.50.)
+            self.mainApp.pressesTab.refreshTable()
             res = True
         else:
             errorMessage(self, errors)

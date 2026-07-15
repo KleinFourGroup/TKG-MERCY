@@ -4,8 +4,13 @@ from table import DBTable
 from app import MainWindow
 from records import Press
 from error import errorMessage
-from utils import centerOnScreen
+from utils import centerOnScreen, getComboBox
 import logging
+
+# The "no die mounted / idle" option in the current-part combo, and how an idle
+# press reads in the list (Step 79). Distinct from a real part name so a blank
+# cell can't be mistaken for missing data.
+NO_PART_LABEL = "(none)"
 
 
 class PressesTab(QWidget):
@@ -42,8 +47,10 @@ class PressesTab(QWidget):
 
     def genTableData(self):
         db = self.mainApp.db
-        self.headers = ["Press"]
-        self.data = [[name] for name in db.presses]
+        self.headers = ["Press", "Current part"]
+        # Current part is the mounted die (Step 79); an idle press (currentPart None)
+        # shows NO_PART_LABEL so the daily-tracked die location is visible at a glance.
+        self.data = [[name, db.presses[name].currentPart or NO_PART_LABEL] for name in db.presses]
         self.data.sort(key=lambda row: row[0])
 
     def setSelection(self, selection):
@@ -98,12 +105,23 @@ class PressEditWindow(QWidget):
         nameLayout.addWidget(QLabel("Press name:"))
         nameLayout.addWidget(self.nameEdit)
 
+        # Current part = the die mounted on this press (Step 79). A "(none)" idle
+        # option plus every part name (sorted); prefilled from the record on edit and
+        # roundtripped through db.setPressCurrentPart. getComboBox tolerates a stale
+        # stored value (Step 61) by appending it so it stays visible.
+        parts = [NO_PART_LABEL] + sorted(self.mainApp.db.parts)
+        self.currentPartCombo = getComboBox(parts, item.currentPart if item is not None else None)
+        currentPartLayout = QHBoxLayout()
+        currentPartLayout.addWidget(QLabel("Current part (mounted die):"))
+        currentPartLayout.addWidget(self.currentPartCombo)
+
         buttonLayout = QHBoxLayout()
         buttonLayout.addWidget(self.updateButton)
         buttonLayout.addWidget(self.createButton)
 
         layout = QVBoxLayout()
         layout.addLayout(nameLayout)
+        layout.addLayout(currentPartLayout)
         layout.addLayout(buttonLayout)
         self.setLayout(layout)
 
@@ -136,6 +154,12 @@ class PressEditWindow(QWidget):
                 if self.item is None:
                     raise RuntimeError('self.item is None')
                 self.mainApp.db.updatePress(self.item.name, name)
+            # Roundtrip the mounted die through the setter, keyed by the committed
+            # press name (robust to the New-window self.item reset below). "(none)"
+            # clears the press to idle.
+            selectedPart = self.currentPartCombo.currentText()
+            part = None if selectedPart == NO_PART_LABEL else selectedPart
+            self.mainApp.db.setPressCurrentPart(name, part)
             if isNone:
                 self.item = None
             self.mainApp.pressesTab.refreshTable()

@@ -79,7 +79,7 @@ class SchemaMixin:
         # All additive — CREATE TABLE IF NOT EXISTS — so the chain replays cleanly.
         if self.dbFile is None:
             raise RuntimeError('self.dbFile is None')
-        self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY)")
+        self.dbFile.execute("CREATE TABLE IF NOT EXISTS presses(name PRIMARY KEY, current_part TEXT)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS pressers(employeeId PRIMARY KEY, hoursPerShift REAL)")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS shift_workweek(shift INTEGER, weekday INTEGER, UNIQUE(shift, weekday))")
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_press_pref(part, press, score INTEGER, UNIQUE(part, press))")

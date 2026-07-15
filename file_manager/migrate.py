@@ -333,3 +333,19 @@ class MigrateMixin:
         self.dbFile.execute("CREATE TABLE IF NOT EXISTS part_truck(part PRIMARY KEY, partsPerTruck INTEGER)")
         self._setDbVersion(13)
         logging.info(" --> v12->v13 migration complete")
+
+    def _migrateV13ToV14(self):
+        # Production Scheduling (Step 79): add the nullable `current_part` column to
+        # the `presses` table — the part whose die is currently mounted on each press,
+        # NULL = idle (no die). Unlike v4->v5 .. v12->v13 (which each add a whole
+        # table), this modifies an existing table, so it follows v3->v4's ADD COLUMN
+        # shape: PRAGMA-guarded so a replay is idempotent. Purely additive — existing
+        # rows get NULL by default — so no data is touched and no backup is needed.
+        if self.dbFile is None:
+            raise RuntimeError('self.dbFile is None')
+        logging.info(" --> Running v13->v14 migration: add presses.current_part")
+        cols = [row[1] for row in self.dbFile.execute("PRAGMA table_info(presses)").fetchall()]
+        if 'current_part' not in cols:
+            self.dbFile.execute("ALTER TABLE presses ADD COLUMN current_part TEXT")
+        self._setDbVersion(14)
+        logging.info(" --> v13->v14 migration complete")
