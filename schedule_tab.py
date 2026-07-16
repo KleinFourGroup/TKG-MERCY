@@ -13,6 +13,7 @@ from pressers_tab import _presserLabel
 from scheduling import (
     schedule, ScheduleConfig, ScheduleResult, MAX_HORIZON_DAYS,
     filterSchedule, groupScheduleRows, scheduleGroupHeading, scheduleFilterDescription,
+    formatPressHours,
     LATE, INFEASIBLE_NO_CAPACITY, INFEASIBLE_NO_RATE,
     WARN_FALLBACK_RATE, WARN_MISSING_FIRESCRAP,
 )
@@ -31,9 +32,9 @@ _FLAG_LABEL = {
 
 def _flagDetail(flag) -> str:
     if flag.kind == LATE:
-        return f"{flag.daysLate} day(s) late; {flag.piecesShort:g} pcs short at deadline"
+        return f"{flag.daysLate} day(s) late; {flag.piecesShort:,} pcs short at deadline"
     if flag.kind == INFEASIBLE_NO_CAPACITY:
-        return f"{flag.shortHours:g} press-hr / {flag.piecesShort:g} pcs unplaced by horizon"
+        return f"{flag.shortHours:g} press-hr / {flag.piecesShort:,} pcs unplaced by horizon"
     if flag.kind == INFEASIBLE_NO_RATE:
         return "no pressing history and no Part.pressing rate"
     return ""
@@ -398,7 +399,7 @@ class ScheduleTab(QWidget):
             heading.setFont(f)
             self.groupsLayout.insertWidget(insertAt, heading)
             insertAt += 1
-            data = [[r.press, r.part, f"{r.quantity:g}", f"{r.hours:g}",
+            data = [[r.press, r.part, f"{r.quantity:,}", formatPressHours(r.hours),
                      _presserCell(self.mainApp.db, r.presser)] for r in grp]
             table = self._makeGroupTable(data)
             self.groupsLayout.insertWidget(insertAt, table)

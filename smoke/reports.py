@@ -570,13 +570,13 @@ def schedule_report() -> list[str]:
         syntheticResult = S.ScheduleResult(
             d,
             rows=[
-                S.ScheduleRow(d, 1, "Press1", "PartA", 80.0, 8.0),
-                S.ScheduleRow(d, 2, "Press2", "PartB", 40.0, 4.0),
+                S.ScheduleRow(d, 1, "Press1", "PartA", 80, 8.0),
+                S.ScheduleRow(d, 2, "Press2", "PartB", 40, 4.0),
             ],
             flags=[
-                S.OrderFlag("O1", "PartA", S.LATE, daysLate=2, piecesShort=40.0),
+                S.OrderFlag("O1", "PartA", S.LATE, daysLate=2, piecesShort=40),
                 S.OrderFlag("O2", "PartC", S.INFEASIBLE_NO_CAPACITY,
-                            piecesShort=100.0, shortHours=10.0),
+                            piecesShort=100, shortHours=10.0),
                 S.OrderFlag("O3", "PartD", S.INFEASIBLE_NO_RATE),
             ],
             warnings=[

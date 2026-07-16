@@ -574,6 +574,24 @@ def scheduling_scheduler() -> list[str]:
         (monday, 1, "PB", "Y", 40.0, 4.0),
     ])
 
+    # --- P: DRIFT-FREE WHOLE-PIECE QUANTITIES (Step 82). A rate that doesn't divide the
+    #        shift (126.03 pcs/hr x 8h = 1008.24) would, rounded per row, drop 0.24 pcs every
+    #        single day — drift that never comes back. Quantities are differenced off the
+    #        ROUNDED RUNNING TOTAL instead, so every row is whole AND the rows sum to
+    #        requiredPressed EXACTLY. The 1009 in the middle is the whole point: the accrued
+    #        fraction surfacing as a real piece exactly when it's earned one, which is what
+    #        keeps the total honest. 5000 pcs @ 126.03/hr = 39.67 press-hrs over Mon-Fri.
+    dbP = base(126.03, 0.0, friday, qty=5000)
+    rP = S.schedule(dbP, monday, cfg)
+    quantities = [r.quantity for r in rP.rows]
+    _expect(errors, "P whole-piece quantities off the running total",
+            quantities, [1008, 1008, 1009, 1008, 967])
+    _expect(errors, "P every quantity is an int (never a fraction of a part)",
+            all(isinstance(q, int) for q in quantities), True)
+    _expect(errors, "P rows sum EXACTLY to requiredPressed (zero drift)",
+            sum(quantities), S.requiredPressed(dbP, "P", 5000))
+    _expect(errors, "P no flags", rP.flags, [])
+
     # --- Determinism: identical (db, today, config) -> identical result.
     _expect(errors, "deterministic", S.schedule(dbA, monday, cfg), rA)
     return errors
@@ -639,6 +657,9 @@ def scheduling_scheduler_fuzz() -> list[str]:
                 errors.append(f"row on unknown part: {r.part}")
             if r.hours < 0 or r.quantity < 0:
                 errors.append(f"row with negative hours/qty: {r}")
+            # Step 82: you can't press a fraction of a part.
+            if not isinstance(r.quantity, int):
+                errors.append(f"fractional quantity on row: {r}")
 
         # Placed press-hours per (date, shift) never exceed that shift-day's capacity.
         byShiftDay: dict[tuple, float] = {}
@@ -842,12 +863,12 @@ def scheduling_view_slice() -> list[str]:
     tuesday = monday + datetime.timedelta(days=1)
 
     rows = [
-        S.ScheduleRow(monday, 1, "PA", "P1", 10.0, 1.0, 100),
-        S.ScheduleRow(monday, 1, "PB", "P2", 20.0, 2.0, 101),
-        S.ScheduleRow(monday, 2, "PA", "P1", 30.0, 3.0, 102),
-        S.ScheduleRow(tuesday, 1, "PA", "P3", 40.0, 4.0, 103),
+        S.ScheduleRow(monday, 1, "PA", "P1", 10, 1.0, 100),
+        S.ScheduleRow(monday, 1, "PB", "P2", 20, 2.0, 101),
+        S.ScheduleRow(monday, 2, "PA", "P1", 30, 3.0, 102),
+        S.ScheduleRow(tuesday, 1, "PA", "P3", 40, 4.0, 103),
     ]
-    flag = S.OrderFlag("O1", "P1", S.LATE, daysLate=1, piecesShort=5.0)
+    flag = S.OrderFlag("O1", "P1", S.LATE, daysLate=1, piecesShort=5)
     result = S.ScheduleResult(monday, rows, [flag], [])
 
     # Shift-only filter keeps every shift-1 row across both dates.
@@ -890,4 +911,17 @@ def scheduling_view_slice() -> list[str]:
     _expect(errors, "desc open-ended start",
             S.scheduleFilterDescription(1, None, tuesday),
             f"Shift 1, … to {tuesday.isoformat()}")
+
+    # formatPressHours (Step 82): press-hours as H:MM clock time. The two real values from
+    # Matthew's screenshot, a whole shift, a sub-hour sliver, zero, and — the reason this
+    # isn't int(h) + round(frac*60) — the minute-carry cases that would otherwise print
+    # "7:60" / "0:60".
+    _expect(errors, "fmt 7.6303 -> 7:38", S.formatPressHours(7.6303), "7:38")
+    _expect(errors, "fmt 0.369697 -> 0:22", S.formatPressHours(0.369697), "0:22")
+    _expect(errors, "fmt whole shift 8.0 -> 8:00", S.formatPressHours(8.0), "8:00")
+    _expect(errors, "fmt zero -> 0:00", S.formatPressHours(0.0), "0:00")
+    _expect(errors, "fmt half hour 2.5 -> 2:30", S.formatPressHours(2.5), "2:30")
+    _expect(errors, "fmt carry 7.999 -> 8:00 (not 7:60)", S.formatPressHours(7.999), "8:00")
+    _expect(errors, "fmt carry 0.9999 -> 1:00 (not 0:60)", S.formatPressHours(0.9999), "1:00")
+    _expect(errors, "fmt pads single-digit minutes", S.formatPressHours(3.05), "3:03")
     return errors

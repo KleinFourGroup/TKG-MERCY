@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 from scheduling import (
     LATE, INFEASIBLE_NO_CAPACITY, INFEASIBLE_NO_RATE,
     WARN_FALLBACK_RATE, WARN_MISSING_FIRESCRAP,
-    groupScheduleRows, scheduleGroupHeading,
+    groupScheduleRows, scheduleGroupHeading, formatPressHours,
 )
 
 if TYPE_CHECKING:
@@ -26,9 +26,9 @@ def _flagDetail(flag: "OrderFlag") -> str:
     """The magnitude line for a flagged order (addendum §4): which fields are
     meaningful depends on the kind."""
     if flag.kind == LATE:
-        return f"{flag.daysLate} day(s) late; {flag.piecesShort:g} pcs short at deadline"
+        return f"{flag.daysLate} day(s) late; {flag.piecesShort:,} pcs short at deadline"
     if flag.kind == INFEASIBLE_NO_CAPACITY:
-        return f"{flag.shortHours:g} press-hr / {flag.piecesShort:g} pcs unplaced by horizon"
+        return f"{flag.shortHours:g} press-hr / {flag.piecesShort:,} pcs unplaced by horizon"
     if flag.kind == INFEASIBLE_NO_RATE:
         return "no pressing history and no Part.pressing rate"
     return ""
@@ -208,8 +208,8 @@ class ScheduleReportsMixin:
             (scheduleGroupHeading(key[0], key[1]), [[
                 r.press,
                 r.part,
-                f"{r.quantity:g}",
-                f"{r.hours:g}",
+                f"{r.quantity:,}",
+                formatPressHours(r.hours),
                 _presserCell(self.db, r.presser),
             ] for r in rows])
             for key, rows in groupScheduleRows(result.rows)

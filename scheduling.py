@@ -313,12 +313,18 @@ class ScheduleRow:
     assignable — never in practice, since a running press always has a present
     presser to staff it). Step 66 adds `presser` as a secondary, preference-only
     assignment layered on *after* the press/part decision: it never changes what
-    runs or which presses run, only who stands where."""
+    runs or which presses run, only who stands where.
+
+    `quantity` is a whole number of pieces (Step 82) — you can't press a fraction of a
+    part. It is NOT `round(hours * rate)`: schedule() rounds each part's *running total*
+    and takes the difference, so quantities never drift from the order's required total
+    (see the cumulative-rounding note in schedule()). `hours` stays a float because the
+    placement math needs it; render it with `formatPressHours` for H:MM."""
     date: datetime.date
     shift: int
     press: str
     part: str
-    quantity: float
+    quantity: int
     hours: float
     presser: int | None = None
 
@@ -332,12 +338,18 @@ class OrderFlag:
                                 unplaced as of the deadline).
       INFEASIBLE_NO_CAPACITY -> shortHours / piecesShort the horizon couldn't
                                 absorb.
-      INFEASIBLE_NO_RATE     -> none (the part name is the data gap to fix)."""
+      INFEASIBLE_NO_RATE     -> none (the part name is the data gap to fix).
+
+    `piecesShort` is a whole number of pieces (Step 82), rounded up: a real shortage must
+    never read "0 pcs short" beside "1 day late", and ceil matches requiredPressed's
+    conservative rounding. `shortHours` stays a decimal press-hour aggregate — it's a bulk
+    figure ("76.3 press-hr unplaced by horizon"), not a per-shift clock time, so it is
+    deliberately NOT rendered as H:MM (decision 2026-07-16)."""
     orderNum: str
     part: str
     kind: str
     daysLate: int = 0
-    piecesShort: float = 0.0
+    piecesShort: int = 0
     shortHours: float = 0.0
 
 
@@ -576,6 +588,19 @@ def schedule(db: Database, today: datetime.date | None = None,
 
     rowsByShiftDay: dict[tuple[datetime.date, int], list[ScheduleRow]] = {}
 
+    # Step 82 drift-free quantities: press-hours pressed so far per part, across the whole
+    # walk. A row's whole-piece quantity is the difference between the rounded running
+    # totals before and after it (`_piecesAt`), never round(thisRow's hours * rate) — that
+    # would drop the same fraction every row and drift away from the order's real total.
+    # Because a part's total hours * rate is exactly its integer requiredPressed
+    # (needHours = requiredPressed / rate), the rows sum to that total exactly.
+    pressedHours: dict[str, float] = {}
+
+    def _piecesAt(hours: float, rate: float) -> int:
+        """Whole pieces produced by `hours` of pressing at `rate` — the rounded (nearest)
+        running total the row quantities are differenced from."""
+        return round(hours * rate)
+
     def _placeShiftDay(d: datetime.date, shift: int, budgets: list[float]) -> None:
         """Claim presses for one shift-day. Iterate the outstanding parts in die-priority
         (EDF) order; each part takes ONE press (die constraint), preferring the press its
@@ -652,8 +677,13 @@ def schedule(db: Database, today: datetime.date | None = None,
                 st.remaining -= used
                 st.completion = d
                 hoursLeft -= used
+            # Whole pieces off the running total, so the rows never drift (Step 82).
+            before = pressedHours.get(part, 0.0)
+            after = before + take
+            pressedHours[part] = after
+            quantity = _piecesAt(after, rate) - _piecesAt(before, rate)
             rowsByShiftDay.setdefault((d, shift), []).append(
-                ScheduleRow(d, shift, press, part, take * rate, take))
+                ScheduleRow(d, shift, press, part, quantity, take))
 
     for offset in range(config.maxHorizonDays + 1):
         if all(st.remaining <= EPS for st in active):
@@ -680,13 +710,15 @@ def schedule(db: Database, today: datetime.date | None = None,
 
     for st in active:
         if st.remaining > EPS:
-            # Hit the horizon with demand unplaced — capacity, not just lateness.
+            # Hit the horizon with demand unplaced — capacity, not just lateness. Pieces
+            # round UP (Step 82): a real shortage must never report as 0 pcs.
             flags.append(OrderFlag(st.order.orderNum, st.part, INFEASIBLE_NO_CAPACITY,
-                                   piecesShort=st.remaining * st.rate, shortHours=st.remaining))
+                                   piecesShort=math.ceil(st.remaining * st.rate),
+                                   shortHours=st.remaining))
         elif st.lateRecorded and st.completion is not None and st.deadline is not None:
             flags.append(OrderFlag(st.order.orderNum, st.part, LATE,
                                    daysLate=(st.completion - st.deadline).days,
-                                   piecesShort=st.piecesShort))
+                                   piecesShort=math.ceil(st.piecesShort)))
 
     rows.sort(key=lambda r: (r.date, r.shift, r.press, r.part))
     flags.sort(key=lambda f: (f.kind, f.orderNum))
@@ -738,6 +770,20 @@ def groupScheduleRows(
             groups.append((key, []))
         groups[-1][1].append(r)
     return groups
+
+
+def formatPressHours(hours: float) -> str:
+    """Step 82: press-hours as clock time, `H:MM` — `7.6303 -> '7:38'`, `0.369697 -> '0:22'`,
+    `8.0 -> '8:00'`. A shift-day's press time is a duration the floor reads off a clock, not
+    a decimal to interpret (`7.6303` is nobody's idea of a work order).
+
+    Rounds to the nearest minute and carries, so `7.999 -> '8:00'` rather than the '7:60' a
+    naive `int(h)` + `round(frac*60)` would print. Hours are kept as floats on ScheduleRow
+    (the placement math needs them) — this is display-only, shared by schedule_tab.py and
+    report/scheduling.py so the on-screen table and the PDF read identically. Only for
+    per-row shift-day durations; OrderFlag.shortHours is a bulk aggregate and stays decimal."""
+    totalMinutes = round(hours * 60)
+    return f"{totalMinutes // 60}:{totalMinutes % 60:02d}"
 
 
 def scheduleGroupHeading(d: datetime.date, shift: int) -> str:
