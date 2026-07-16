@@ -292,13 +292,16 @@ class ScheduleConfig:
     # Step 66: which heuristic staffs pressers onto presses (see
     # PRESSER_ASSIGNMENT_PREFERENCE). Other policies are reserved (§10).
     presserAssignment: str = PRESSER_ASSIGNMENT_PREFERENCE
-    # Step 78: press-hours consumed by a die change — the setup time to swap the die
-    # when a press switches to a *different* part within a shift-day (a part runs on
-    # one press at a time — the die constraint — but a press can run several parts in a
-    # shift, each swap costing this). v1 default 0.0 (instantaneous; not enough real
-    # data to price it yet, per the team). A fixed cost is a non-zero literal here
-    # (10 min = 10/60); an empirical cost drops in via empiricalDieChangeHours(). Only
-    # prices the swap — the die constraint itself holds regardless.
+    # Step 78 (consumed by Step 80): press-hours consumed by a die change — the setup
+    # time to mount a part's die onto a press that currently holds a *different* die.
+    # Step 80 threads a cross-shift-day `mount` map (seeded from Press.currentPart) through
+    # schedule(), so this now prices both the within-shift-day swap AND a cross-day die
+    # *move* (a part pressing on a press its die wasn't already on). Mounting onto an empty
+    # press is free (installing, not swapping). v1 default 0.0 (instantaneous; not enough
+    # real data to price it yet, per the team) — at 0.0 the mount map is pure die-placement
+    # hysteresis with zero effect on completion dates; a non-zero cost (10 min = 10/60, or
+    # empiricalDieChangeHours()) makes die moves consume capacity and can shift the schedule.
+    # Only prices the swap/move — the die constraint itself holds regardless.
     dieChangeHours: float = 0.0
 
 
@@ -355,6 +358,26 @@ class ScheduleResult:
     rows: list[ScheduleRow]
     flags: list[OrderFlag]
     warnings: list[ScheduleWarning]
+
+
+@dataclass
+class _OrderState:
+    """Mutable per-order bookkeeping for the Step 80 time-outer horizon walk. The
+    per-order scalars the old per-order loop carried on the stack (remaining press-hours,
+    the deadline-crossing snapshot, the completion date) now live here because the walk
+    advances all orders together in time rather than one order to the horizon and back —
+    the restructure the cross-shift-day `mount` state needs to stay time-consistent.
+    `remaining` is press-hours still to place; `piecesShort` is captured once, the first
+    time the deadline passes with work left; `completion` is the last day this order was
+    pressed (its LATE magnitude anchor)."""
+    order: Order
+    part: str
+    rate: float
+    deadline: datetime.date | None
+    remaining: float
+    lateRecorded: bool = False
+    piecesShort: float = 0.0
+    completion: datetime.date | None = None
 
 
 def outstandingToPress(db: Database, order: Order) -> int:
@@ -416,51 +439,11 @@ def _presserPrefScore(db: Database, employeeId: int, press: str, neutral: int) -
     return score if score is not None else neutral
 
 
-def _assignPresses(db: Database, shift: int, d: datetime.date,
-                   used: list[tuple[int, dict[str, float]]],
-                   rates: dict[str, float]) -> list[ScheduleRow]:
-    """Addendum §3.4 (Step 78 rewrite): assign each used lane its own press and emit
-    the (date, shift, press, part) rows.
-
-    `used` is the shift-day's occupied lanes as (laneIndex, {part -> press-hours}) —
-    the lanes the allocator (`_place`) filled under the die constraint: each part sits
-    on exactly ONE lane per shift-day, never split across presses, though a lane may
-    run several parts (sequentially). Here we only pin lanes to physical presses: each
-    lane goes to a distinct press by its aggregate (hours-weighted) PartPressPref score
-    — highest score first, press name then lane index breaking ties for §5 determinism
-    — so a shift-day runs the presses its parts most prefer. There are always enough
-    presses (used lanes <= min(present, presses) <= presses)."""
-    contentsByLane = {li: contents for li, contents in used}
-    pressNames = sorted(db.presses.keys())
-
-    def laneScore(li: int, press: str) -> float:
-        return sum(hours * _prefScore(db, part, press)
-                   for part, hours in contentsByLane[li].items())
-
-    pairs = sorted(
-        ((li, press) for li in contentsByLane for press in pressNames),
-        key=lambda lp: (-laneScore(lp[0], lp[1]), lp[1], lp[0]))
-    laneToPress: dict[int, str] = {}
-    takenPresses: set[str] = set()
-    for li, press in pairs:
-        if li in laneToPress or press in takenPresses:
-            continue
-        laneToPress[li] = press
-        takenPresses.add(press)
-
-    rows: list[ScheduleRow] = []
-    for li, contents in used:
-        press = laneToPress[li]
-        for part, hours in contents.items():
-            rows.append(ScheduleRow(d, shift, press, part, hours * rates[part], hours))
-    return rows
-
-
 def _assignPressers(db: Database, shift: int, d: datetime.date,
                     rows: list[ScheduleRow], config: ScheduleConfig) -> list[ScheduleRow]:
     """Step 66 (§13.44): staff the present pressers onto the running presses of a
-    shift-day — a pass secondary to the press/part decision `_assignPresses` already
-    made, run once per (date, shift) over that shift-day's rows.
+    shift-day — a pass secondary to the press/part decision the Step 80 walk
+    (`_placeShiftDay`) already made, run once per (date, shift) over that shift-day's rows.
 
     Greedy max-score matching (decision 2026-07-02): score every
     (running press, present presser) pair by the presser's press preference
@@ -499,21 +482,34 @@ def _assignPressers(db: Database, shift: int, d: datetime.date,
 
 def schedule(db: Database, today: datetime.date | None = None,
              config: ScheduleConfig | None = None) -> ScheduleResult:
-    """Addendum §3-§4: the greedy earliest-deadline-first, front-loaded scheduler.
+    """Addendum §3-§4 + Step 80 die-placement hysteresis: the greedy earliest-deadline-
+    first, front-loaded scheduler, now walking time (not one order to the horizon and
+    back) so a cross-shift-day die `mount` map stays consistent.
 
-    Walks eligible orders by urgency (§3.1) and places each one's scrap-inflated
-    press demand into the earliest available shift-day lane (§3.3), front to back
-    from `today`. Under the die constraint (Step 78) a part runs on at most one press
-    per shift-day, so its per-shift-day throughput is capped by a single lane's budget
-    — a big order can't be parallelized across presses and spills to later shift-days.
-    A press may still run several parts across a shift (sequential sharing); each swap
-    to a different part costs `config.dieChangeHours` (0 by default). An order that
-    can't finish before its effective press-by is flagged LATE; one that can't fit even
-    by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part with no usable rate is
-    flagged INFEASIBLE_NO_RATE. Nothing is ever silently dropped (§4 never-drop). A
-    second pass pins each shift-day's occupied lanes to specific presses by part
-    preference (§3.4), then a third staffs the present pressers onto those presses
-    (Step 66, secondary to the press decision). Deterministic given (db, today, config)."""
+    Eligible orders are ordered by urgency (§3.1); the walk marches shift-day by shift-day
+    from `today`, and at each shift-day the outstanding parts (die-priority = EDF order)
+    claim presses. `mount[press]` — the part whose die is physically on a press — is seeded
+    from `Press.currentPart` (the recorded shop-floor state, Step 79) and evolves as the
+    walk mounts and moves dies. A part presses for FREE on the press already holding its
+    die (die-placement hysteresis — a die stays put across shift-days and across
+    regenerations); mounting a die onto a press holding a *different* die costs
+    `config.dieChangeHours` (a die change / move), and an empty press takes its first die
+    free. Urgency can displace an incumbent die (a costed move); mere press *preference*
+    cannot — the mounted die wins ties (decision 2026-07-15). At the default cost 0.0 the
+    mount map is pure hysteresis with no effect on completion dates; a non-zero cost makes
+    die moves consume capacity and shift the schedule.
+
+    Under the die constraint (Step 78) a part still runs on at most one press per shift-day,
+    so a big order can't be parallelized across presses and spills to later shift-days; a
+    press may run several parts across a shift (sequential sharing), each swap costing the
+    die-change price. An order that can't finish before its effective press-by is flagged
+    LATE; one that can't fit even by the horizon is flagged INFEASIBLE_NO_CAPACITY; a part
+    with no usable rate is flagged INFEASIBLE_NO_RATE. Nothing is ever silently dropped
+    (§4 never-drop). A final pass staffs the present pressers onto the running presses
+    (Step 66, secondary to the press decision). Deterministic given (db, today, config).
+
+    Step 80 is input-only: it reads `Press.currentPart` but never writes it back — the
+    subsystem stays stateless (spec §5.1), recomputed on demand."""
     if today is None:
         today = datetime.date.today()
     if config is None:
@@ -521,58 +517,12 @@ def schedule(db: Database, today: datetime.date | None = None,
 
     flags: list[OrderFlag] = []
     warnings: set[ScheduleWarning] = set()
-    rates: dict[str, float] = {}
-    # Per (date, shift): the lane state the die constraint needs. `binRemaining[k]` is
-    # each lane's press-hours left; `binParts[k][j]` is lane j's {part -> press-hours};
-    # `partBin[k][part]` pins a part to the one lane it runs on that shift-day (a part
-    # never spans two lanes in a shift-day — one press at a time). Built lazily from
-    # laneBudgets and carried across orders so later orders see earlier placements.
-    binRemaining: dict[tuple[datetime.date, int], list[float]] = {}
-    binParts: dict[tuple[datetime.date, int], list[dict[str, float]]] = {}
-    partBin: dict[tuple[datetime.date, int], dict[str, int]] = {}
 
-    def _place(d: datetime.date, shift: int, part: str, need: float) -> float:
-        """Place up to `need` press-hours of `part` into ONE lane of (d, shift) and
-        return the hours placed (0 if the shift-day can't take this part). Reuses the
-        part's pinned lane here if it has one; else picks the lane with the most
-        effective free hours, charging config.dieChangeHours when the chosen lane is
-        already running a different part (the die swap)."""
-        key = (d, shift)
-        if key not in binRemaining:
-            budgets = laneBudgets(db, shift, d)
-            binRemaining[key] = list(budgets)
-            binParts[key] = [{} for _ in budgets]
-            partBin[key] = {}
-        rem = binRemaining[key]
-        lanes = binParts[key]
-        pins = partBin[key]
-        if part in pins:
-            j = pins[part]
-            take = min(need, rem[j])
-            if take <= EPS:
-                return 0.0
-            rem[j] -= take
-            lanes[j][part] = lanes[j].get(part, 0.0) + take
-            return take
-        # A part new to this shift-day: pick the lane with the most effective room,
-        # discounting a die-change charge on any lane already running a different part.
-        best = -1
-        bestEff = EPS
-        for j in range(len(rem)):
-            eff = rem[j] - (config.dieChangeHours if lanes[j] else 0.0)
-            if eff > bestEff:
-                bestEff = eff
-                best = j
-        if best < 0:
-            return 0.0
-        if lanes[best]:
-            rem[best] -= config.dieChangeHours  # the swap consumes press-hours
-        take = min(need, rem[best])
-        rem[best] -= take
-        lanes[best][part] = lanes[best].get(part, 0.0) + take
-        pins[part] = best
-        return take
-
+    # --- Preprocess (addendum §1/§3.1, unchanged): EDF order, per-part rate, scrap-
+    # inflated press-hour demand, soft warnings, and the no-rate infeasibility. The
+    # per-order scalars now live on _OrderState because the walk advances all orders
+    # together (below) rather than one order to the horizon and back. ---
+    active: list[_OrderState] = []
     for order in _eligibleOrders(db, config):
         part = order.part
         rate = pressingRate(db, part, today, config.rateWindowDays, config.rateMinHours)
@@ -587,53 +537,156 @@ def schedule(db: Database, today: datetime.date | None = None,
         part_obj = db.parts.get(part)
         if part_obj is not None and part_obj.fireScrap is None:
             warnings.add(ScheduleWarning(WARN_MISSING_FIRESCRAP, part))
-
         needHours = requiredPressed(db, part, outstandingToPress(db, order)) / rate
         deadline = effectivePressBy(db, order, config.slackBusinessDays)
-        lateRecorded = False
-        piecesShortAtDeadline = 0.0
-        completion: datetime.date | None = None
+        active.append(_OrderState(order, part, rate, deadline, needHours))
 
-        for offset in range(config.maxHorizonDays + 1):
-            if needHours <= EPS:
-                break
-            d = today + datetime.timedelta(days=offset)
-            for shift in SHIFTS:
-                if needHours <= EPS:
-                    break
-                # Crossed the deadline with work still to place -> LATE; capture
-                # the pieces that will land late (everything not yet placed on or
-                # before the deadline) before placing any of it.
-                if deadline is not None and d > deadline and not lateRecorded:
-                    lateRecorded = True
-                    piecesShortAtDeadline = needHours * rate
-                got = _place(d, shift, part, needHours)
-                if got <= EPS:
+    # Group orders under their part — the die (and so a press) is per part; a part's
+    # orders are pressed most-urgent first. `partOrder` is the parts in EDF (first-seen)
+    # order, i.e. the die-priority order the per-shift-day placement claims presses in.
+    ordersByPart: dict[str, list[_OrderState]] = {}
+    partOrder: list[str] = []
+    for st in active:
+        if st.part not in ordersByPart:
+            ordersByPart[st.part] = []
+            partOrder.append(st.part)
+        ordersByPart[st.part].append(st)
+    partRank = {p: i for i, p in enumerate(partOrder)}
+
+    # Step 80 die-placement state, threaded across the whole walk: mount[press] is the
+    # part whose die is physically on that press right now, seeded from Press.currentPart.
+    pressNames = sorted(db.presses.keys())
+    mount: dict[str, str | None] = {name: db.presses[name].currentPart for name in pressNames}
+
+    def _mountOn(press: str, part: str) -> None:
+        """Move `part`'s die onto `press`, enforcing one-press-per-die: a die is a single
+        physical object, so clear it off any other press first (that press goes idle)."""
+        for other, mp in mount.items():
+            if mp == part and other != press:
+                mount[other] = None
+        mount[press] = part
+
+    def _idleDie(press: str) -> bool:
+        """True when `press` holds no die, or a die whose part has no outstanding work —
+        the cheap dies to displace (nothing running, or nothing waiting to run)."""
+        resident = mount[press]
+        if resident is None:
+            return True
+        return not any(s.remaining > EPS for s in ordersByPart.get(resident, []))
+
+    rowsByShiftDay: dict[tuple[datetime.date, int], list[ScheduleRow]] = {}
+
+    def _placeShiftDay(d: datetime.date, shift: int, budgets: list[float]) -> None:
+        """Claim presses for one shift-day. Iterate the outstanding parts in die-priority
+        (EDF) order; each part takes ONE press (die constraint), preferring the press its
+        die is already on (free hysteresis), else opening a fresh press (a die change unless
+        it's empty), else time-sharing an already-running press. `budgetLeft` tracks each
+        opened press's press-hours left today; a die change is charged out of that budget."""
+        lanes = len(budgets)                 # presses we can staff this shift-day (Step 78)
+        budgetLeft: dict[str, float] = {}    # opened press -> press-hours remaining today
+        opened = 0                           # count of presses opened -> indexes `budgets`
+
+        queue = [p for p in partOrder
+                 if any(s.remaining > EPS for s in ordersByPart[p])]
+        for part in queue:
+            partRem = sum(s.remaining for s in ordersByPart[part] if s.remaining > EPS)
+            if partRem <= EPS:
+                continue
+
+            # 1) The press already holding this part's die — free, and it keeps the die
+            #    put (hysteresis). Only if a lane is free to staff it.
+            resident = next((pr for pr in pressNames
+                             if mount[pr] == part and pr not in budgetLeft), None)
+            if resident is not None and opened < lanes:
+                press, source, charge = resident, "open", 0.0
+            elif opened < lanes:
+                # 2) Open a fresh press. Displace the cheapest die: empty first, then an
+                #    idle die, then the LEAST-urgent incumbent (urgency displaces, §3), then
+                #    this part's own press preference, then name (determinism). A non-empty
+                #    press costs a die change; an empty one is free (installing, not swapping).
+                candidates = [pr for pr in pressNames if pr not in budgetLeft]
+                press = min(candidates, key=lambda pr: (
+                    0 if mount[pr] is None else 1,
+                    0 if _idleDie(pr) else 1,
+                    -partRank.get(mount[pr] or "", len(partOrder)),
+                    -_prefScore(db, part, pr),
+                    pr))
+                source = "open"
+                charge = config.dieChangeHours if mount[press] is not None else 0.0
+            elif resident is not None:
+                # 3a) This part has a home press but no free lane to staff it — wait for it
+                #     rather than hop the die onto a running press (no gratuitous hopping).
+                continue
+            else:
+                # 3b) Homeless die, no free lane: time-share a running press with room to
+                #     both swap the die AND press something (a costed die move).
+                shareable = [pr for pr in budgetLeft
+                             if budgetLeft[pr] - config.dieChangeHours > EPS and mount[pr] != part]
+                if not shareable:
                     continue
-                rates[part] = rate
-                needHours -= got
-                completion = d
+                press = max(shareable, key=lambda pr: (budgetLeft[pr], pr))
+                source, charge = "share", config.dieChangeHours
 
-        if needHours > EPS:
-            # Hit the horizon with demand unplaced — capacity, not just lateness.
-            flags.append(OrderFlag(order.orderNum, part, INFEASIBLE_NO_CAPACITY,
-                                   piecesShort=needHours * rate, shortHours=needHours))
-        elif lateRecorded and completion is not None and deadline is not None:
-            flags.append(OrderFlag(order.orderNum, part, LATE,
-                                   daysLate=(completion - deadline).days,
-                                   piecesShort=piecesShortAtDeadline))
+            if source == "open":
+                avail = budgets[opened] - charge
+                if avail <= EPS:
+                    continue          # a die change ate the whole fresh slot — defer the part
+                _mountOn(press, part)
+                budgetLeft[press] = avail
+                opened += 1
+            else:  # share
+                _mountOn(press, part)
+                budgetLeft[press] -= charge
+                avail = budgetLeft[press]
 
+            take = min(partRem, avail)
+            budgetLeft[press] -= take
+            rate = ordersByPart[part][0].rate
+            hoursLeft = take
+            for st in ordersByPart[part]:      # fill this part's orders, most-urgent first
+                if hoursLeft <= EPS:
+                    break
+                if st.remaining <= EPS:
+                    continue
+                used = min(st.remaining, hoursLeft)
+                st.remaining -= used
+                st.completion = d
+                hoursLeft -= used
+            rowsByShiftDay.setdefault((d, shift), []).append(
+                ScheduleRow(d, shift, press, part, take * rate, take))
+
+    for offset in range(config.maxHorizonDays + 1):
+        if all(st.remaining <= EPS for st in active):
+            break
+        d = today + datetime.timedelta(days=offset)
+        for shift in SHIFTS:
+            # Crossed the deadline with work still to place -> LATE; snapshot the pieces
+            # that will land late (everything not yet placed) before placing any of it.
+            for st in active:
+                if (st.deadline is not None and d > st.deadline
+                        and st.remaining > EPS and not st.lateRecorded):
+                    st.lateRecorded = True
+                    st.piecesShort = st.remaining * st.rate
+            budgets = laneBudgets(db, shift, d)
+            if budgets:
+                _placeShiftDay(d, shift, budgets)
+
+    # Step 66: staff the present pressers onto each shift-day's running presses (secondary
+    # to the press/part decision the walk already fixed).
     rows: list[ScheduleRow] = []
-    for key in binParts:
+    for key in rowsByShiftDay:
         d, shift = key
-        laneContents = binParts[key]
-        used = [(j, laneContents[j]) for j in range(len(laneContents)) if laneContents[j]]
-        if not used:
-            continue
-        laneRows = _assignPresses(db, shift, d, used, rates)
-        # Step 66: staff pressers onto the presses this shift-day just fixed
-        # (secondary to the part-preference press decision, which stays untouched).
-        rows.extend(_assignPressers(db, shift, d, laneRows, config))
+        rows.extend(_assignPressers(db, shift, d, rowsByShiftDay[key], config))
+
+    for st in active:
+        if st.remaining > EPS:
+            # Hit the horizon with demand unplaced — capacity, not just lateness.
+            flags.append(OrderFlag(st.order.orderNum, st.part, INFEASIBLE_NO_CAPACITY,
+                                   piecesShort=st.remaining * st.rate, shortHours=st.remaining))
+        elif st.lateRecorded and st.completion is not None and st.deadline is not None:
+            flags.append(OrderFlag(st.order.orderNum, st.part, LATE,
+                                   daysLate=(st.completion - st.deadline).days,
+                                   piecesShort=st.piecesShort))
 
     rows.sort(key=lambda r: (r.date, r.shift, r.press, r.part))
     flags.sort(key=lambda f: (f.kind, f.orderNum))

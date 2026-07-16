@@ -307,15 +307,18 @@ def _rowTuples(result):
 
 
 def scheduling_scheduler() -> list[str]:
-    """schedule(): the greedy EDF core (addendum §3-§4) + the Step 78 die constraint
-    on hand-built fixtures with exact expected output — single-press front-loaded
-    placement (A), the LATE flag + magnitude on a tight deadline (B), INFEASIBLE_NO_RATE
-    + the cold-start warning (C), the die cap (D: one part uses one press across
-    shift-days even with a second press free), INFEASIBLE_NO_CAPACITY under a capped
-    horizon (E), sequential sharing (I: two parts share one press in a shift), the
-    die-change cost seam (J: dieChangeHours pushes work to the next day), and two-part /
-    two-press running + Step 66 presser staffing (K: preference, neutral tiebreak,
-    preference beating the tiebreak), plus determinism."""
+    """schedule(): the greedy EDF core (addendum §3-§4) + the Step 78 die constraint +
+    the Step 80 die-placement hysteresis seed, on hand-built fixtures with exact expected
+    output — single-press front-loaded placement (A), the LATE flag + magnitude on a tight
+    deadline (B), INFEASIBLE_NO_RATE + the cold-start warning (C), the die cap (D: one part
+    uses one press across shift-days even with a second press free), INFEASIBLE_NO_CAPACITY
+    under a capped horizon (E), sequential sharing (I: two parts share one press in a
+    shift), the die-change cost seam (J: dieChangeHours pushes work to the next day),
+    two-part / two-press running + Step 66 presser staffing (K: preference, neutral
+    tiebreak, preference beating the tiebreak), and the Step 80 seed — currentPart steers
+    the press over part preference (L), evicting a seeded idle die costs a die change (M),
+    within-run stickiness / no gratuitous hop across shift-days (N), and urgency taking an
+    empty press rather than evicting an incumbent die (O) — plus determinism."""
     from records.database import emptyDB
     from records.scheduling import Press, Presser
     from records.sales import Client, Order
@@ -496,18 +499,96 @@ def scheduling_scheduler() -> list[str]:
     _expect(errors, "K preference beats id tiebreak",
             [(r.press, r.presser) for r in rKh.rows], [("PA", 11), ("PB", 10)])
 
+    # --- L: DIE-PLACEMENT HYSTERESIS SEED (Step 80). Part P prefers PA (score 5), but its
+    #        die is already mounted on PB (currentPart). The mounted die wins over the
+    #        preference: P schedules on PB. With no die seeded it picks its preferred PA
+    #        (asserted for contrast) — so the seed is exactly what moved it.
+    dbL = build(("PA", "PB"), ((10, 8.0), (11, 8.0)),
+                [("P", 10.0, 0.0)], [("O1", "P", 80, 100.0, friday)],
+                partPrefs={("P", "PA"): 5})
+    dbL.presses["PB"].currentPart = "P"
+    rL = S.schedule(dbL, monday, cfg)
+    _expect(errors, "L die seed steers P onto PB over its PA preference",
+            [(r.press, r.part) for r in rL.rows], [("PB", "P")])
+    dbLn = build(("PA", "PB"), ((10, 8.0), (11, 8.0)),
+                 [("P", 10.0, 0.0)], [("O1", "P", 80, 100.0, friday)],
+                 partPrefs={("P", "PA"): 5})
+    rLn = S.schedule(dbLn, monday, cfg)
+    _expect(errors, "L contrast: no seed -> preferred PA",
+            [(r.press, r.part) for r in rLn.rows], [("PA", "P")])
+
+    # --- M: A SEEDED IDLE DIE COSTS A DIE CHANGE TO DISPLACE (Step 80). Press P1 carries an
+    #        idle die Z (currentPart, Z has no order) while part X needs the press. Mounting
+    #        X evicts Z's die -> a die change: with dieChangeHours=1, X gets only 7h Monday
+    #        (1h lost to the swap) and spills 1h to Tuesday. An EMPTY press mounts free (X's
+    #        whole 8h Monday) — asserted for contrast: the seeded die is what costs.
+    dieCfg = S.ScheduleConfig(slackBusinessDays=0, dieChangeHours=1.0)
+    dbM = build(("P1",), ((10, 8.0),),
+                [("X", 10.0, 0.0), ("Z", 10.0, 0.0)],
+                [("O1", "X", 80, 100.0, friday)])   # Z has no order -> idle die
+    dbM.presses["P1"].currentPart = "Z"
+    rM = S.schedule(dbM, monday, dieCfg)
+    _expect(errors, "M evicting a seeded idle die costs a die change", _rowTuples(rM), [
+        (monday, 1, "P1", "X", 70.0, 7.0),
+        (tuesday, 1, "P1", "X", 10.0, 1.0),
+    ])
+    dbMe = build(("P1",), ((10, 8.0),),
+                 [("X", 10.0, 0.0), ("Z", 10.0, 0.0)],
+                 [("O1", "X", 80, 100.0, friday)])   # no seed -> P1 starts empty
+    rMe = S.schedule(dbMe, monday, dieCfg)
+    _expect(errors, "M contrast: empty press mounts X free (whole 8h Monday)", _rowTuples(rMe), [
+        (monday, 1, "P1", "X", 80.0, 8.0),
+    ])
+
+    # --- N: WITHIN-RUN STICKINESS / NO HOP (Step 80). Part X's die is on PA (seed) with a
+    #        3-day order; part Y (lower priority) also prefers PA. X keeps PA every shift-day
+    #        it runs — it never hops to PB — and Y is pushed to PB. The die stays put across
+    #        the run: the hysteresis the feature exists for.
+    dbN = build(("PA", "PB"), ((10, 8.0), (11, 8.0)),
+                [("X", 10.0, 0.0), ("Y", 10.0, 0.0)],
+                [("O1", "X", 200, 100.0, friday), ("O2", "Y", 40, 100.0, friday)],
+                partPrefs={("Y", "PA"): 5})
+    dbN.presses["PA"].currentPart = "X"
+    rN = S.schedule(dbN, monday, cfg)
+    _expect(errors, "N die stays on PA across all X's shift-days (no hop)", _rowTuples(rN), [
+        (monday, 1, "PA", "X", 80.0, 8.0),
+        (monday, 1, "PB", "Y", 40.0, 4.0),
+        (tuesday, 1, "PA", "X", 80.0, 8.0),
+        (wednesday, 1, "PA", "X", 40.0, 4.0),
+    ])
+
+    # --- O: URGENCY DOESN'T NEEDLESSLY EVICT AN INCUMBENT (Step 80 eviction order). Y is
+    #        MORE urgent than X and prefers PA, but X's active die sits on PA and PB is
+    #        empty. Rather than evict X's die, Y takes the empty PB (empty ranks below
+    #        displacing an active die) — the incumbent is protected and no die change is
+    #        charged, even though dieChangeHours=1.
+    dbO = build(("PA", "PB"), ((10, 8.0), (11, 8.0)),
+                [("X", 10.0, 0.0), ("Y", 10.0, 0.0)],
+                [("O1", "Y", 40, 100.0, friday), ("O2", "X", 40, 100.0, friday)],
+                partPrefs={("Y", "PA"): 5})
+    dbO.presses["PA"].currentPart = "X"
+    rO = S.schedule(dbO, monday, dieCfg)
+    _expect(errors, "O urgent Y takes empty PB, incumbent X keeps PA (no eviction)",
+            _rowTuples(rO), [
+        (monday, 1, "PA", "X", 40.0, 4.0),
+        (monday, 1, "PB", "Y", 40.0, 4.0),
+    ])
+
     # --- Determinism: identical (db, today, config) -> identical result.
     _expect(errors, "deterministic", S.schedule(dbA, monday, cfg), rA)
     return errors
 
 
 def scheduling_scheduler_fuzz() -> list[str]:
-    """schedule() over a tiny seed=1 fuzzed DB, asserting the §4/§5 invariants:
-    no crash, determinism (byte-identical on a re-run), every row on a working
-    shift-day, per-(date,shift) placed press-hours never exceed capacity, every
-    eligible order is accounted for (scheduled and/or flagged, never silently
-    dropped), flag magnitudes are non-negative, and the Step 66 presser staffing
-    (each running press staffed by one present, non-double-booked presser)."""
+    """schedule() over a tiny seed=1 fuzzed DB (whose presses carry Step 79 currentPart
+    die seeds on ~2/3 of them, so the whole battery runs over a SEEDED Step 80 schedule),
+    asserting the §4/§5 invariants: no crash, determinism (byte-identical on a re-run),
+    every row on a working shift-day, per-(date,shift) placed press-hours never exceed
+    capacity, every eligible order is accounted for (scheduled and/or flagged, never
+    silently dropped), flag magnitudes are non-negative, and the Step 66 presser staffing
+    (each running press staffed by one present, non-double-booked presser). Finally clears
+    the die seed and re-runs to prove the algorithm is robust to the seed's presence and
+    absence alike (still deterministic, die constraint + capacity intact)."""
     import random
     from records.database import emptyDB
     import scheduling as S
@@ -629,6 +710,31 @@ def scheduling_scheduler_fuzz() -> list[str]:
                 if presser in seen:
                     errors.append(f"presser {presser} double-booked on {d} shift={shift}")
                 seen.add(presser)
+
+        # Step 80 die-placement seed. The fuzzed presses already carry currentPart on
+        # ~2/3 of them (fuzz_db.populatePresses), so every invariant above ran over a
+        # SEEDED schedule. Now clear the seed and re-run: the algorithm must be robust to
+        # the seed's presence/absence — no crash, still deterministic, and the die
+        # constraint + capacity still hold. (Exact hysteresis behavior — the seed steering
+        # the press, costed die moves, no-hop stickiness — is pinned by the deterministic
+        # L/M/N/O cases in scheduling_scheduler.)
+        for press in db.presses.values():
+            press.currentPart = None
+        cleared = S.schedule(db, today)
+        if S.schedule(db, today) != cleared:
+            errors.append("cleared-seed schedule not deterministic")
+        clearedByShiftDay: dict[tuple, float] = {}
+        clearedPartPress: dict[tuple, dict[str, str]] = {}
+        for r in cleared.rows:
+            clearedByShiftDay[(r.date, r.shift)] = clearedByShiftDay.get((r.date, r.shift), 0.0) + r.hours
+            pressOf = clearedPartPress.setdefault((r.date, r.shift), {})
+            if r.part in pressOf and pressOf[r.part] != r.press:
+                errors.append(f"cleared-seed: part {r.part} on two presses on {r.date} shift={r.shift}")
+            pressOf[r.part] = r.press
+        for (d, shift), hours in clearedByShiftDay.items():
+            cap = S.capacityHours(db, shift, d)
+            if hours > cap + 1e-6:
+                errors.append(f"cleared-seed over capacity at {d} shift={shift}: {hours} > {cap}")
     except Exception as e:  # noqa: BLE001 - a crash here is the failure we report
         errors.append(f"scheduler raised on fuzzed data: {e!r}")
     return errors
