@@ -111,7 +111,7 @@ class _FlagListWindow(QWidget):
 class ScheduleTab(QWidget):
     # Production Schedule Report (Step 53; regrouped + filtered in Step 67). The
     # scheduler result is shown grouped by (date, shift) subheadings, each over a
-    # 5-col Press/Part/Quantity/Press-hours/Presser mini-table — Date and Shift
+    # 5-col Press/Part/Quantity/Press time/Presser mini-table — Date and Shift
     # move out of the columns into the heading, freeing width for the Presser
     # column (Step 66). A single unified control row (Step 71) — Generate, a
     # From/To/Shift filter built into the display, and Export — drives everything:
@@ -120,7 +120,7 @@ class ScheduleTab(QWidget):
     # scheduler: holds the last full result (self.result), the displayed slice
     # (self.displayed), and that slice's filter description (self._displayedDesc)
     # only to feed Export, and clears on DB load.
-    groupHeaders = ["Press", "Part", "Quantity", "Press-hours", "Presser"]
+    groupHeaders = ["Press", "Part", "Quantity", "Press time", "Presser"]
 
     def __init__(self, mainApp: MainWindow) -> None:
         super().__init__()

@@ -203,7 +203,7 @@ class ScheduleReportsMixin:
         # Step 67: the schedule is grouped by (date, shift) subheadings, each over
         # a 5-column table — Date and Shift move out of the repeated columns into
         # the group heading, freeing width for the Presser column.
-        groupHeaders = ["Press", "Part", "Quantity", "Press-hours", "Presser"]
+        groupHeaders = ["Press", "Part", "Quantity", "Press time", "Presser"]
         groups = [
             (scheduleGroupHeading(key[0], key[1]), [[
                 r.press,

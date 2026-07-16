@@ -3384,7 +3384,7 @@ def schedule_tab_generates() -> list[str]:
         if renderedRows != len(tab.displayed.rows):
             errors.append(f"rendered group rows={renderedRows} != displayed rows={len(tab.displayed.rows)}")
         # Each rendered row lands on a real press / real part (grouped table is
-        # Press/Part/Quantity/Press-hours/Presser -> cols 0/1).
+        # Press/Part/Quantity/Press time/Presser -> cols 0/1).
         for t in tab._groupTables:
             for row in t.dbModel._data:
                 if row[0] not in w.db.presses:
