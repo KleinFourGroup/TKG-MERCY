@@ -173,7 +173,7 @@ class PartsMarginsWindow(QWidget):
                 def updatePrice():
                     part.price = price
                     QMessageBox.information(self, "Success", f"{entry} price set to ${price}!")
-                    wind.mainApp.partsTab.refreshTable()
+                    wind.mainApp.refreshAllViews()
                     wind.close()
                 return updatePrice
             buttonG = QPushButton("Apply")

@@ -422,7 +422,7 @@ class MaterialInventoryEditWindow(QWidget):
                 if not self.entry.name == name:
                     self.mainApp.db.inventories[self.date].updateMaterialRecord(self.entry.name, name)
                 self.entry.setInventory(cost, amount)
-            self.mainApp.inventoryTab.materialsTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)
@@ -672,7 +672,7 @@ class PartInventoryEditWindow(QWidget):
                 if not self.entry.name == name:
                     self.mainApp.db.inventories[self.date].updatePartRecord(self.entry.name, name)
                 self.entry.setInventory(cost, amount40, amount60, amount80, amount100)
-            self.mainApp.inventoryTab.partsTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)

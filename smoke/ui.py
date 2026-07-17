@@ -157,6 +157,68 @@ def production_refresh_on_delete() -> list[str]:
     return errors
 
 
+def inventory_edit_refreshes_value_labels() -> list[str]:
+    """Step 81: saving an inventory record repaints the tab's total-value labels,
+    not just its table.
+
+    A real, user-visible stale-view bug this step found and fixed. The material /
+    part inventory editors hand-called `inventoryTab.<sub>Tab.refreshTable()`,
+    but the tab's own `refresh()` is `refreshTable()` **plus**
+    `refreshValueLabels()` — so the table updated while "Current Total Materials
+    Value" kept showing the pre-edit number. It survived because it was a
+    *narrower* refresh than needed, which no amount of remembering-to-refresh
+    catches; routing the editor through `refreshAllViews()` fixes it structurally.
+
+    Asserts the label actually moves off its pre-edit value after a save. (These
+    two editors hid from Step 81's first fan-out sweep because they reach the tab
+    through the nested `mainApp.inventoryTab.materialsTab` path.)
+    """
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from inventory_tab import MaterialInventoryEditWindow
+
+    errors: list[str] = []
+    QApplication.instance() or QApplication(sys.argv)
+    restore = _silenceMessageBoxes()
+    w = None
+    try:
+        w = MainWindow()
+        _seedTinyFuzzDB(w)
+        invDate = datetime_date(2026, 4, 18)
+        w.db.addInventory(invDate)
+        w._refreshAllTabs()
+        w.inventoryTab.datePicker.setCurrentText(invDate.isoformat())
+
+        matTab = w.inventoryTab.materialsTab
+        before = matTab.currValueLabel.text()
+
+        material = sorted(m for m in w.db.materials
+                          if w.db.materials[m].getCostPerLb() is not None)
+        if not material:
+            errors.append("fuzz fixture produced no costed materials (test setup bug)")
+            return errors
+
+        editor = MaterialInventoryEditWindow(invDate, None, w)
+        editor.options.setCurrentText(material[0])
+        editor.costEntry.setText("100")
+        editor.mainLayout[2][1].setText("5")
+        if editor.readData(True) is not True:
+            errors.append("material editor readData rejected a valid record (test setup bug)")
+            return errors
+
+        after = matTab.currValueLabel.text()
+        if after == before:
+            errors.append(f"materials total-value label stale after save: still {after!r} "
+                          f"(refreshTable alone skips refreshValueLabels)")
+        if "N/A" in after:
+            errors.append(f"materials total-value label reads {after!r} after a valid save")
+    finally:
+        restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+    return errors
+
+
 def inventory_edit_missing_date() -> list[str]:
     """Step 62: the inventory material/part edit windows' readData must surface a
     validation error, not crash, when their date has no inventory snapshot — and

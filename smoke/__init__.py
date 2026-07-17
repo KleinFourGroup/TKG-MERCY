@@ -40,6 +40,7 @@ from smoke.ui import (
     pto_dialog_roundtrip, notes_dialog_roundtrip,
     employee_delete_cascades_detail_tabs, employee_reid_cascades,
     fk_rename_refreshes_dependent_tabs, edit_refresh_preserves_picker_selection,
+    inventory_edit_refreshes_value_labels,
     holidays_tab_observances, holidays_tab_defaults_crud,
 )
 from smoke.scheduling import (
@@ -79,6 +80,7 @@ __all__ = [
     "pto_dialog_roundtrip", "notes_dialog_roundtrip",
     "employee_delete_cascades_detail_tabs", "employee_reid_cascades",
     "fk_rename_refreshes_dependent_tabs", "edit_refresh_preserves_picker_selection",
+    "inventory_edit_refreshes_value_labels",
     "holidays_tab_observances", "holidays_tab_defaults_crud",
     "scheduling_working_days", "scheduling_presser_capacity",
     "scheduling_pressing_rate", "scheduling_scrap_inflation",
