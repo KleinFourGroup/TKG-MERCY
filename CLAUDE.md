@@ -4,8 +4,10 @@ MERCY is a PySide6 + SQLite desktop app: a three-way merge of **ANIKA** (part co
 
 ## Read these first, cold, every session
 
-- **[`MERGE_PLAN.md`](MERGE_PLAN.md)** — authoritative plan doc. Start at **§12.1** (step status table) and **§13** (post-release feature backlog). Historical narratives live in [`plan_archive/`](plan_archive/).
+- **[`HANDOFF.md`](HANDOFF.md)** — orientation + the **🧭 Cursor**, the ONE home for live status (next step, last landed, smoke baseline, carried watch-items). Start here.
 - **[`CONVENTIONS.md`](CONVENTIONS.md)** — live dev conventions and gotchas (smoke baseline, `fuzz_db.py` upkeep, headless Qt pitfalls).
+
+Then as needed: **[`ROADMAP.md`](ROADMAP.md)** (planned steps + their scoping essays; shrinks) and **[`WORKLOG.md`](WORKLOG.md)** (as-built record; grows). Closed history — including the retired `MERGE_PLAN.md`, which code comments still cite by §-number — lives in [`plan_archive/`](plan_archive/).
 
 ## Baseline sanity check
 
@@ -13,4 +15,4 @@ Run `./Scripts/python.exe -m smoke` at the start and end of any invasive change 
 
 ## Workflow
 
-One logical step = one commit. The plan doc drives; check §12.1 / §13 before starting work and update them when a step lands.
+One logical step = one commit. The Cursor + ROADMAP drive; when a step lands, the same commit adds its WORKLOG entry, deletes its ROADMAP entry, and updates the Cursor (the lifecycle in HANDOFF § The doc system).

@@ -1,6 +1,6 @@
 # MERCY — Dev conventions and gotchas
 
-*Live working notes for MERCY development. Split out of `MERGE_PLAN.md` §12.4 on 2026-04-22 so conventions + gotchas have a home that doesn't require grepping the plan. Short and scannable; extend as new items surface. For project state and step-by-step history see `MERGE_PLAN.md` and `plan_archive/`.*
+*Live working notes for MERCY development. Split out of the old plan doc's §12.4 on 2026-04-22 so conventions + gotchas have a home that doesn't require grepping the plan. Short and scannable; extend as new items surface. For live project state see [`HANDOFF.md`](HANDOFF.md) (🧭 Cursor); for step-by-step history see [`WORKLOG.md`](WORKLOG.md) and `plan_archive/` (including the retired [`merge_plan.md`](plan_archive/merge_plan.md), which code comments cite as `MERGE_PLAN §N`).*
 
 ---
 
@@ -8,7 +8,7 @@
 
 - **Run `./Scripts/python.exe -m smoke` at the start and end of any invasive step.** All checks in the `smoke/` package are the always-on regression net. Start-of-step confirms you're building on a clean base; end-of-step confirms you didn't break anything before you commit. Offscreen, fast (~few seconds total), so there's no excuse to skip it. Each check function carries a docstring describing what it covers — that's the live source of truth (the historical list in [`plan_archive/test_conventions.md`](plan_archive/test_conventions.md) is frozen at the eleven checks present at the 2026-04-22 split, and predates the 2026-05-11 split of `smoke.py` into a package).
 - **The real DB for real-data drills is `Mercy 2.0 DB 7-8-26.db`** in Matthew's home dir (`C:\Users\mkilg\`), MERCY's default DB directory. It **supersedes `Mercy DB 6-1-26.db`**, which older §13 narratives name — the team rolls the date forward, so sanity-check for a newer `Mercy*.db` by mtime rather than trusting this filename. **Always work on a COPY:** opening a MERCY DB migrates it in place and commits, so never point the app or a driver at the original. Two pitfalls: real presses have **no mounted die** (`Press.currentPart` unset), so any hysteresis drill must synthesize a mount; and a driver that commits through an edit window pops a modal `QMessageBox` that **hangs forever headless** — call `smoke.ui._silenceMessageBoxes()` first. Drill drivers are deliberately uncommitted (machine-specific), so you write a throwaway each time.
-- **Keep `fuzz_db.py` in sync as `records.py` / the schema evolves.** When a new record type lands or an existing one gains fields, update the fuzz generator so it continues to produce fully-populated DBs. Cataloged in `MERGE_PLAN.md` §13.8 as landed, but the tool is a live dependency of any report-stress or migration-rehearsal work — let it rot and the generated DBs quietly diverge from the real schema.
+- **Keep `fuzz_db.py` in sync as `records.py` / the schema evolves.** When a new record type lands or an existing one gains fields, update the fuzz generator so it continues to produce fully-populated DBs. Cataloged in [`plan_archive/merge_plan.md`](plan_archive/merge_plan.md) §13.8 as landed, but the tool is a live dependency of any report-stress or migration-rehearsal work — let it rot and the generated DBs quietly diverge from the real schema.
 
 ## Gotchas
 
