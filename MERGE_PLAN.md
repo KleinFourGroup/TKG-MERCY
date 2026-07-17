@@ -31,6 +31,8 @@ This keeps the live plan focused on current status (§12.1) and the active backl
 
 ### 12.1 Step status
 
+> **🧭 NEXT: Step 84 (the doc split, §13.53) — *before* Step 83, despite the numbering.** Decided by Matthew 2026-07-16: Step 83 is small, but scoping it inside this document means scoping it inside the known problem, and §13.45's dropdown warning — correct months early, still missed — is the standing proof of what that costs. Step 84 makes every later step cheaper, including planning them. *(Reverse this only if the team is actively waiting on the 83 feature.)* **Step 84 replaces this line with a proper single-source Cursor** — which is the point: this pointer exists because there's nowhere better to put it yet, and a decision the cold reader can't see is a decision that gets lost.
+>
 > **How to read this table (2 rules, both load-bearing):**
 > 1. **✅ means the code landed and its automated checks pass. It does NOT mean the step's real-data / floor gate was cleared.** Live example: **Step 80 is ✅, but its own "eyeball that dies stop hopping on real data" gate is still unmet** (§13.49) — the team hasn't deployed a schedule. When a step's *confidence* matters, read its §13 narrative, not the tick.
 > 2. **Steps land out of numeric order.** Step 82 shipped *before* Step 81, so §13's smoke counts read "69" (Step 82) then "69 → 71" (Step 81) — monotonic in real time, not a regression. **Current smoke baseline: 72 PASS.** Derive release scope from the actual tag range, never from step numbers.
