@@ -66,18 +66,33 @@ class InventoryTab(QWidget):
         self.materialsTab.refresh()
         self.partsTab.refresh()
     
-    def refreshPicker(self):
+    def refreshPicker(self, hard: bool = True):
         db = self.mainApp.db
         dates = [date for date in db.inventories]
         dates.sort(reverse=True)
-        selections = [f"{date.isoformat()}" for date in dates]
-        selections.insert(0, "None")
+        # Mirrors EmployeeDetailTab.refreshPicker: each row carries its date as
+        # userData so a soft refresh re-finds the picked date by key.
+        previous = self.date
+        self.datePicker.blockSignals(True)
         self.datePicker.clear()
-        self.datePicker.addItems(selections)
-        self.datePicker.setCurrentIndex(0)
+        self.datePicker.addItem("None", userData=None)
+        for date in dates:
+            self.datePicker.addItem(f"{date.isoformat()}", userData=date)
+        index = 0
+        if not hard and previous is not None:
+            for i in range(self.datePicker.count()):
+                if self.datePicker.itemData(i) == previous:
+                    index = i
+                    break
+            # else: the inventory date was deleted — fall back to "None".
+        self.datePicker.setCurrentIndex(index)
+        self.datePicker.blockSignals(False)
+        # Signals were blocked across the rebuild, so sync date + the two
+        # inventory subtabs explicitly (see EmployeeDetailTab.refreshPicker).
+        self.selectDate(self.datePicker.currentText())
 
-    def refresh(self):
-        self.refreshPicker()
+    def refresh(self, hard: bool = True):
+        self.refreshPicker(hard)
     
     def openNew(self):
         InventoryDateEditWindow(None, self.mainApp)
@@ -173,7 +188,7 @@ class InventoryDateEditWindow(QWidget):
                 if self.date != date:
                     self.mainApp.db.updateInventory(self.date, date)
 
-            self.mainApp.inventoryTab.refresh()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)

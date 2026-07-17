@@ -350,7 +350,9 @@ def production_quantity_validation() -> list[str]:
         w.db.addEmployeePoints(EmployeePointsDB(emp.idNum))
         w.db.addEmployeePTO(EmployeePTODB(emp.idNum))
         w.db.addEmployeeNotes(EmployeeNotesDB(emp.idNum))
-        w.db.mixtures["MixA"] = Mixture("MixA")
+        # addMixture, not a raw dict insert — see the note in smoke/ui.py's
+        # production_batch_roundtrip: without the db back-reference getCost raises.
+        w.db.addMixture(Mixture("MixA"))
         w.productionTab.refresh()
 
         # --- Quick Entry: quantity=0 must fail with a Quantity-positive error ---

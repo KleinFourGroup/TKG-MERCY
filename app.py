@@ -176,20 +176,38 @@ class MainWindow(QWidget):
     def setFileLabel(self):
         self.dbFileLabel.setText(f"File: {self.fileManager.filePath}")
 
-    def _refreshAllTabs(self):
+    def refreshAllViews(self):
+        # Step 81: the single call every edit-window success path makes after a
+        # committed change. Repainting every tab (rather than hand-picking the
+        # ones a given FK touches) is what retires the stale-view bug family:
+        # no edit path has to know the FK graph, so a new FK edge needs no new
+        # wiring. Measured at ~7ms over the real DB, so the blanket repaint is
+        # imperceptible.
+        #
+        # hard=False keeps each tab's picker/filter selection parked where the
+        # user left it — an edit must not yank the drill-down out from under
+        # them. The Schedule tab is deliberately excluded: its refresh() clears
+        # a generated schedule, which is right when a new DB is loaded and wrong
+        # after an edit (it's a report the user asked for, not a live view).
+        self._refreshAllTabs(hard=False)
+
+    def _refreshAllTabs(self, hard: bool = True):
+        # hard=True is the DB-load repaint: pickers reset to "None" and the
+        # schedule is cleared, because nothing from the old file should survive.
+        # hard=False is the post-edit repaint (see refreshAllViews).
         # Products domain
         self.materialsTab.refreshTable()
         self.mixturesTab.refreshTable()
         self.packagingTab.refreshTable()
         self.partsTab.refreshTable()
         # Inventory
-        self.inventoryTab.refresh()
+        self.inventoryTab.refresh(hard)
         # Settings
         self.globalsTab.refreshTab()
         # Employees domain
         self.employeesTab.activeEmployeesTab.refreshTable()
         self.employeesTab.inactiveEmployeesTab.refreshTable()
-        self.overviewTab.refresh()
+        self.overviewTab.refresh(hard)
         self.holidaysTab.refresh()
         # Production domain
         self.productionTab.refresh()
@@ -205,7 +223,8 @@ class MainWindow(QWidget):
         self.ordersTab.refreshTable()
         self.orderStatusTab.refreshTable()
         # Schedule (stateless report view — clears any schedule from the old DB)
-        self.scheduleTab.refresh()
+        if hard:
+            self.scheduleTab.refresh()
 
     def _lastDir(self) -> str:
         # §13.45: seed the Open / Save As / Import file dialogs from the

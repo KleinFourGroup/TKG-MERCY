@@ -118,9 +118,7 @@ class EmployeeTab(QWidget):
             confirm = QMessageBox.question(self, f"Toggle {employee}?", f"Are you sure you want to set {employee} as {"inactive" if self.active else "active"}?")
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.employees[employee].setStatus(not self.active)
-                self.mainApp.overviewTab.refresh()
-                self.mainTab.activeEmployeesTab.refreshTable()
-                self.mainTab.inactiveEmployeesTab.refreshTable()
+                self.mainApp.refreshAllViews()
                 QMessageBox.information(self, "Success", "Update successful!")
 
     def deleteSelection(self):
@@ -131,15 +129,7 @@ class EmployeeTab(QWidget):
 
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.delEmployee(employee)
-                self.mainApp.overviewTab.refresh()
-                self.mainTab.activeEmployeesTab.refreshTable()
-                self.mainTab.inactiveEmployeesTab.refreshTable()
-                self.mainApp.productionTab.refresh()
-                # delEmployee cascades the presser row AND its presser-press prefs
-                # (records.Database.delEmployee), so both presser-derived tabs need
-                # re-rendering too or they show a stale row.
-                self.mainApp.pressersTab.refreshTable()
-                self.mainApp.presserPressPrefTab.refreshTable()
+                self.mainApp.refreshAllViews()
                 QMessageBox.information(self, "Success", "Update successful!")
 
     def reportAll(self):
@@ -316,19 +306,7 @@ class EmployeeEditWindow(QWidget):
             employee.setAddress(addressLine1, addressLine2, addressCity, addressState, addressZip, addressTel, addressEmail)
             if isNone:
                 self.employee = None
-            self.mainApp.overviewTab.refresh()
-            self.mainApp.employeesTab.activeEmployeesTab.refreshTable()
-            self.mainApp.employeesTab.inactiveEmployeesTab.refreshTable()
-            # A name / idNum edit changes any employee-derived label downstream:
-            # the Pressers list (_presserLabel), the Presser-Press Preference grid's
-            # row labels (also _presserLabel), and the Production table + filter
-            # (_employeeLabel). A re-id also rekeys the presser / presser-press-pref
-            # rows (db.updateEmployee). Step 49-style downstream refresh — the Step 55
-            # net flagged Pressers; Production is its twin (out of the net only because
-            # it's filter-stateful, but it renders the same labels).
-            self.mainApp.pressersTab.refreshTable()
-            self.mainApp.presserPressPrefTab.refreshTable()
-            self.mainApp.productionTab.refresh()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             errorMessage(self, errors)

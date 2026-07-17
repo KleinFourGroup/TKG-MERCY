@@ -107,10 +107,7 @@ class OrdersTab(QWidget):
             confirm = QMessageBox.question(self, f"Delete {order}?", f"Are you sure you want to delete order {order}?")
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.delOrder(order)
-                self.refreshTable()
-                # delOrder cascades the order's status snapshots away, so refresh the
-                # Order Status table too or it keeps showing the deleted order (Step 49).
-                self.mainApp.orderStatusTab.refreshTable()
+                self.mainApp.refreshAllViews()
                 QMessageBox.information(self.mainApp, "Success!", f"Deleted order {order}")
 
     def changeSort(self):
@@ -254,11 +251,7 @@ class OrderEditWindow(QWidget):
                 self.item.dueDate = dueDate
             if isNone:
                 self.item = None
-            self.mainApp.ordersTab.refreshTable()
-            # An order rename rekeys its status snapshots (db.updateOrder) and every
-            # order's row (number / client / part / quantity) shows in the Order
-            # Status table, so refresh it too (Step 49 downstream-refresh rule).
-            self.mainApp.orderStatusTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             errorMessage(self, errors)

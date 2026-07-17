@@ -355,7 +355,9 @@ class OrderStatusEditWindow(QWidget):
         QMessageBox.information(self, "Success", "Snapshot deleted!")
 
     def refreshSnapshots(self):
+        # This window's own snapshot table isn't a tab, so it still repaints
+        # itself; refreshAllViews covers everything downstream of the change.
         self.genSnapshotData()
         self.snapshotTable.setData(self.snapshotData)
         self.snapshotSelection = []
-        self.mainApp.orderStatusTab.refreshTable()
+        self.mainApp.refreshAllViews()

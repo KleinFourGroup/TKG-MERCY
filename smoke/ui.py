@@ -301,8 +301,11 @@ def production_batch_roundtrip() -> list[str]:
         w1.db.addEmployeePTO(EmployeePTODB(emp.idNum))
         w1.db.addEmployeeNotes(EmployeeNotesDB(emp.idNum))
 
-        w1.db.mixtures["MixA"] = Mixture("MixA")
-        w1.db.mixtures["MixB"] = Mixture("MixB")
+        # addMixture (not a raw dict insert) so each mixture gets its db
+        # back-reference — Mixture.getCost() raises without it, and since Step 81
+        # every edit repaints the Mixtures tab, which costs every mixture.
+        w1.db.addMixture(Mixture("MixA"))
+        w1.db.addMixture(Mixture("MixB"))
 
         # Prime the tab so toolbar state reflects the seeded data.
         w1.productionTab.refresh()
@@ -3087,12 +3090,14 @@ def employee_delete_cascades_detail_tabs() -> list[str]:
     """Step 37b: deleting an employee while their detail tabs are visible
     drops the selection on all 5 sub-tabs.
 
-    Mirrors the real flow from EmployeeTab.deleteSelection:
-    ``db.delEmployee(idNum)`` followed by ``mainApp.overviewTab.refresh()``.
-    The picker's refresh clears the current selection (setCurrentIndex(0)
-    fires selectEmployee('None') → employeeID=None → every sub-tab
-    refreshes back to N/A). Asserts both the picker no longer offers the
-    deleted employee and every detail sub-tab shows 'Employee: N/A'.
+    Mirrors the real flow from EmployeeTab.deleteSelection: ``db.delEmployee``
+    followed by ``mainApp.refreshAllViews()`` (Step 81 — before that, the tab
+    hand-called overviewTab.refresh() plus four more fan-outs). The repaint is
+    the *soft* one, so the picker tries to preserve the selection by employee
+    ID and finds it gone, falling back to 'None' → every sub-tab returns to
+    N/A. Asserts both that the picker no longer offers the deleted employee
+    and that every detail sub-tab shows 'Employee: N/A' — i.e. the soft
+    preserve can't resurrect a deleted record.
     """
     errors = []
     w = restore = tmp = None
@@ -3111,7 +3116,7 @@ def employee_delete_cascades_detail_tabs() -> list[str]:
 
         # Delete via the same entry point the EmployeesTab uses.
         w.db.delEmployee(fixtureId)
-        w.overviewTab.refresh()
+        w.refreshAllViews()
 
         pickerItems = [w.overviewTab.employeePicker.itemText(i)
                        for i in range(w.overviewTab.employeePicker.count())]
@@ -3123,6 +3128,191 @@ def employee_delete_cascades_detail_tabs() -> list[str]:
             got = tab.currentEmployeeLabel.text()
             if got != "Employee: N/A":
                 errors.append(f"post-delete {tabName}: label={got!r}, want 'Employee: N/A'")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Step 81 — the stale-view FK-refresh mechanism (MERGE_PLAN §13.50).
+# ---------------------------------------------------------------------------
+
+
+def fk_rename_refreshes_dependent_tabs() -> list[str]:
+    """Step 81: renaming a part repaints every dependent tab, with no per-FK
+    fan-out in the edit window and no refresh call in this test.
+
+    This asserts the *mechanism*, not the hand-wiring. It drives PartsEditWindow
+    the way a user does — type a new name, click Update — and then reads three
+    other tabs straight off their rendered table data. Before Step 81 each of
+    those tabs stayed fresh only because PartsEditWindow.readData remembered to
+    call its refreshTable(); the Step 79 bug was exactly one such call going
+    missing. The test deliberately never refreshes anything itself, so if
+    refreshAllViews() regresses these fail rather than one distant tab going
+    quietly stale.
+
+    Pins all three FK edges onto one part so a single rename has to reach:
+      - Presses (the die mounted on a press is a part FK — the Step 79 symptom),
+      - Orders (an order's part — Step 49),
+      - Part-Press Preference (rows keyed by part name — Steps 48 / 64).
+    """
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, _ = _detailTabsScratchSetup()
+        db = w.db
+
+        oldName = sorted(db.parts)[0]
+        newName = "STEP81-RENAMED"
+        if newName in db.parts:
+            errors.append("fixture collision: STEP81-RENAMED is already a part")
+            return errors
+
+        # Pin the FK edges deterministically rather than trusting the fuzz rng.
+        pressName = sorted(db.presses)[0]
+        db.setPressCurrentPart(pressName, oldName)
+        orderNum = sorted(db.orders)[0]
+        db.orders[orderNum].part = oldName
+        w._refreshAllTabs()
+
+        def rendered(tab) -> list[str]:
+            return [str(cell) for row in tab.data for cell in row]
+
+        # Sanity: the seeded edges actually render before the rename, or the
+        # post-rename assertions below would pass vacuously.
+        if oldName not in rendered(w.pressesTab):
+            errors.append(f"setup: Presses tab never rendered the die {oldName!r}")
+        if oldName not in rendered(w.ordersTab):
+            errors.append(f"setup: Orders tab never rendered the part {oldName!r}")
+        if errors:
+            return errors
+
+        # Rename through the real editor. No refresh call anywhere in this test.
+        from parts_tab import PartsEditWindow
+        win = PartsEditWindow(oldName, w)
+        win.nameEdit.setText(newName)
+        win.updatePart()
+
+        if newName not in db.parts:
+            errors.append(f"rename did not land in the model: {newName!r} not in db.parts")
+            return errors
+
+        pressCells = rendered(w.pressesTab)
+        if oldName in pressCells:
+            errors.append(f"Presses tab still renders the stale die name {oldName!r} (the Step 79 symptom)")
+        if newName not in pressCells:
+            errors.append(f"Presses tab never picked up the new die name {newName!r}")
+
+        orderCells = rendered(w.ordersTab)
+        if oldName in orderCells:
+            errors.append(f"Orders tab still renders the stale part name {oldName!r}")
+        if newName not in orderCells:
+            errors.append(f"Orders tab never picked up the new part name {newName!r}")
+
+        prefKeys = [str(k) for k in w.partPressPrefTab.rowKeys]
+        if oldName in prefKeys:
+            errors.append(f"Part-Press Preference still keys a row on the stale part {oldName!r}")
+        if newName not in prefKeys:
+            errors.append(f"Part-Press Preference never picked up the renamed part {newName!r}")
+    finally:
+        if restore is not None:
+            restore()
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        if tmp is not None:
+            for suffix in ("", "-wal", "-shm"):
+                try:
+                    os.unlink(tmp.name + suffix)
+                except OSError:
+                    pass
+    return errors
+
+
+def edit_refresh_preserves_picker_selection() -> list[str]:
+    """Step 81: the post-edit repaint leaves the Overview picker parked where
+    the user left it, while the DB-load repaint still hard-resets it.
+
+    Step 81 made every edit repaint every tab, which puts the Employee Overview
+    drill-down at risk: a naive rebuild would snap the picker back to 'None'
+    mid-read, every time the user edited anything. Asserts the three behaviours
+    that keep that from happening:
+      - a soft (post-edit) repaint preserves the selection and the 5 sub-tabs;
+      - it preserves *across a rename of the selected employee*, which rewrites
+        the picker label — this is why the picker re-finds its selection by
+        employee ID and not by label;
+      - the Inventory date picker (the same preserve keyed by a datetime.date
+        rather than an int) preserves too;
+      - a hard (DB-load) repaint still resets both to 'None', since nothing from
+        the old file should survive.
+    """
+    errors = []
+    w = restore = tmp = None
+    try:
+        w, restore, tmp, idNums = _detailTabsScratchSetup()
+        activeIds = sorted(i for i in idNums if w.db.employees[i].status)
+        if not activeIds:
+            errors.append("fuzz fixture produced no active employees (test setup bug)")
+            return errors
+        fixtureId = activeIds[0]
+        emp = w.db.employees[fixtureId]
+        w.overviewTab.employeePicker.setCurrentText(_pickerSelectionFor(emp))
+        if w.overviewTab.employeeID != fixtureId:
+            errors.append("setup: picker did not take the fixture selection")
+            return errors
+
+        # 1. A post-edit repaint must not yank the drill-down away.
+        w.refreshAllViews()
+        if w.overviewTab.employeeID != fixtureId:
+            errors.append(f"refreshAllViews reset the picker: employeeID={w.overviewTab.employeeID}, want {fixtureId}")
+        for tabName in ("reviewsTab", "trainingTab", "pointsTab", "PTOTab", "notesTab"):
+            tab = getattr(w.overviewTab, tabName)
+            if "N/A" in tab.currentEmployeeLabel.text():
+                errors.append(f"after refreshAllViews {tabName} fell back to 'Employee: N/A'")
+
+        # 2. ... and must survive a rename of the very employee selected.
+        emp.setName("STEP81LAST", "Step81First")
+        w.refreshAllViews()
+        if w.overviewTab.employeeID != fixtureId:
+            errors.append("a rename of the selected employee dropped the picker selection "
+                          "(preserving by label rather than by ID?)")
+        if "STEP81LAST" not in w.overviewTab.employeePicker.currentText():
+            errors.append(f"picker label not repainted after rename: "
+                          f"{w.overviewTab.employeePicker.currentText()!r}")
+
+        # 3. The Inventory date picker is the *second* implementation of the same
+        #    preserve, keyed by a datetime.date rather than an int — cover it too,
+        #    or a QVariant round-trip failure there would silently stop preserving.
+        import datetime as _dt
+        invDate = _dt.date(2026, 4, 18)
+        w.db.addInventory(invDate)
+        w.db.addInventory(_dt.date(2026, 5, 20))
+        w._refreshAllTabs()
+        w.inventoryTab.datePicker.setCurrentText(invDate.isoformat())
+        if w.inventoryTab.date != invDate:
+            errors.append("setup: inventory date picker did not take the fixture date")
+        else:
+            w.refreshAllViews()
+            if w.inventoryTab.date != invDate:
+                errors.append(f"refreshAllViews reset the inventory date picker: "
+                              f"date={w.inventoryTab.date}, want {invDate}")
+
+        # 4. A DB-load repaint still hard-resets both pickers.
+        w._refreshAllTabs()
+        if w.overviewTab.employeeID is not None:
+            errors.append(f"hard refresh should reset the employee picker to None, "
+                          f"got employeeID={w.overviewTab.employeeID}")
+        if w.inventoryTab.date is not None:
+            errors.append(f"hard refresh should reset the inventory date picker to None, "
+                          f"got date={w.inventoryTab.date}")
     finally:
         if restore is not None:
             restore()

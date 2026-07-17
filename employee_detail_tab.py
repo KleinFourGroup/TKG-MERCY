@@ -61,7 +61,7 @@ class EmployeeDetailTab(QWidget):
         self.PTOTab.refresh()
         self.notesTab.refresh()
     
-    def refreshPicker(self):
+    def refreshPicker(self, hard: bool = True):
         db = self.mainApp.db
         activeEmployees: list[tuple[str, str, int]] = [(
             (db.employees[entry].lastName or "?").upper(),
@@ -69,11 +69,30 @@ class EmployeeDetailTab(QWidget):
             entry
         ) for entry in db.employees if db.employees[entry].status]
         activeEmployees.sort()
-        selections = [f"{row[0]} {row[1]} ({row[2]})" for row in activeEmployees]
-        selections.insert(0, "None")
+        # Each row carries its employee ID as userData so a soft refresh can
+        # re-find the picked employee by *ID* rather than by label — a rename
+        # rewrites the label, and surviving renames is the whole point of Step 81.
+        previous = self.employeeID
+        self.employeePicker.blockSignals(True)
         self.employeePicker.clear()
-        self.employeePicker.addItems(selections)
-        self.employeePicker.setCurrentIndex(0)
+        self.employeePicker.addItem("None", userData=None)
+        for last, first, entry in activeEmployees:
+            self.employeePicker.addItem(f"{last} {first} ({entry})", userData=entry)
+        index = 0
+        if not hard and previous is not None:
+            for i in range(self.employeePicker.count()):
+                if self.employeePicker.itemData(i) == previous:
+                    index = i
+                    break
+            # else: the employee was deleted or deactivated out of the list —
+            # fall back to "None" rather than silently picking someone else.
+        self.employeePicker.setCurrentIndex(index)
+        self.employeePicker.blockSignals(False)
+        # Signals stayed blocked across the rebuild (so a preserved pick doesn't
+        # thrash the five detail subtabs mid-rebuild), which means the
+        # currentTextChanged -> selectEmployee hop that normally syncs
+        # employeeID and repaints those subtabs never fired. Drive it once here.
+        self.selectEmployee(self.employeePicker.currentText())
 
-    def refresh(self):
-        self.refreshPicker()
+    def refresh(self, hard: bool = True):
+        self.refreshPicker(hard)

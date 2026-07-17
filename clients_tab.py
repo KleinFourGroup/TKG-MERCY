@@ -148,12 +148,7 @@ class ClientEditWindow(QWidget):
                 self.item.transportDays = transportDays
             if isNone:
                 self.item = None
-            self.mainApp.clientsTab.refreshTable()
-            # A client rename propagates to any order referencing it
-            # (db.updateClient), so refresh the Orders table too — and the Order
-            # Status table, which shows the order's client as well (Step 49).
-            self.mainApp.ordersTab.refreshTable()
-            self.mainApp.orderStatusTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             errorMessage(self, errors)

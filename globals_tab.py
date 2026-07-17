@@ -39,8 +39,7 @@ class GlobalsTab(QWidget):
                             errorMessage(self.mainApp, errors)
                         else:
                             setattr(self.mainApp.db.globals, currGlob, val)
-                            self.mainApp.partsTab.refreshTable()
-                            self.refreshTab()
+                            self.mainApp.refreshAllViews()
                 return update
             
             self.buttons[glob].clicked.connect(getUpdate(glob))

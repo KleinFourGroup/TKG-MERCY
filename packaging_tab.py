@@ -147,8 +147,7 @@ class PackagingEditWindow(QWidget):
             self.item.price = price
             if isNone:
                 self.item = None
-            self.mainApp.packagingTab.refreshTable()
-            self.mainApp.partsTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)

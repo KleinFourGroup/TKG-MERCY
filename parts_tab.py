@@ -108,13 +108,7 @@ class PartsTab(QWidget):
             if confirm == QMessageBox.StandardButton.Yes:
                 blockers = self.mainApp.db.delPart(part)
                 if len(blockers) == 0:
-                    self.refreshTable()
-                    # delPart cascade-drops the part's press preferences (Step 48),
-                    # so refresh that table to drop the now-deleted part's row.
-                    self.mainApp.partPressPrefTab.refreshTable()
-                    # It also cascade-drops the part's parts-per-truck (Step 74a), so
-                    # refresh that grid to drop the now-deleted part's row too.
-                    self.mainApp.partTruckTab.refreshTable()
+                    self.mainApp.refreshAllViews()
                     QMessageBox.information(self.mainApp, "Success!", f"Deleted part {part}")
                 else:
                     # Orders and mounted-die presses block the delete (Step 79 amendment);
@@ -358,25 +352,7 @@ class PartsEditWindow(QWidget):
             part.sales = sales
             if isNone:
                 self.part = None
-            self.mainApp.partsTab.refreshTable()
-            # A part rename propagates to any order referencing it (db.updatePart),
-            # so refresh the Orders table too (like packaging refreshes parts). The
-            # Order Status table shows the order's part as well (Step 49), so refresh
-            # it for the same reason.
-            self.mainApp.ordersTab.refreshTable()
-            self.mainApp.orderStatusTab.refreshTable()
-            # Part-press preferences are keyed by part name (Step 48): a new part
-            # shows up as an all-"Not set" row and a rename rekeys its prefs, so the
-            # Part-Press Preference grid must refresh too (Step 64).
-            self.mainApp.partPressPrefTab.refreshTable()
-            # Parts per truck is keyed by part name too (Step 74a): a new part shows
-            # as a blank row and a rename rekeys its value, so refresh that grid too.
-            self.mainApp.partTruckTab.refreshTable()
-            # A press's mounted die is a part FK (Step 79): db.updatePart rekeys any
-            # press's currentPart on rename, so the Presses list would otherwise show
-            # the stale die name. Refresh it too. (One-off patch of the stale-view FK
-            # refresh bug family; Step 81 is the permanent fix — MERGE_PLAN §13.50.)
-            self.mainApp.pressesTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             errorMessage(self, errors)

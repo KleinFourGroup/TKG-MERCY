@@ -226,9 +226,7 @@ class MaterialsEditWindow(QWidget):
             self.material.otherChem = otherChem
             if isNone:
                 self.material = None
-            self.mainApp.materialsTab.refreshTable()
-            self.mainApp.mixturesTab.refreshTable()
-            self.mainApp.partsTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)

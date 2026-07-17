@@ -224,8 +224,7 @@ class MixturesEditWindow(QWidget):
                 self.mixture.add(materials[i], weights[i])
             if isNone:
                 self.mixture = None
-            self.mainApp.mixturesTab.refreshTable()
-            self.mainApp.partsTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             # self.error = ErrorWindow(errors)

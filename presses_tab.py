@@ -72,12 +72,7 @@ class PressesTab(QWidget):
             confirm = QMessageBox.question(self, f"Delete {press}?", f"Are you sure you want to delete {press}?")
             if confirm == QMessageBox.StandardButton.Yes:
                 self.mainApp.db.delPress(press)
-                self.refreshTable()
-                # delPress cascade-drops this press from every part's AND presser's
-                # preferences (Steps 48, 65), so refresh both grids (the deleted press
-                # is also a dropped column) to reflect the dropped scores.
-                self.mainApp.partPressPrefTab.refreshTable()
-                self.mainApp.presserPressPrefTab.refreshTable()
+                self.mainApp.refreshAllViews()
                 QMessageBox.information(self.mainApp, "Success!", f"Deleted press {press}")
 
     def refreshTable(self):
@@ -162,13 +157,7 @@ class PressEditWindow(QWidget):
             self.mainApp.db.setPressCurrentPart(name, part)
             if isNone:
                 self.item = None
-            self.mainApp.pressesTab.refreshTable()
-            # A press rename propagates into every part's and presser's score map
-            # (db.updatePress), and a new press becomes a column in both grids, so
-            # refresh the Part-Press and Presser-Press Preference tables too
-            # (Steps 48, 65).
-            self.mainApp.partPressPrefTab.refreshTable()
-            self.mainApp.presserPressPrefTab.refreshTable()
+            self.mainApp.refreshAllViews()
             res = True
         else:
             errorMessage(self, errors)

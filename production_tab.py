@@ -472,7 +472,7 @@ class ProductionEditWindow(QWidget):
             self.record.setRecord(empId, date, shift, action, targetName, quantity, scrap, hours)
             self.mainApp.db.production[self.record.key()] = self.record
 
-        self.parentTab.refresh()
+        self.mainApp.refreshAllViews()
         return True
 
     def newRecord(self):
@@ -983,7 +983,7 @@ class ProductionBatchDialog(QWidget):
         for rec in toCreate:
             self.mainApp.db.production[rec.key()] = rec
 
-        self.parentTab.refresh()
+        self.mainApp.refreshAllViews()
         QMessageBox.information(self, "Success",
                                 f"{len(toCreate)} production record(s) added!")
         self.close()
