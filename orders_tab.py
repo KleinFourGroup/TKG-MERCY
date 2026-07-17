@@ -12,6 +12,7 @@ from error import errorMessage
 from utils import (
     checkInput, toQDate, fromQDate, centerOnScreen,
     orderSortCombo, orderSortKey, ORDER_SORT_DUEDATE,
+    orderIsOpen, openOrdersCheck,
 )
 import datetime
 import logging
@@ -39,6 +40,10 @@ class OrdersTab(QWidget):
         super().__init__()
         self.mainApp = mainApp
         self.sortMode = ORDER_SORT_DUEDATE
+        # Open-orders filter (Step 83): default ON — the everyday view is the
+        # outstanding orders. genTableData reads this attribute (not the widget)
+        # so the stale-view net's recompute sees the same filter as the render.
+        self.openOnly = True
         self.genTableData()
         self.table = DBTable(self.data, self.headers)
         self.table.parentTab = self  # type: ignore
@@ -48,6 +53,9 @@ class OrdersTab(QWidget):
 
         self.sortCombo = orderSortCombo(self.sortMode)
         self.sortCombo.currentIndexChanged.connect(self.changeSort)
+
+        self.openCheck = openOrdersCheck()
+        self.openCheck.toggled.connect(self.changeOpenFilter)
 
         edit = QPushButton("Edit")
         edit.clicked.connect(self.openEdits)
@@ -61,6 +69,7 @@ class OrdersTab(QWidget):
         barLayout = QHBoxLayout()
         barLayout.addWidget(QLabel("Sort by:"))
         barLayout.addWidget(self.sortCombo)
+        barLayout.addWidget(self.openCheck)
         barLayout.addWidget(self.selectLabel)
         barLayout.addWidget(edit)
         barLayout.addWidget(new)
@@ -78,6 +87,11 @@ class OrdersTab(QWidget):
         self.data = []
         for num, order in sorted(db.orders.items(),
                                  key=lambda kv: orderSortKey(kv[1], self.sortMode)):
+            # Open-orders filter (Step 83). "Open" lives on the status record
+            # (db.orderStatus), so this is the Orders tab's one orderStatus read;
+            # the shared orderIsOpen keeps both tabs' filters agreeing.
+            if self.openOnly and not orderIsOpen(db, num):
+                continue
             due = order.dueDate.isoformat() if order.dueDate is not None else "?"
             self.data.append([num, order.client, order.part,
                               f"{order.quantity}", f"{order.price:.2f}", due])
@@ -114,17 +128,26 @@ class OrdersTab(QWidget):
         self.sortMode = self.sortCombo.currentData()
         self.refreshTable()
 
+    def changeOpenFilter(self, checked):
+        self.openOnly = checked
+        self.refreshTable()
+
     def openReport(self):
         # Orders / Order Status PDF report (Step 77). Linked from both tabs; the
         # window is import-deferred to keep the app -> tab import chain acyclic.
+        # The report window has its own Status (Open/Closed/All) filter, so it
+        # deliberately does NOT inherit this tab's open-orders toggle (Step 83).
         from order_report_window import OrderReportWindow
         OrderReportWindow(self.mainApp)
 
     def refreshTable(self):
         self.genTableData()
         self.table.setData(self.data)
-        selection = [order for order in self.selection if order in self.mainApp.db.orders]
-        self.setSelection(selection)
+        # Keep only selections still visible: an order hidden by the open-orders
+        # filter (or deleted) must not linger as an invisible selection that Edit /
+        # Delete would silently act on (Step 83; visibility implies still-in-db).
+        visible = {row[0] for row in self.data}
+        self.setSelection([order for order in self.selection if order in visible])
 
 
 class OrderEditWindow(QWidget):

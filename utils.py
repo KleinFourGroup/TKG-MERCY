@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QFrame
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QCheckBox, QFrame
 from PySide6.QtCore import QDate
 import base64, os, sys, datetime, tempfile
 
@@ -147,3 +147,25 @@ def orderSortKey(order, mode: str):
     if mode == ORDER_SORT_CLIENT:
         return (order.client.casefold(), order.orderNum)
     return (order.dueDate is None, order.dueDate or datetime.date.max, order.orderNum)
+
+def orderIsOpen(db, orderNum: str) -> bool:
+    # Whether an order is still open, i.e. not yet fully shipped (Step 83). Shared
+    # by the Orders and Order Status tabs' open-orders filter so the two agree
+    # structurally. An order with no snapshot recorded yet is OPEN — None means
+    # "nothing shipped so far", not "done" — matching the Order Status tab's
+    # `status is not None and status.isFulfilled()` reading; a never-snapshotted
+    # order must not vanish behind the filter.
+    status = db.orderStatus.get(orderNum)
+    return status is None or not status.isFulfilled()
+
+def openOrdersCheck() -> QCheckBox:
+    # The "Open orders only" filter toggle shared by the Orders and Order Status
+    # tabs (Step 83). Default ON (team call 2026-07-17): the everyday view is the
+    # outstanding orders; untick to include fulfilled history. The caller connects
+    # toggled and re-filters via orderIsOpen.
+    box = QCheckBox("Open orders only")
+    box.setChecked(True)
+    box.setToolTip(
+        "Show only open orders (not yet fully shipped). An order with no status "
+        "snapshot yet counts as open. Untick to show fulfilled orders too.")
+    return box

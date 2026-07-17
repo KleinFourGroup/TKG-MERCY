@@ -9,6 +9,7 @@ from error import errorMessage
 from utils import (
     checkInput, toQDate, fromQDate, centerOnScreen,
     orderSortCombo, orderSortKey, ORDER_SORT_DUEDATE,
+    orderIsOpen, openOrdersCheck,
 )
 import datetime
 import logging
@@ -26,6 +27,10 @@ class OrderStatusTab(QWidget):
         super().__init__()
         self.mainApp = mainApp
         self.sortMode = ORDER_SORT_DUEDATE
+        # Open-orders filter (Step 83): default ON — the everyday view is the
+        # outstanding orders. genTableData reads this attribute (not the widget)
+        # so the stale-view net's recompute sees the same filter as the render.
+        self.openOnly = True
         self.genTableData()
         self.table = DBTable(self.data, self.headers)
         self.table.parentTab = self  # type: ignore
@@ -36,6 +41,9 @@ class OrderStatusTab(QWidget):
         self.sortCombo = orderSortCombo(self.sortMode)
         self.sortCombo.currentIndexChanged.connect(self.changeSort)
 
+        self.openCheck = openOrdersCheck()
+        self.openCheck.toggled.connect(self.changeOpenFilter)
+
         edit = QPushButton("Edit")
         edit.clicked.connect(self.openEdits)
         report = QPushButton("Report")
@@ -44,6 +52,7 @@ class OrderStatusTab(QWidget):
         barLayout = QHBoxLayout()
         barLayout.addWidget(QLabel("Sort by:"))
         barLayout.addWidget(self.sortCombo)
+        barLayout.addWidget(self.openCheck)
         barLayout.addWidget(self.selectLabel)
         barLayout.addWidget(edit)
         barLayout.addWidget(report)
@@ -55,14 +64,21 @@ class OrderStatusTab(QWidget):
 
     def genTableData(self):
         db = self.mainApp.db
-        self.headers = ["Order #", "Client", "Part", "Quantity",
+        self.headers = ["Order #", "Client", "Part", "Quantity", "Due Date",
                         "Latest Snapshot", "Rem. to Press", "Rem. to Ship", "Fulfilled?"]
         self.data = []
         for num, order in sorted(db.orders.items(),
                                  key=lambda kv: orderSortKey(kv[1], self.sortMode)):
+            # Open-orders filter (Step 83); shared with the Orders tab via
+            # orderIsOpen so the two filters can't disagree.
+            if self.openOnly and not orderIsOpen(db, num):
+                continue
             status = db.orderStatus.get(num)
             latestDate = status.latestDate() if status is not None else None
             latest = latestDate.isoformat() if latestDate is not None else "(none)"
+            # Due date column (Step 83, team ask): "?" for an undated order,
+            # matching the Orders tab / orders report convention.
+            due = order.dueDate.isoformat() if order.dueDate is not None else "?"
             # No snapshot recorded yet => outstanding defaults to the full ordered
             # quantity (spec §5.2); the "(none)" latest column makes the default
             # status visible so the displayed counts aren't mistaken for recorded 0s.
@@ -72,7 +88,7 @@ class OrderStatusTab(QWidget):
             ship = order.quantity if ship is None else ship
             fulfilled = "Yes" if status is not None and status.isFulfilled() else "No"
             self.data.append([num, order.client, order.part, f"{order.quantity}",
-                              latest, f"{press}", f"{ship}", fulfilled])
+                              due, latest, f"{press}", f"{ship}", fulfilled])
 
     def setSelection(self, selection):
         self.selection = selection
@@ -95,17 +111,26 @@ class OrderStatusTab(QWidget):
         self.sortMode = self.sortCombo.currentData()
         self.refreshTable()
 
+    def changeOpenFilter(self, checked):
+        self.openOnly = checked
+        self.refreshTable()
+
     def openReport(self):
         # Orders / Order Status PDF report (Step 77). Linked from both tabs; the
         # window is import-deferred to keep the app -> tab import chain acyclic.
+        # The report window has its own Status (Open/Closed/All) filter, so it
+        # deliberately does NOT inherit this tab's open-orders toggle (Step 83).
         from order_report_window import OrderReportWindow
         OrderReportWindow(self.mainApp)
 
     def refreshTable(self):
         self.genTableData()
         self.table.setData(self.data)
-        selection = [num for num in self.selection if num in self.mainApp.db.orders]
-        self.setSelection(selection)
+        # Keep only selections still visible: an order hidden by the open-orders
+        # filter (or deleted) must not linger as an invisible selection that Edit
+        # would silently act on (Step 83; visibility implies still-in-db).
+        visible = {row[0] for row in self.data}
+        self.setSelection([num for num in self.selection if num in visible])
 
 
 class OrderStatusEditWindow(QWidget):

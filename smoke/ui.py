@@ -1151,6 +1151,10 @@ def orders_tab_crud() -> list[str]:
     """Step 47: OrdersTab CRUD + FK combos + auto-suggest + block-on-delete + roundtrip.
 
     Seeds tiny fuzz data (now populating clients, parts, and orders), then:
+      - Step 83: confirms the open-orders filter defaults ON and shows exactly the
+        open orders; fulfilling an order drops its row; a never-snapshotted order
+        counts as OPEN (it must not vanish behind the filter); unticking shows
+        everything again (the filter is then left off for the legacy flow below);
       - confirms deleting a client/part an order references is BLOCKED (the
         client/part and the order both survive);
       - opens an Edit window on an order, confirms the order-number / client /
@@ -1187,6 +1191,38 @@ def orders_tab_crud() -> list[str]:
         if len(w.db.orders) == 0:
             errors.append("expected fuzz seed to populate orders, got 0")
             return errors
+
+        # --- Step 83: open-orders filter (default ON, shared orderIsOpen) ---
+        import datetime
+        from records import Order
+        from utils import orderIsOpen
+        if not w.ordersTab.openCheck.isChecked():
+            errors.append("Step 83: open-orders filter should default ON")
+        openNums = {num for num in w.db.orders if orderIsOpen(w.db, num)}
+        shown = {r[0] for r in w.ordersTab.data}
+        if shown != openNums:
+            errors.append(f"Step 83: filtered rows {sorted(shown)} != open orders {sorted(openNums)}")
+        # Fulfilling an order (latest remaining-to-ship 0) drops it from the view.
+        target = sorted(openNums)[0]
+        w.db.setOrderSnapshot(target, datetime.date.today(), 0, 0)
+        w.refreshAllViews()
+        if any(r[0] == target for r in w.ordersTab.data):
+            errors.append(f"Step 83: fulfilled order {target!r} still listed with filter ON")
+        # A brand-new order with no snapshot yet counts as OPEN (None => open) —
+        # a never-snapshotted order must not vanish behind the filter.
+        fresh = "STEP83-NO-SNAPSHOT"
+        w.db.addOrder(Order(fresh, sorted(w.db.clients)[0], sorted(w.db.parts)[0], 5, 1.0, None))
+        w.refreshAllViews()
+        if not any(r[0] == fresh for r in w.ordersTab.data):
+            errors.append("Step 83: never-snapshotted order missing from the open-only view")
+        w.db.delOrder(fresh)
+        # Untick via the real checkbox (drives changeOpenFilter): everything shows.
+        # Left OFF for the rest of this check so later row lookups see every order.
+        w.ordersTab.openCheck.setChecked(False)
+        if not any(r[0] == target for r in w.ordersTab.data):
+            errors.append(f"Step 83: fulfilled order {target!r} missing with filter OFF")
+        if {r[0] for r in w.ordersTab.data} != set(w.db.orders):
+            errors.append("Step 83: filter OFF should show every order")
 
         fixtureNum = sorted(w.db.orders)[0]
         fixture = w.db.orders[fixtureNum]
@@ -1835,7 +1871,10 @@ def order_status_crud() -> list[str]:
       - re-adds the same date with new values, confirms it OVERWRITES (one snapshot
         per date) rather than duplicating;
       - adds a latest-dated snapshot with remaining-to-ship 0 and confirms the order
-        reads fulfilled (isFulfilled + the outer table's Fulfilled? column);
+        reads fulfilled: with the Step 83 open-orders filter at its default ON the
+        row DROPS OUT of the outer table, and unticking the filter brings it back
+        with Fulfilled? = "Yes" and the Step 83 Due Date column populated (the
+        filter is then left off for the rest of the check);
       - selects + deletes a snapshot via the editor;
       - renames the order: status snapshots rekey AND the Order Status table
         refreshes (the FK-rename-refresh rule);
@@ -1871,6 +1910,15 @@ def order_status_crud() -> list[str]:
 
         orderNum = sorted(w.db.orderStatus)[0]
         status = w.db.orderStatus[orderNum]
+
+        # --- Step 83: filter defaults ON and shows exactly the open orders ---
+        from utils import orderIsOpen
+        if not w.orderStatusTab.openCheck.isChecked():
+            errors.append("Step 83: open-orders filter should default ON")
+        openNums = {num for num in w.db.orders if orderIsOpen(w.db, num)}
+        shown = {r[0] for r in w.orderStatusTab.data}
+        if shown != openNums:
+            errors.append(f"Step 83: filtered rows {sorted(shown)} != open orders {sorted(openNums)}")
 
         # --- editor prefill: sub-table shows the order's current snapshots ---
         editor = OrderStatusEditWindow(orderNum, w)
@@ -1909,10 +1957,24 @@ def order_status_crud() -> list[str]:
         editor.addButton.click()
         if not w.db.orderStatus[orderNum].isFulfilled():
             errors.append("after 0-to-ship latest snapshot: order not reported fulfilled")
+        # Step 83: with the open-orders filter at its default ON, the now-fulfilled
+        # order must drop out of the outer table...
         w.orderStatusTab.refreshTable()
+        if any(r[0] == orderNum for r in w.orderStatusTab.data):
+            errors.append("Step 83: fulfilled order still shown with open-orders filter ON")
+        # ...and reappear with Fulfilled? = "Yes" once the filter is unticked via the
+        # real checkbox (drives changeOpenFilter). Left OFF for the rest of the check
+        # so later row assertions see every order regardless of fulfillment.
+        w.orderStatusTab.openCheck.setChecked(False)
         orow = next((r for r in w.orderStatusTab.data if r[0] == orderNum), None)
         if orow is None or orow[-1] != "Yes":
-            errors.append(f"outer table Fulfilled? column not 'Yes' (row={orow})")
+            errors.append(f"outer table Fulfilled? column not 'Yes' with filter off (row={orow})")
+        # Step 83: the Due Date column (index 4) renders the order's due date, "?"
+        # when undated — the Orders tab / orders report convention.
+        due = w.db.orders[orderNum].dueDate
+        dueWant = due.isoformat() if due is not None else "?"
+        if orow is not None and orow[4] != dueWant:
+            errors.append(f"Step 83: Due Date column {orow[4]!r} != {dueWant!r}")
 
         # --- confirmation guard on out-of-order / increasing snapshots ---
         # Latest snapshot is now dLatest (today) = (0, 0). Drive QMessageBox.question
@@ -3232,6 +3294,12 @@ def fk_rename_refreshes_dependent_tabs() -> list[str]:
     try:
         w, restore, tmp, _ = _detailTabsScratchSetup()
         db = w.db
+
+        # Step 83: the open-orders filter defaults ON and the fuzz-picked fixture
+        # order below may be seeded fulfilled, which would hide its row. This check
+        # asserts refresh *mechanics*, not filtering, so show all orders.
+        w.ordersTab.openCheck.setChecked(False)
+        w.orderStatusTab.openCheck.setChecked(False)
 
         oldName = sorted(db.parts)[0]
         newName = "STEP81-RENAMED"

@@ -2,22 +2,6 @@
 
 Forward-looking only; **this file shrinks as work lands.** Each planned step carries its scoping essay here; when it ships, the essay is replaced by a WORKLOG as-built entry and deleted from this file (the essay's still-useful parts move with it). Live status: the 🧭 Cursor in [HANDOFF.md](HANDOFF.md). One step = one commit.
 
-## Step 83 — Order Status due date + open-orders toggle (team request, 2026-07-16)
-
-Two asks, both UI-only, no schema change:
-
-1. **Order Status table shows due date** alongside the snapshot date. Today its headers are `["Order #", "Client", "Part", "Quantity", "Latest Snapshot", "Rem. to Press", "Rem. to Ship", "Fulfilled?"]` — `Order.dueDate` isn't among them, though the Orders tab already renders it.
-2. **A show/hide open-orders toggle on BOTH the Orders and Order Status tabs.**
-
-**⏸ Ask the team before building — "show / hide open orders" is ambiguous.** It most likely means *filter to open orders only* (hide fulfilled ones, to declutter), but read literally it means hiding the open ones — the opposite. **Do not guess**: one question settles it, and the wrong reading ships a filter that hides exactly the rows they wanted. Confirm the default state too (filtered or unfiltered on open).
-
-**Scoping notes (2026-07-16 survey — the non-obvious parts):**
-- **`orders_tab.py` does not reference `orderStatus` at all today.** "Open" is `OrderStatus.isFulfilled()` ([records/sales.py](records/sales.py)), which lives on the *status* record, so the toggle introduces a **new Orders → orderStatus dependency**. That's the real cost of ask #2; Order Status already has the data (it renders a "Fulfilled?" column).
-- **Semantics of a missing status:** an order with no snapshot yet is **open** — `order_status_tab` already encodes this as `status is not None and status.isFulfilled()`, so `None` ⇒ not fulfilled ⇒ open. Whatever the toggle does must agree, or a never-snapshotted order silently vanishes.
-- **Put the filter in [utils.py](utils.py) beside `orderSortCombo` / `orderSortKey` / `ORDER_SORT_*`**, which both tabs already share — the two tabs must agree, and a shared helper makes that structural instead of remembered.
-- **Decide whether the Step 77 Orders / Order Status PDF report honours the filter.** It's linked from both tabs; the Step 82 precedent is that tab and PDF read identically, so a filtered tab printing an unfiltered PDF would surprise. Probably yes — but confirm; it may be exactly the full record they want on paper.
-- **Smoke:** extend `order_status_crud` / `orders_tab_crud` for the new column + both toggle states; assert a never-snapshotted order counts as open.
-
 ## The overhaul block — Steps 85–87 (planned 2026-07-16)
 
 Origin: Matthew, post-release — *"the codebase has a lot of weird edge cases that really need to be cleaned up."* Do these as **separate steps, not a cleanup mega-commit** (the reasoning that split option D out of Step 81), smoke green at every step. Step 84 (the doc split) was the block's first member and has landed.
