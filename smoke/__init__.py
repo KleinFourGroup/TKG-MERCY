@@ -11,6 +11,7 @@ from smoke.records import (
     compile_all, empty_roundtrip,
     production_roundtrip, production_tool_change_roundtrip,
     production_quantity_validation, mixture_full_loi_material,
+    mixture_zero_weight_no_crash,
 )
 from smoke.migrations import (
     legacy_anika_migration, legacy_becky_migration, legacy_merge,
@@ -58,6 +59,7 @@ __all__ = [
     "compile_all", "empty_roundtrip",
     "production_roundtrip", "production_tool_change_roundtrip",
     "production_quantity_validation", "mixture_full_loi_material",
+    "mixture_zero_weight_no_crash",
     "legacy_anika_migration", "legacy_becky_migration", "legacy_merge",
     "mercy_v3_to_v4_migration", "mercy_v4_to_v5_migration", "mercy_v5_to_v6_migration",
     "mercy_v6_to_v7_migration", "mercy_v7_to_v8_migration", "mercy_v8_to_v9_migration",

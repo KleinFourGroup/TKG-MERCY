@@ -133,6 +133,15 @@ class Mixture:
         weight = 0
         for wt in self.weights:
             weight += wt
+        if weight <= 0:
+            # Degenerate mixture: no components, or a non-positive total weight.
+            # The editor requires positive component weights (readData's "pos"
+            # check), so this is only reachable via legacy/hand-edited data — but
+            # dividing by it would crash the Mixtures tab on open, the same
+            # "looks like a wiped DB" failure as the Step 84-post-triage LOI bug.
+            # No per-component fraction exists, so cost is 0 (matches the existing
+            # empty-mixture result, which never entered the loop).
+            return 0
         for i in range(len(self.materials)):
             pct = self.weights[i] / weight
             costPerLb = self.db.materials[self.materials[i]].getCostPerLb()
@@ -149,6 +158,12 @@ class Mixture:
         if not (self.db is not None and self.db.materials is not None):
             raise RuntimeError('self.db is not None and self.db.materials is not None')
         ret = 0
+        if self.getBatchWeight() <= 0:
+            # See getCost: a non-positive total weight (legacy/hand-edited data
+            # only — the editor requires positive weights) has no per-component
+            # fraction. Return 0 rather than dividing by it in the loop below and
+            # crashing the Mixtures tab / Mix Report render on open.
+            return ret
         for i in range(len(self.materials)):
             matVal = getattr(self.db.materials[self.materials[i]], prop)
             if matVal is None:

@@ -591,3 +591,93 @@ def mixture_full_loi_material() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+def mixture_zero_weight_no_crash() -> list[str]:
+    """Step 84-post-triage follow-up: a zero-total-weight mixture must not divide
+    by zero.
+
+    Sibling of the LOI crash: `Mixture.getCost` and `getProp` compute a
+    per-component fraction `weight[i] / totalWeight`, which is a divide-by-zero
+    when the components sum to 0 — and, like the LOI bug, it would crash the
+    Mixtures tab / Mix Report on open (the "wiped DB" symptom). The mixture
+    editor requires positive component weights (`readData`'s "pos" check), so
+    this is only reachable via legacy/hand-edited data — which is exactly why a
+    render-path backstop matters. The fix returns 0 for a non-positive total
+    weight; this check builds such a mixture *directly* (bypassing the editor,
+    as corrupt data would) and pins:
+      - getCost / getProp return a finite 0, no raise;
+      - the Mixtures tab refresh does not raise;
+      - an empty mixture (no components) still returns 0 (behaviour unchanged).
+    """
+    import math
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records.products import Material, Mixture
+
+    errors: list[str] = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        mat = Material("Filler")
+        mat.setChems(45.0, 10.0, 1.0, 0.5, 0.0, 0.0, 0.1, 0.1, 0.1, 0.1, 5.0)
+        mat.setSizes(20.0, 20.0, 20.0, 20.0, 20.0)
+        mat.otherChem = 0.0
+        mat.setCost(100.0, 10.0)
+        w.db.addMaterial(mat)
+
+        # A component with weight 0 -> total batch weight 0. Direct construction
+        # mimics legacy/corrupt data the editor would never produce.
+        degenerate = Mixture("Degenerate")
+        degenerate.add("Filler", 0.0)
+        w.db.addMixture(degenerate)
+
+        try:
+            cost = degenerate.getCost()
+        except Exception as e:  # noqa: BLE001
+            cost = None
+            errors.append(f"getCost() raised on a zero-weight mixture: {e!r}")
+        if cost is None or not math.isfinite(cost) or cost != 0:
+            errors.append(f"getCost() on a zero-weight mixture = {cost!r}, expected 0")
+
+        try:
+            prop = degenerate.getProp("SiO2")
+        except Exception as e:  # noqa: BLE001
+            prop = None
+            errors.append(f"getProp('SiO2') raised on a zero-weight mixture: {e!r}")
+        if prop is None or not math.isfinite(prop) or prop != 0:
+            errors.append(f"getProp('SiO2') on a zero-weight mixture = {prop!r}, expected 0")
+
+        # The user-facing surface that showed the "wipe" must render.
+        try:
+            w.mixturesTab.refreshTable()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"mixturesTab.refreshTable() raised on a zero-weight mixture: {e!r}")
+
+        # Control: an empty mixture (no components) is unchanged — still 0, no raise.
+        empty = Mixture("Empty")
+        w.db.addMixture(empty)
+        try:
+            if empty.getCost() != 0:
+                errors.append(f"empty mixture getCost() = {empty.getCost()!r}, expected 0")
+            if empty.getProp("SiO2") != 0:
+                errors.append(f"empty mixture getProp() = {empty.getProp('SiO2')!r}, expected 0")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"empty mixture cost/prop raised: {e!r}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
