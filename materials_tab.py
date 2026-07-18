@@ -210,6 +210,18 @@ class MaterialsEditWindow(QWidget):
         Sub200Plus325 = checkInput(self.mainLayout[4][10].text(), float, "nonneg", errors, "Sub200Plus325")
         Sub325 = checkInput(self.mainLayout[4][13].text(), float, "nonneg", errors, "Sub325")
 
+        # A material with LOI >= 100 % leaves no calcined residue after firing, so
+        # any non-zero oxide is a contradiction — the exact impossible entry that
+        # made Mixture.getProp divide by zero (Step 84-post-triage). Reject it at
+        # the source (defense-in-depth on top of getProp's clamp). A fully-volatile
+        # binder (PVA, lard oil) with all-zero oxides is legitimate and still saves.
+        # Gated on a clean parse so checkInput's `1` fallback for an unparseable
+        # field can't fire a misleading second error.
+        oxides = [SiO2, Al2O3, Fe2O3, TiO2, Li2O, P2O5, Na2O, CaO, K2O, MgO, otherChem]
+        if len(errors) == 0 and LOI >= 100 and any(v > 0 for v in oxides):
+            errors.append("LOI is 100% or more (nothing remains after firing), so every "
+                          "oxide must be 0. Check the LOI and oxide values.")
+
         if len(errors) == 0:
             isNone = self.material is None
             if isNew:

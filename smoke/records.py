@@ -422,3 +422,172 @@ def production_quantity_validation() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+def mixture_full_loi_material() -> list[str]:
+    """Step 84-post-triage: a mixture containing a 100 %-LOI material must not
+    divide by zero.
+
+    A fully-combustible organic binder (PVA, lard oil) legitimately has
+    LOI = 100 % — it leaves no calcined residue — so ``Mixture.getProp`` on the
+    ignited (LOI) basis hit ``matVal / (1 - 100/100)`` = a 0/0 singularity.
+    Because the Mixtures tab renders oxide columns on every open/edit
+    (``_refreshAllTabs`` -> ``mixturesTab.refreshTable`` -> ``getProp('Al2O3')``),
+    the uncaught ZeroDivisionError blew straight out of the File->Open flow,
+    leaving an empty window that the team read as a *wiped database*. The data
+    on disk was intact; the app just never finished rendering. Real trigger:
+    the "Mold Mend P" mixtures with "PVA - Dry" in the shop DB.
+
+    The fix clamps the LOI fraction below 1 (mirroring
+    ``scheduling.requiredPressed``'s scrap clamp). This check pins:
+      1. ``getProp`` returns a finite value (no crash) for every oxide when a
+         100 %-LOI binder with all-zero oxides is present — and equals what the
+         non-volatile material alone contributes (the binder adds 0).
+      2. The Mixtures tab refresh and the Mix Report both render, not raise
+         (the two user-facing surfaces that showed the "wipe").
+      3. A material with LOI just under the clamp (99.0 %) is left *exactly*
+         unclamped, so the fix perturbs no good data.
+      4. The impossible case (oxides present *and* LOI = 100 %) yields a finite,
+         absurd-but-visible number rather than crashing (dual-mandate: surface
+         bad data loudly, never corrupt or silently swallow).
+    """
+    import math
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from records.products import Material, Mixture
+    from report import PDFReport
+
+    errors: list[str] = []
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    pdfPath = None
+    w = None
+
+    def _mat(name, si, loi):
+        # A materially-complete Material: every oxide + size + otherChem set
+        # non-None so getProp never short-circuits on None and the Mix Report's
+        # f"{...:.1f}" formatting has real numbers to render.
+        m = Material(name)
+        m.setChems(si, 10.0, 1.0, 0.5, 0.0, 0.0, 0.1, 0.1, 0.1, 0.1, loi)
+        m.setSizes(20.0, 20.0, 20.0, 20.0, 20.0)
+        m.otherChem = 0.0
+        m.setCost(100.0, 10.0)
+        return m
+
+    OXIDES = ("SiO2", "Al2O3", "Fe2O3", "TiO2", "Li2O",
+              "P2O5", "Na2O", "CaO", "K2O", "MgO", "otherChem")
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        # A refractory (real oxides, ordinary LOI) + a fully-volatile binder
+        # (all-zero oxides, LOI = 100). addMaterial/addMixture wire the db
+        # back-reference getProp needs.
+        refractory = _mat("Refractory", 45.0, 13.8)
+        binder = Material("PVA Binder")
+        binder.setChems(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 100.0)
+        binder.setSizes(0.0, 0.0, 0.0, 0.0, 0.0)
+        binder.otherChem = 0.0
+        binder.setCost(100.0, 10.0)
+        w.db.addMaterial(refractory)
+        w.db.addMaterial(binder)
+
+        mix = Mixture("Mold Mend")
+        mix.add("Refractory", 90.0)
+        mix.add("PVA Binder", 10.0)
+        w.db.addMixture(mix)
+
+        # (1) getProp is finite for every oxide, and the binder contributes 0.
+        for ox in OXIDES:
+            try:
+                val = mix.getProp(ox)
+            except ZeroDivisionError:
+                errors.append(f"getProp({ox!r}) still divides by zero on a 100%-LOI binder")
+                continue
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"getProp({ox!r}) raised {e!r}")
+                continue
+            if val is None or not math.isfinite(val):
+                errors.append(f"getProp({ox!r}) returned non-finite {val!r}")
+        # Correctness: with the binder adding nothing, SiO2 == refractory's own
+        # calcined contribution at its 90 % weight share. Guarded so a regression
+        # that reintroduces the crash reports a clean FAIL, not an aborted battery.
+        expectedSiO2 = 0.9 * 45.0 / (1 - 13.8 / 100)
+        try:
+            gotSiO2 = mix.getProp("SiO2")
+        except Exception as e:  # noqa: BLE001
+            gotSiO2 = None
+            errors.append(f"getProp('SiO2') raised: {e!r}")
+        if gotSiO2 is None or not math.isclose(gotSiO2, expectedSiO2, rel_tol=1e-9):
+            errors.append(f"getProp('SiO2')={gotSiO2!r}, expected ~{expectedSiO2!r} "
+                          f"(binder should contribute 0)")
+
+        # (2) The two user-facing surfaces that showed the "wipe" must render.
+        try:
+            w.mixturesTab.refreshTable()
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"mixturesTab.refreshTable() raised on a 100%-LOI mix: {e!r}")
+        tmpPdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmpPdf.close()
+        pdfPath = tmpPdf.name
+        try:
+            PDFReport(w.db, pdfPath).mixReport("Mold Mend")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"mixReport raised on a 100%-LOI mix: {e!r}")
+        else:
+            if not os.path.exists(pdfPath) or os.path.getsize(pdfPath) == 0:
+                errors.append("mixReport produced an empty/missing file")
+
+        # (3) LOI just under the clamp (99.0 %) is left exactly unclamped, so no
+        # good data shifts. A clamp at 99.9 would give 20/0.001; unclamped is
+        # 20/0.01 — a 10x gap this pins shut.
+        justUnder = _mat("JustUnder", 20.0, 99.0)
+        w.db.addMaterial(justUnder)
+        plain = Mixture("Plain")
+        plain.add("JustUnder", 100.0)
+        w.db.addMixture(plain)
+        expectedPlain = 1.0 * 20.0 / (1 - 99.0 / 100)  # == 2000.0
+        try:
+            gotPlain = plain.getProp("SiO2")
+        except Exception as e:  # noqa: BLE001
+            gotPlain = None
+            errors.append(f"getProp on LOI=99.0 material raised: {e!r}")
+        if gotPlain is None or not math.isclose(gotPlain, expectedPlain, rel_tol=1e-9):
+            errors.append(f"getProp on LOI=99.0 material = {gotPlain!r}, expected "
+                          f"{expectedPlain!r}: the clamp must not perturb LOI <= 99.9")
+
+        # (4) Impossible data (oxides present AND LOI = 100) -> finite + absurd,
+        # not a crash. Visibly wrong beats silently swallowed.
+        bogus = _mat("BogusBinder", 50.0, 100.0)  # 50% SiO2 yet 100% burns off
+        w.db.addMaterial(bogus)
+        bad = Mixture("Bad")
+        bad.add("BogusBinder", 100.0)
+        w.db.addMixture(bad)
+        try:
+            badVal = bad.getProp("SiO2")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"getProp on impossible (oxide+100%LOI) data raised {e!r}")
+        else:
+            if badVal is None or not math.isfinite(badVal):
+                errors.append(f"impossible-data getProp returned non-finite {badVal!r}")
+            elif badVal <= 50.0:
+                errors.append(f"impossible-data getProp={badVal!r} should be absurdly "
+                              f"large (visibly wrong), not a plausible {50.0}")
+    finally:
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+        if pdfPath is not None:
+            try:
+                os.unlink(pdfPath)
+            except OSError:
+                pass
+    return errors

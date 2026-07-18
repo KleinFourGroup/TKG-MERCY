@@ -158,7 +158,18 @@ class Mixture:
             matLOI = self.db.materials[self.materials[i]].LOI
             if matLOI is None:
                 raise RuntimeError('matLOI is None')
-            ret += (pct * matVal / (1 - matLOI / 100)) if LOI else pct * matVal
+            # Ignited-basis oxide: divide the as-received oxide by the calcined
+            # fraction (1 - LOI/100). A fully-combustible organic binder (PVA,
+            # lard oil) legitimately has LOI = 100 % and leaves no calcined
+            # residue, making that fraction exactly 0 -> a 0/0 singularity that
+            # crashed the whole Mixtures tab / Mix Report on open (Step
+            # 84-post-triage; misread by the team as a wiped DB). Clamp the LOI
+            # fraction below 1, mirroring scheduling.requiredPressed's scrap
+            # clamp: a fully-volatile material's real all-zero oxides yield a
+            # correct 0 term, and the impossible oxides-with-100%-LOI case yields
+            # an absurd-but-finite (visibly wrong) number instead of a crash.
+            loiFrac = min(max(matLOI / 100, 0.0), 0.999)
+            ret += (pct * matVal / (1 - loiFrac)) if LOI else pct * matVal
         return ret
 
     def getTuple(self):

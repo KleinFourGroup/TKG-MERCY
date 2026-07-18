@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from smoke.records import (
     compile_all, empty_roundtrip,
     production_roundtrip, production_tool_change_roundtrip,
-    production_quantity_validation,
+    production_quantity_validation, mixture_full_loi_material,
 )
 from smoke.migrations import (
     legacy_anika_migration, legacy_becky_migration, legacy_merge,
@@ -28,6 +28,7 @@ from smoke.reports import (
 )
 from smoke.ui import (
     production_refresh_on_delete, inventory_edit_missing_date, production_batch_roundtrip,
+    materials_impossible_loi_rejected,
     qsettings_reopen, file_dialog_dir_memory, close_confirm,
     parts_tab_crud, employees_tab_crud, presses_tab_crud, pressers_tab_crud,
     shift_workweek_roundtrip, part_press_pref_crud, presser_press_pref_crud,
@@ -56,7 +57,7 @@ from smoke.ui_fuzz import crash_fuzz
 __all__ = [
     "compile_all", "empty_roundtrip",
     "production_roundtrip", "production_tool_change_roundtrip",
-    "production_quantity_validation",
+    "production_quantity_validation", "mixture_full_loi_material",
     "legacy_anika_migration", "legacy_becky_migration", "legacy_merge",
     "mercy_v3_to_v4_migration", "mercy_v4_to_v5_migration", "mercy_v5_to_v6_migration",
     "mercy_v6_to_v7_migration", "mercy_v7_to_v8_migration", "mercy_v8_to_v9_migration",
@@ -68,6 +69,7 @@ __all__ = [
     "production_employee_productivity_report", "production_trend_report",
     "product_employee_reports", "schedule_report", "order_status_report",
     "production_refresh_on_delete", "inventory_edit_missing_date", "production_batch_roundtrip",
+    "materials_impossible_loi_rejected",
     "qsettings_reopen", "file_dialog_dir_memory", "close_confirm",
     "parts_tab_crud", "employees_tab_crud", "presses_tab_crud", "pressers_tab_crud",
     "shift_workweek_roundtrip", "part_press_pref_crud", "presser_press_pref_crud",

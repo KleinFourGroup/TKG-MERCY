@@ -311,6 +311,97 @@ def inventory_edit_missing_date() -> list[str]:
     return errors
 
 
+def materials_impossible_loi_rejected() -> list[str]:
+    """Step 84-post-triage: the Materials editor blocks the impossible
+    oxides-with-100%-LOI entry, while still accepting a legitimate binder.
+
+    LOI (loss on ignition) is what burns off; the oxides are the calcined
+    residue. LOI = 100 % means nothing remains, so any non-zero oxide is a
+    contradiction — the exact data that made Mixture.getProp compute n/0 and
+    crashed the Mixtures tab on open (misread as a wiped DB). The getProp clamp
+    stops the crash; this editor guard stops the bad data at the source.
+
+    Drives MaterialsEditWindow.readData headlessly (errorMessage captured) on:
+      - the impossible combo (SiO2 = 50 %, LOI = 100 %): rejected (readData
+        False), no material stored, and the error names LOI;
+      - a valid fully-volatile binder (all oxides 0, LOI = 100 %, e.g. PVA /
+        lard oil): accepted and stored.
+    """
+    import materials_tab
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    from materials_tab import MaterialsEditWindow
+
+    errors: list[str] = []
+    QApplication.instance() or QApplication(sys.argv)
+
+    # Capture what the editor would have surfaced through errorMessage instead of
+    # popping a modal QMessageBox (mirrors production_quantity_validation).
+    captured: list[list[str]] = []
+    origErrorMessage = materials_tab.errorMessage
+    materials_tab.errorMessage = lambda parent, errs: captured.append(list(errs))  # type: ignore[assignment]
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    w = None
+    try:
+        w = MainWindow()
+        if not w.fileManager.setFile(tmp.name):
+            errors.append("setFile returned False on fresh empty DB")
+            return errors
+
+        def _fill(ed, name, sio2, loi):
+            # Zero every numeric field, then override SiO2 + LOI. Field positions
+            # follow MaterialsEditWindow.mainLayout.
+            ed.mainLayout[0][1].setText(name)
+            ed.mainLayout[1][1].setText("0")   # price
+            ed.mainLayout[1][4].setText("0")   # freight
+            for r, c in [(2, 1), (2, 3), (2, 5), (2, 7), (2, 9),
+                         (3, 1), (3, 3), (3, 5), (3, 7), (3, 9), (3, 11)]:
+                ed.mainLayout[r][c].setText("0")  # all oxides + otherChem
+            for c in (1, 4, 7, 10, 13):
+                ed.mainLayout[4][c].setText("0")  # size fractions
+            ed.mainLayout[2][1].setText(str(sio2))  # SiO2 override
+            ed.mainLayout[3][13].setText(str(loi))  # LOI
+            return ed
+
+        # 1) Impossible: 50 % SiO2 with 100 % LOI -> rejected, not stored.
+        captured.clear()
+        ed = MaterialsEditWindow(None, w)
+        _fill(ed, "BogusBinder", 50.0, 100.0)
+        res = ed.readData(True)
+        if res is not False:
+            errors.append(f"impossible material (SiO2>0, LOI=100) accepted: readData returned {res!r}")
+        if "BogusBinder" in w.db.materials:
+            errors.append("impossible material was stored despite rejection")
+        joined = " | ".join(m for batch in captured for m in batch)
+        if "LOI" not in joined:
+            errors.append(f"rejection error should name LOI, got: {joined!r}")
+        ed.close()
+
+        # 2) Legitimate binder: all oxides 0, 100 % LOI -> accepted and stored.
+        captured.clear()
+        ed2 = MaterialsEditWindow(None, w)
+        _fill(ed2, "PVA Binder", 0.0, 100.0)
+        res2 = ed2.readData(True)
+        if res2 is not True:
+            errors.append(f"valid 100%-LOI binder (zero oxides) rejected: readData returned {res2!r}; "
+                          f"errors={captured!r}")
+        if "PVA Binder" not in w.db.materials:
+            errors.append("valid 100%-LOI binder was not stored")
+        ed2.close()
+    finally:
+        materials_tab.errorMessage = origErrorMessage  # type: ignore[assignment]
+        if w is not None and w.fileManager.dbFile is not None:
+            w.fileManager.dbFile.close()
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                os.unlink(tmp.name + suffix)
+            except OSError:
+                pass
+    return errors
+
+
 def production_batch_roundtrip() -> list[str]:
     """Step 16: drive ProductionBatchDialog headlessly and verify atomic save.
 

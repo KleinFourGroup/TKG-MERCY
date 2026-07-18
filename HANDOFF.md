@@ -9,8 +9,8 @@ Fresh-session orientation for MERCY, a PySide6 + SQLite desktop app: part costin
 | | |
 |---|---|
 | **NEXT** | **Step 85** — machine-enforce the single-source facts (smoke check: Cursor baseline == registered checks) — [ROADMAP](ROADMAP.md). Then 86 → 87. |
-| **Last landed** | **Step 83** — Order Status due date + shared open-orders filter (default ON). Before it: 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)), 82, 81. |
-| **Smoke baseline** | **72 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else; Step 85 will machine-check it. |
+| **Last landed** | **Step 84-post-triage** — "wiped DB" was a divide-by-zero on a 100%-LOI material (PVA/lard-oil binder) in `Mixture.getProp`, crashing the Mixtures tab on open; clamp fix + Materials-editor guard on the impossible oxides-with-100%-LOI entry. Before it: 83 (order-status due date + open-orders filter), 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)), 82, 81. |
+| **Smoke baseline** | **74 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else; Step 85 will machine-check it. |
 | **Branch / tree** | `main`, working tree clean at last close |
 | **Carried watch-items** | Step 80's real-floor gate **unmet** (dies-stop-hopping needs a deployed schedule + real `Press.currentPart` data); `dieChangeHours` deliberately **0.0** — do **not** invent a value; scheduler-vs-real-orders validation open. All tracked in [ROADMAP](ROADMAP.md) § Blocked on real data. |
 
