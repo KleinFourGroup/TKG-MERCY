@@ -2,13 +2,9 @@
 
 Forward-looking only; **this file shrinks as work lands.** Each planned step carries its scoping essay here; when it ships, the essay is replaced by a WORKLOG as-built entry and deleted from this file (the essay's still-useful parts move with it). Live status: the 🧭 Cursor in [HANDOFF.md](HANDOFF.md). One step = one commit.
 
-## The overhaul block — Steps 85–87 (planned 2026-07-16)
+## The overhaul block — Steps 86–87 (planned 2026-07-16)
 
-Origin: Matthew, post-release — *"the codebase has a lot of weird edge cases that really need to be cleaned up."* Do these as **separate steps, not a cleanup mega-commit** (the reasoning that split option D out of Step 81), smoke green at every step. Step 84 (the doc split) was the block's first member and has landed.
-
-### Step 85 — machine-enforce the single-source facts
-
-Every doc rot found on 2026-07-16 was *one fact stated twice, one copy updated* — including the fix itself, which shipped `71` in one place and `72` in another before a second cold read caught it. A smoke check asserting **"the smoke-baseline count in HANDOFF.md's Cursor == the number of registered checks"** makes the single-source convention structural instead of remembered. Extends naturally (e.g. no ROADMAP entry for a step the Cursor says landed). Cheap; the same move as Step 81 itself.
+Origin: Matthew, post-release — *"the codebase has a lot of weird edge cases that really need to be cleaned up."* Do these as **separate steps, not a cleanup mega-commit** (the reasoning that split option D out of Step 81), smoke green at every step. Steps 84 (the doc split) and 85 (machine-enforced single-source facts) have landed.
 
 ### Step 86 — make illegal record states unrepresentable
 

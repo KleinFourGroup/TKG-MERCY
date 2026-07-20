@@ -8,9 +8,9 @@ Fresh-session orientation for MERCY, a PySide6 + SQLite desktop app: part costin
 
 | | |
 |---|---|
-| **NEXT** | **Step 85** — machine-enforce the single-source facts (smoke check: Cursor baseline == registered checks) — [ROADMAP](ROADMAP.md). Then 86 → 87. |
-| **Last landed** | **Step 84-post-triage** — "wiped DB" was a divide-by-zero on a 100%-LOI material (PVA/lard-oil binder) in `Mixture.getProp`, crashing the Mixtures tab on open; clamp fix + Materials-editor guard on the impossible oxides-with-100%-LOI entry + zero-total-weight backstop in `getCost`/`getProp` (two commits). Before it: 83 (order-status due date + open-orders filter), 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)), 82, 81. |
-| **Smoke baseline** | **75 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else; Step 85 will machine-check it. |
+| **NEXT** | **Step 86** — make illegal record states unrepresentable (*the* root of the "weird edge cases") — [ROADMAP](ROADMAP.md). Then 87. |
+| **Last landed** | **Step 85** — the single-source facts are now machine-enforced: `docs_single_source` asserts this Cursor's baseline == `smoke.CHECKS`, that no other live doc restates it, and that nothing with a WORKLOG entry is still planned in ROADMAP; the check registry moved into `smoke/__init__.py` (one place, was two). Before it: 84-post-triage (the "wiped DB" divide-by-zero on a 100%-LOI material), 83 (order-status due date + open-orders filter), 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)), 82. |
+| **Smoke baseline** | **76 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else, and `docs_single_source` now fails if that stops being true. |
 | **Branch / tree** | `main`, working tree clean at last close |
 | **Carried watch-items** | Step 80's real-floor gate **unmet** (dies-stop-hopping needs a deployed schedule + real `Press.currentPart` data); `dieChangeHours` deliberately **0.0** — do **not** invent a value; scheduler-vs-real-orders validation open. All tracked in [ROADMAP](ROADMAP.md) § Blocked on real data. |
 

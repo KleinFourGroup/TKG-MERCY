@@ -2,6 +2,20 @@
 
 Backward-looking narrative per landed step; **grows, newest first.** Entry length scales with the step — a one-line change gets one line, a subsystem gets paragraphs. Durable lessons graduate to [CONVENTIONS.md](CONVENTIONS.md); the rotation rule lives in [HANDOFF.md](HANDOFF.md) § The doc system. Everything through Step 83's planning is archived in [plan_archive/merge_plan.md](plan_archive/merge_plan.md) (§12.1 status table + §13 narratives) and [plan_archive/implementation_notes.md](plan_archive/implementation_notes.md); the entries below re-state only the recent steps whose details are still likely to be needed at hand.
 
+## Step 85 — machine-enforce the single-source facts (2026-07-20)
+
+First code member of the overhaul block. Every doc rot found in the 2026-07-16 cold-read audit was *one fact stated twice with one copy updated* — including the fix itself, which shipped `71` in one place and `72` in another. The single-source rule was a convention you had to **remember**; it's now a check.
+
+New [`smoke/docs.py`](smoke/docs.py) → `docs_single_source`, text-only (no app imports, ~1 ms, runs second after `compile_all`), asserting three things:
+
+1. **The Cursor's smoke baseline == `len(smoke.CHECKS)`.** Adding a check without updating HANDOFF — or vice versa — now fails loudly, naming both numbers.
+2. **No other live doc restates the count.** Root `*.md` minus HANDOFF (the owner) and minus **WORKLOG, deliberately exempt** — its per-step counts are frozen history and are *correct* precisely because they don't track the live number. Also fails if HANDOFF itself states a count twice.
+3. **Nothing shipped is still listed as planned** — no step number carries both a WORKLOG `## Step N` entry and a ROADMAP `### Step N` entry. This machine-checks the landing-commit lifecycle from HANDOFF § The doc system, and it keys off *headings* rather than the Cursor's prose, so rewording the Cursor can't spuriously redden smoke. One-directional (WORKLOG ⇒ not in ROADMAP), so the WORKLOG rotation rule stays safe.
+
+The enabling refactor: the ordered check registry moved out of [`smoke/__main__.py`](smoke/__main__.py) into `CHECKS` in [`smoke/__init__.py`](smoke/__init__.py), so **a new check is registered in one place, not two** (the old dispatcher restated all 75 names — its own instance of the bug this step is about, and the exact chore CONVENTIONS called out for every migration bump). `__main__` is now a 12-line loop over `CHECKS`, and `__all__` gained `"CHECKS"` + the new name. That list is also what makes assertion 1 possible: there was previously no machine-readable count to compare against.
+
+Smoke **75 → 76**. All five failure modes were verified to fire against monkeypatched doc contents (wrong count, missing baseline row, count stated twice, another doc restating it, shipped-and-planned overlap) — a doc check that can't fail is worse than no check, since it reads as coverage.
+
 ## Step 84-post-triage — "wiped DB" was a divide-by-zero on a 100%-LOI material (2026-07-17)
 
 High-priority bug: the team reported a **wiped database**. Triage on their copy (`mercy_triage_import.db`) proved the data was fully intact (52 employees, 167 parts, 19 mixtures, …) — the "wipe" was an **uncaught `ZeroDivisionError` failing loud** on open, exactly as Matthew read from the trace. Root cause in [`records/products.py`](records/products.py) `Mixture.getProp(prop, LOI=True)`: the ignited-basis oxide term `pct * matVal / (1 - matLOI/100)` divides by exactly 0 when a component material has **LOI = 100 %**. That is *legitimate data* — the fully-combustible organic binders **"PVA - Dry (Polyvinyl Alcohol)"** and **"Lard Oil"** burn off completely, so they carry LOI 100 and all-zero oxides → `0.0 / 0.0`. The real shop mixtures "Mold Mend P" / "Mold Mend P Max" contain PVA.
