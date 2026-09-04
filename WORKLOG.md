@@ -2,6 +2,10 @@
 
 Backward-looking narrative per landed step; **grows, newest first.** Entry length scales with the step — a one-line change gets one line, a subsystem gets paragraphs. Durable lessons graduate to [CONVENTIONS.md](CONVENTIONS.md); the rotation rule lives in [HANDOFF.md](HANDOFF.md) § The doc system. Everything through Step 83's planning is archived in [plan_archive/merge_plan.md](plan_archive/merge_plan.md) (§12.1 status table + §13 narratives) and [plan_archive/implementation_notes.md](plan_archive/implementation_notes.md); the entries below re-state only the recent steps whose details are still likely to be needed at hand.
 
+## Freeze — the web transition begins (2026-09-04)
+
+Not a step: the pivot. Team decisions 1–9 resolved (2026-07-29); desktop feature work is **frozen, bugfix-only** per decision 8 — Step 86+ stay shelved in ROADMAP. MERCY's successor is a Django web app built in [TKG-Software/mercy-web](https://github.com/TKG-Software/mercy-web); its `TRANSITION_PLAN.md` (hoisted from the gitignored `multiuser_briefs/`, where the team-facing briefs remain private) is the plan of record, with phases T0–T7 ending in this repo's retirement to read-only archive at office cutover. Also landed with the pivot: both repos transferred/created under the new **TKG-Software** GitHub org (T0.8 — ends the personal-account custody of company code), and this repo's remote re-pointed. During the freeze, the one sanctioned non-bugfix change is T1.7 (tab-usage telemetry feeding the Phase 4 screen triage).
+
 ## Step 85 — machine-enforce the single-source facts (2026-07-20)
 
 First code member of the overhaul block. Every doc rot found in the 2026-07-16 cold-read audit was *one fact stated twice with one copy updated* — including the fix itself, which shipped `71` in one place and `72` in another. The single-source rule was a convention you had to **remember**; it's now a check.

@@ -1,6 +1,6 @@
 # MERCY — orientation for Claude
 
-MERCY is a PySide6 + SQLite desktop app: a three-way merge of **ANIKA** (part costing) + **BECKY** (HR) plus a new per-employee production tracker. The original 13-step merge is complete; post-release feature work continues.
+MERCY is a PySide6 + SQLite desktop app: a three-way merge of **ANIKA** (part costing) + **BECKY** (HR) plus a new per-employee production tracker. The original 13-step merge is complete. **As of 2026-09 this repo is FROZEN (bugfix-only):** MERCY is being rebuilt as a multi-user web app in [TKG-Software/mercy-web](https://github.com/TKG-Software/mercy-web) — its `TRANSITION_PLAN.md` is the plan of record. This desktop app stays in production until the office cutover (plan Phase 4).
 
 ## Read these first, cold, every session
 
