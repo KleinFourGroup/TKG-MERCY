@@ -9,8 +9,8 @@ Fresh-session orientation for MERCY, a PySide6 + SQLite desktop app: part costin
 | | |
 |---|---|
 | **NEXT** | **FROZEN** (2026-09, transition decision 8) — desktop is **bugfix-only**; the web rebuild drives from [TKG-Software/mercy-web](https://github.com/TKG-Software/mercy-web) (its `TRANSITION_PLAN.md` is the plan of record). Step 86+ shelved in [ROADMAP](ROADMAP.md). |
-| **Last landed** | **Step 85** — the single-source facts are now machine-enforced: `docs_single_source` asserts this Cursor's baseline == `smoke.CHECKS`, that no other live doc restates it, and that nothing with a WORKLOG entry is still planned in ROADMAP; the check registry moved into `smoke/__init__.py` (one place, was two). Before it: 84-post-triage (the "wiped DB" divide-by-zero on a 100%-LOI material), 83 (order-status due date + open-orders filter), 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)), 82. |
-| **Smoke baseline** | **76 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else, and `docs_single_source` now fails if that stops being true. |
+| **Last landed** | **T1.7 tab-usage telemetry** (2026-09-04) — the freeze's one sanctioned add, feeding the web transition's screen triage ([WORKLOG](WORKLOG.md)). Before it: the freeze itself, 85 (single-source facts machine-enforced via `docs_single_source` + the one-place check registry), 84-post-triage (the "wiped DB" divide-by-zero), 83, 84 (the doc split; `MERGE_PLAN.md` retired to [plan_archive/merge_plan.md](plan_archive/merge_plan.md)). |
+| **Smoke baseline** | **77 PASS** — `./Scripts/python.exe -m smoke`. Quoted here and nowhere else, and `docs_single_source` now fails if that stops being true. |
 | **Branch / tree** | `main`, working tree clean at last close |
 | **Carried watch-items** | Step 80's real-floor gate **unmet** (dies-stop-hopping needs a deployed schedule + real `Press.currentPart` data); `dieChangeHours` deliberately **0.0** — do **not** invent a value; scheduler-vs-real-orders validation open. All tracked in [ROADMAP](ROADMAP.md) § Blocked on real data. |
 

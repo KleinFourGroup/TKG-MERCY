@@ -3873,3 +3873,69 @@ def schedule_tab_generates() -> list[str]:
             except OSError:
                 pass
     return errors
+
+
+def telemetry_capture():
+    """T1.7 (web transition): tab-usage telemetry logs full breadcrumbs.
+
+    Points MERCY_TELEMETRY_DIR at a tmpdir, instruments a fresh MainWindow
+    (opting in — real smoke windows are otherwise uninstrumented), drives a
+    top-level and a nested tab switch, and asserts the JSONL log holds the
+    launch marker plus full-path tab events ("Employees",
+    "Products/Mixtures"). Then asserts the never-crash posture: with the
+    log dir shadowed by a plain file (makedirs must fail), logEvent has to
+    swallow the error, not raise it.
+    """
+    import json
+    from PySide6.QtWidgets import QApplication
+    from app import MainWindow
+    import telemetry
+
+    errors = []
+    app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
+    tmpdir = tempfile.mkdtemp(prefix="mercy-telemetry-")
+    origDir = os.environ.get("MERCY_TELEMETRY_DIR")
+    os.environ["MERCY_TELEMETRY_DIR"] = tmpdir
+    try:
+        w = MainWindow()
+        telemetry.instrument(w)
+
+        # Top-level switch: Products (0) -> Employees (1).
+        w.tab_widget.setCurrentIndex(1)
+        # Nested switch: Products/Parts (0) -> Products/Mixtures (1) — fires
+        # even while the Products group isn't the visible top-level tab.
+        w.productsTab.setCurrentIndex(1)
+
+        logName = [f for f in os.listdir(tmpdir) if f.endswith(".jsonl")]
+        if len(logName) != 1:
+            errors.append(f"expected exactly one .jsonl log, found {logName}")
+            return errors
+        with open(os.path.join(tmpdir, logName[0]), encoding="utf-8") as f:
+            events = [json.loads(line) for line in f if line.strip()]
+
+        got = [(e["event"], e["screen"]) for e in events]
+        for expected in [("launch", ""), ("tab", "Employees"), ("tab", "Products/Mixtures")]:
+            if expected not in got:
+                errors.append(f"missing telemetry event {expected}; got {got}")
+        for e in events:
+            for key in ("t", "host", "ver"):
+                if not e.get(key):
+                    errors.append(f"event missing {key!r}: {e}")
+                    break
+
+        # Never-crash posture: shadow the log dir with a plain file so the
+        # write path fails internally; logEvent must swallow it.
+        shadow = os.path.join(tmpdir, "shadow")
+        with open(shadow, "w", encoding="utf-8") as f:
+            f.write("not a directory")
+        os.environ["MERCY_TELEMETRY_DIR"] = shadow
+        try:
+            telemetry.logEvent("tab", "should-be-dropped")
+        except Exception as e:
+            errors.append(f"logEvent raised despite never-crash posture: {e!r}")
+    finally:
+        if origDir is None:
+            os.environ.pop("MERCY_TELEMETRY_DIR", None)
+        else:
+            os.environ["MERCY_TELEMETRY_DIR"] = origDir
+    return errors

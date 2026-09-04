@@ -6,6 +6,7 @@ import os
 
 from app import MainWindow
 from style import applyStyle
+import telemetry
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -29,6 +30,7 @@ if __name__ == "__main__":
     applyStyle(app)
     app.setWindowIcon(QIcon(os.path.join(basedir, 'ceramics_icon.ico')))
     window = MainWindow(db)
+    telemetry.instrument(window)
     window.show()
 
     lastPath = QSettings().value("lastDbPath")
